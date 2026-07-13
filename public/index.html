@@ -66,8 +66,8 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
 </head>
 <body>
 
-<div class="sidebar">
-  <h2>🪙 Tracker <span style="font-size:.65rem;color:var(--accent)">v1.11.1</span></h2>
+<div class="sidebar hidden" id="sidebar">
+  <h2>🪙 Tracker <span style="font-size:.65rem;color:var(--accent)">v1.11.2</span></h2>
   <a href="#" class="active" onclick="switchPage('dashboard')" data-page="dashboard">📊 Dashboard</a>
   <a href="#" onclick="switchPage('tokens')" data-page="tokens">📋 Détail tokens</a>
 </div>
@@ -160,10 +160,10 @@ async function doAuth(){
   try{var r=await fetch(path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:u,password:p})});var d=await r.json();if(!r.ok){document.getElementById("authError").textContent=d.detail||d.msg||"Erreur";return}if(authMode=="register"){toggleAuth();document.getElementById("authError").textContent="Compte créé ! Connecte-toi.";return}showDash()}catch(e){document.getElementById("authError").textContent="Erreur réseau"}
 }
 
-async function logout(){await fetch("/api/auth/logout",{method:"POST"});document.getElementById("viewLogin").classList.remove("hidden");document.getElementById("viewDash").classList.add("hidden");document.getElementById("userInfo").textContent="";document.getElementById("btnLogout").classList.add("hidden");activeWallet="ALL"}
+async function logout(){await fetch("/api/auth/logout",{method:"POST"});document.getElementById("viewLogin").classList.remove("hidden");document.getElementById("viewDash").classList.add("hidden");document.getElementById("sidebar").classList.add("hidden");document.getElementById("userInfo").textContent="";document.getElementById("btnLogout").classList.add("hidden");activeWallet="ALL"}
 
 async function showDash(){
-  document.getElementById("viewLogin").classList.add("hidden");document.getElementById("viewDash").classList.remove("hidden");document.getElementById("btnLogout").classList.remove("hidden");
+  document.getElementById("viewLogin").classList.add("hidden");document.getElementById("viewDash").classList.remove("hidden");document.getElementById("sidebar").classList.remove("hidden");document.getElementById("btnLogout").classList.remove("hidden");
   var r=await fetch("/api/auth/me");if(r.ok){var u=await r.json();document.getElementById("userInfo").textContent="👤 "+u.username}
   await loadWallets();
 }
