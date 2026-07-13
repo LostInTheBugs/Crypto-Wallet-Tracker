@@ -56,12 +56,15 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
 .add-form{display:flex;gap:8px;margin-bottom:20px}
 .add-form input{flex:1}
 .add-form input+input{max-width:160px}
+.range-pill{padding:2px 8px;border-radius:10px;cursor:pointer;color:#8b949e;border:1px solid transparent;transition:all .15s}
+.range-pill:hover{color:#c9d1d9;background:#1a2332}
+.range-pill.active{color:#4dabf7;background:#1f6feb22;border-color:#1f6feb44;font-weight:600}
 </style>
 </head>
 <body>
 <div id="app">
   <div class="topbar">
-    <h1>🪙 Crypto Wallet Tracker <span>v1.6</span><span id="cacheBadge" style="display:none;font-size:.65rem;background:#2d5a3d;color:#40c463;padding:2px 8px;border-radius:10px;cursor:pointer;margin-left:6px" onclick="forceRefresh()">⚡ cache</span></h1>
+    <h1>🪙 Crypto Wallet Tracker <span>v1.7</span><span id="cacheBadge" style="display:none;font-size:.65rem;background:#2d5a3d;color:#40c463;padding:2px 8px;border-radius:10px;cursor:pointer;margin-left:6px" onclick="forceRefresh()">⚡ cache</span></h1>
     <div class="topbar-right">
       <select id="currency" onchange="switchCurrency()">
         <option value="usd">$ USD</option>
@@ -96,14 +99,14 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
     <div class="row">
       <div class="card"><h2>📊 Répartition par chaîne</h2><div class="chart-wrap"><canvas id="pieChart"></canvas></div></div>
       <div class="card"><h2>📈 Évolution du portefeuille
-        <select id="chartRange" onchange="drawLineChart()" style="font-size:.65rem;background:var(--bg);border:1px solid var(--border);color:var(--accent);padding:2px 6px;border-radius:4px;margin-left:8px">
-          <option value="all">All</option>
-          <option value="365">1 an</option>
-          <option value="180">6 mois</option>
-          <option value="90">3 mois</option>
-          <option value="30">1 mois</option>
-        </select>
-        <button onclick="backfillHistory()" style="font-size:.65rem;background:transparent;border:1px solid var(--border);color:var(--accent);padding:2px 8px;border-radius:4px;cursor:pointer;margin-left:4px">📥 Backfill</button></h2><div class="chart-wrap"><canvas id="lineChart"></canvas></div></div>
+        <span style="display:inline-flex;gap:4px;margin-left:12px;font-size:.65rem">
+          <span class="range-pill active" onclick="setRange('all',this)">All</span>
+          <span class="range-pill" onclick="setRange('365',this)">1 an</span>
+          <span class="range-pill" onclick="setRange('180',this)">6 mois</span>
+          <span class="range-pill" onclick="setRange('90',this)">3 mois</span>
+          <span class="range-pill" onclick="setRange('30',this)">1 mois</span>
+        </span>
+        <button onclick="backfillHistory()" style="font-size:.65rem;background:transparent;border:1px solid var(--border);color:var(--accent);padding:2px 8px;border-radius:4px;cursor:pointer;margin-left:8px">📥 Backfill</button></h2><div class="chart-wrap"><canvas id="lineChart"></canvas></div></div>
     </div>
     <div class="card"><h2>🏷️ Chaînes</h2><div class="chains" id="walletChains"></div><div id="walletError" style="margin-top:12px"></div></div>
     <div id="walletTable"></div>
@@ -120,6 +123,14 @@ var pieChart = null;
 var lineChart = null;
 var lastResult = null;
 var loadingAddr = null;
+var chartRange = "all";
+
+function setRange(range, el) {
+  chartRange = range;
+  document.querySelectorAll(".range-pill").forEach(function(p){ p.classList.remove("active"); });
+  el.classList.add("active");
+  drawLineChart();
+}
 
 async function switchCurrency() {
   currency = document.getElementById("currency").value;
@@ -343,9 +354,8 @@ async function drawLineChart() {
     if (snaps.length < 2) return;
 
     // Filter by selected range
-    var range = document.getElementById("chartRange").value;
-    if (range != "all") {
-      var cutoff = Date.now() - parseInt(range) * 86400 * 1000;
+    if (chartRange != "all") {
+      var cutoff = Date.now() - parseInt(chartRange) * 86400 * 1000;
       snaps = snaps.filter(function(s){ return new Date(s.date + "Z").getTime() > cutoff; });
       if (snaps.length < 2) return;
     }
