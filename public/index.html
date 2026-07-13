@@ -4,88 +4,99 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Crypto Wallet Tracker</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.min.js"></script>
 <style>
+:root{--bg:#0a0e14;--card:#12161c;--border:#1e2530;--text:#b0b8c4;--title:#e6edf3;--accent:#4dabf7;--green:#40c463;--red:#f85149}
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#0d1117;color:#c9d1d9;min-height:100vh}
-#app{max-width:1100px;margin:0 auto;padding:20px}
-.header{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid #21262d;margin-bottom:20px}
-.header h1{font-size:1.2rem;color:#f0f6fc}
-.header .user{color:#58a6ff;font-size:.85rem;margin-right:12px}
-.header button{background:#21262d;border:1px solid #30363d;color:#c9d1d9;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:.8rem}
-.header button:hover{background:#30363d}
-.card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:20px;margin-bottom:16px}
-.card h2{font-size:1rem;color:#f0f6fc;margin-bottom:12px}
-input{width:100%;padding:8px 12px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#f0f6fc;font-size:.85rem;margin-bottom:8px;outline:none}
-input:focus{border-color:#58a6ff}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;font-size:14px}
+#app{max-width:1200px;margin:0 auto;padding:24px}
+.topbar{display:flex;justify-content:space-between;align-items:center;padding-bottom:20px;margin-bottom:24px;border-bottom:1px solid var(--border)}
+.topbar h1{font-size:1.3rem;color:var(--title);font-weight:600;display:flex;align-items:center;gap:8px}
+.topbar h1 span{font-size:.75rem;background:#1a2332;color:var(--accent);padding:2px 8px;border-radius:10px;font-weight:400}
+.topbar-right{display:flex;align-items:center;gap:12px}
+.topbar select{padding:5px 10px;background:var(--bg);border:1px solid var(--border);color:var(--accent);border-radius:5px;font-size:.8rem;cursor:pointer}
+.topbar .user{color:var(--accent);font-size:.8rem}
+.topbar button{background:var(--card);border:1px solid var(--border);color:var(--text);padding:5px 12px;border-radius:5px;cursor:pointer;font-size:.8rem}
+.topbar button:hover{background:#1a2332}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:24px}
+.stat-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px 20px}
+.stat-card .label{font-size:.7rem;color:#6e7681;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
+.stat-card .value{font-size:1.6rem;font-weight:700;color:var(--title)}
+.stat-card .sub{font-size:.75rem;color:var(--text);margin-top:2px}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px}
+@media(max-width:768px){.row{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:20px}
+.card h2{font-size:.95rem;color:var(--title);margin-bottom:16px;font-weight:600}
+.chart-wrap{position:relative;height:250px}
+.chart-wrap canvas{max-height:250px}
+input{width:100%;padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--title);font-size:.85rem;outline:none}
+input:focus{border-color:var(--accent)}
 .btn{display:inline-block;padding:8px 18px;border-radius:6px;border:none;cursor:pointer;font-weight:600;font-size:.85rem}
-.btn-green{background:#238636;color:white}.btn-green:hover{background:#2ea043}
-.btn-blue{background:#1f6feb;color:white}.btn-blue:hover{background:#388bfd}
-.btn-red{background:#da3633;color:white}.btn-red:hover{background:#f85149}
-.stats{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px}
-.stat{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:12px 16px;min-width:140px}
-.stat .label{font-size:.7rem;color:#8b949e;text-transform:uppercase}
-.stat .value{font-size:1.3rem;font-weight:700;color:#f0f6fc}
-.wallets-bar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;align-items:center}
-.wallet-tab{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:10px 14px;cursor:pointer;font-size:.85rem;display:flex;align-items:center;gap:8px}
-.wallet-tab:hover,.wallet-tab.active{border-color:#58a6ff;background:#1f6feb22}
+.btn-green{background:var(--green);color:#fff}.btn-green:hover{opacity:.9}
+.btn-blue{background:var(--accent);color:#fff}.btn-blue:hover{opacity:.9}
+.btn-red{background:var(--red);color:#fff}.btn-red:hover{opacity:.9}
+.wallets-bar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:20px}
+.wallet-tab{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:8px 14px;cursor:pointer;font-size:.8rem;display:flex;align-items:center;gap:6px}
+.wallet-tab:hover,.wallet-tab.active{border-color:var(--accent);background:#1a2838}
 .wallet-tab.active{font-weight:700}
-.wallet-tab .del{color:#f85149;cursor:pointer;font-size:1rem;margin-left:4px}
-.wallet-tab.all{background:#23863622;border-color:#23863644;font-weight:700}
+.wallet-tab .del{color:var(--red);cursor:pointer;margin-left:4px}
+.wallet-tab.all{background:#1a3320;border-color:#2d5a3d;font-weight:700}
 .chains{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
-.chain-tag{padding:3px 8px;background:#1f6feb22;border:1px solid #1f6feb44;border-radius:10px;font-size:.7rem;color:#58a6ff}
+.chain-tag{padding:3px 8px;background:#1a2332;border:1px solid #1e2d42;border-radius:10px;font-size:.7rem;color:var(--accent)}
 table{width:100%;border-collapse:collapse}
-th{padding:8px 12px;text-align:left;font-size:.7rem;color:#8b949e;text-transform:uppercase;border-bottom:1px solid #21262d}
-td{padding:8px 12px;border-bottom:1px solid #21262d;font-size:.82rem}
-td.chain{color:#58a6ff;text-transform:capitalize}
-td.usd{color:#7ee787;font-weight:500}
-tr:hover td{background:#161b22}
-.loading{text-align:center;padding:30px;color:#8b949e}
-.error{color:#f85149;padding:6px 0;font-size:.8rem}
-img.ti{width:18px;height:18px;border-radius:50%;margin-right:6px;vertical-align:middle;background:#21262d}
+th{padding:8px 12px;text-align:left;font-size:.7rem;color:#6e7681;text-transform:uppercase;border-bottom:1px solid var(--border);font-weight:500}
+td{padding:10px 12px;border-bottom:1px solid var(--border);font-size:.82rem}
+td.chain{color:var(--accent);text-transform:capitalize}
+td.usd{color:var(--green);font-weight:600}
+tr:hover td{background:#161c24}
+.loading{text-align:center;padding:30px;color:#6e7681}
+.error{color:var(--red);padding:6px 0;font-size:.8rem}
+img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:middle;background:var(--border)}
 .hidden{display:none}
-.add-form{display:flex;gap:8px}
-.add-form input{flex:1;margin-bottom:0}
+.add-form{display:flex;gap:8px;margin-bottom:20px}
+.add-form input{flex:1}
 .add-form input+input{max-width:160px}
 </style>
 </head>
 <body>
 <div id="app">
-  <div class="header">
-    <h1>&#x1F4CA; Crypto Wallet Tracker</h1>
-    <div style="display:flex;align-items:center;gap:12px">
-      <select id="currency" onchange="switchCurrency()" style="padding:4px 8px;background:#0d1117;border:1px solid #30363d;color:#58a6ff;border-radius:4px;font-size:.8rem;cursor:pointer">
+  <div class="topbar">
+    <h1>🪙 Crypto Wallet Tracker <span>v1.1</span></h1>
+    <div class="topbar-right">
+      <select id="currency" onchange="switchCurrency()">
         <option value="usd">$ USD</option>
         <option value="eur">€ EUR</option>
       </select>
       <span class="user" id="userInfo"></span>
-      <button id="btnLogout" class="hidden" onclick="logout()">Deconnexion</button>
+      <button id="btnLogout" class="hidden" onclick="logout()">Déconnexion</button>
     </div>
   </div>
 
   <div id="viewLogin">
     <div class="card" style="max-width:380px;margin:60px auto">
       <h2 id="authTitle">Connexion</h2>
-      <input id="authUser" type="text" placeholder="Nom d'utilisateur">
-      <input id="authPass" type="password" placeholder="Mot de passe">
+      <input id="authUser" type="text" placeholder="Nom d'utilisateur" style="margin-bottom:8px">
+      <input id="authPass" type="password" placeholder="Mot de passe" style="margin-bottom:8px">
       <button class="btn btn-green" onclick="doAuth()" style="width:100%;margin-bottom:8px" id="authBtn">Se connecter</button>
       <div id="authError" class="error"></div>
-      <div style="text-align:center;font-size:.8rem;color:#8b949e">
-        <a href="#" onclick="toggleAuth()" style="color:#58a6ff">Creer un compte</a>
+      <div style="text-align:center;font-size:.8rem">
+        <a href="#" onclick="toggleAuth()" style="color:var(--accent)">Créer un compte</a>
       </div>
     </div>
   </div>
 
   <div id="viewDash" class="hidden">
-    <div class="card add-form">
+    <div class="add-form">
       <input id="walletAddr" type="text" placeholder="Adresse EVM (0x...)">
-      <input id="walletLabel" type="text" placeholder="Label (optionnel)">
+      <input id="walletLabel" type="text" placeholder="Label">
       <button class="btn btn-blue" onclick="addWallet()">+ Ajouter</button>
     </div>
-
     <div class="wallets-bar" id="walletTabs"></div>
-    <div id="walletStats"></div>
-    <div id="walletChains"></div>
-    <div id="walletError"></div>
+    <div class="grid" id="walletStats"></div>
+    <div class="row">
+      <div class="card"><h2>📊 Répartition par chaîne</h2><div class="chart-wrap"><canvas id="pieChart"></canvas></div></div>
+      <div class="card"><h2>🏷️ Chaînes</h2><div class="chains" id="walletChains"></div><div id="walletError" style="margin-top:12px"></div></div>
+    </div>
     <div id="walletTable"></div>
   </div>
 </div>
@@ -96,6 +107,7 @@ var wallets = [];
 var activeWallet = "ALL";
 var eurRate = null;
 var currency = "usd";
+var pieChart = null;
 
 async function switchCurrency() {
   currency = document.getElementById("currency").value;
@@ -106,22 +118,17 @@ async function switchCurrency() {
   loadView();
 }
 
-function toCurr(usd) {
-  if (currency == "eur" && eurRate) return usd * eurRate;
-  return usd;
-}
-
-function currSymbol() { return currency == "eur" ? "€" : "$"; }
-
+function toCurr(usd) { return (currency=="eur"&&eurRate) ? usd*eurRate : usd; }
+function currSymbol() { return currency=="eur"?"€":"$"; }
 function fmtCurr(usd) {
   var v = toCurr(usd);
-  return currSymbol() + v.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  return currSymbol() + v.toLocaleString(undefined, {minimumFractionDigits:2,maximumFractionDigits:2});
 }
 
 function toggleAuth() {
   authMode = authMode=="login"?"register":"login";
-  document.getElementById("authTitle").textContent = authMode=="login"?"Connexion":"Creer un compte";
-  document.getElementById("authBtn").textContent = authMode=="login"?"Se connecter":"Creer le compte";
+  document.getElementById("authTitle").textContent = authMode=="login"?"Connexion":"Créer un compte";
+  document.getElementById("authBtn").textContent = authMode=="login"?"Se connecter":"Créer le compte";
 }
 
 async function doAuth() {
@@ -132,9 +139,9 @@ async function doAuth() {
     var r = await fetch(path, {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:u,password:p})});
     var d = await r.json();
     if (!r.ok) { document.getElementById("authError").textContent = d.detail||d.msg||"Erreur"; return; }
-    if (authMode=="register") { toggleAuth(); document.getElementById("authError").textContent="Compte cree ! Connecte-toi."; return; }
+    if (authMode=="register") { toggleAuth(); document.getElementById("authError").textContent="Compte créé ! Connecte-toi."; return; }
     showDash();
-  } catch(e) { document.getElementById("authError").textContent = "Erreur reseau"; }
+  } catch(e) { document.getElementById("authError").textContent = "Erreur réseau"; }
 }
 
 async function logout() {
@@ -150,11 +157,10 @@ async function showDash() {
   document.getElementById("viewLogin").classList.add("hidden");
   document.getElementById("viewDash").classList.remove("hidden");
   document.getElementById("btnLogout").classList.remove("hidden");
-  document.getElementById("authError").textContent = "";
   var r = await fetch("/api/auth/me");
   if (r.ok) {
     var u = await r.json();
-    document.getElementById("userInfo").textContent = u.username;
+    document.getElementById("userInfo").textContent = "👤 " + u.username;
   }
   await loadWallets();
 }
@@ -167,21 +173,17 @@ async function loadWallets() {
 }
 
 function renderWalletTabs() {
-  var html = '<div class="wallet-tab all'+(activeWallet=="ALL"?" active":"")+'" onclick="selectWallet(\"ALL\")">&#x1F3E0; Tous les wallets</div>';
+  var html = '<div class="wallet-tab all'+(activeWallet=="ALL"?" active":"")+'" onclick="selectWallet(\"ALL\")">🏠 Tous</div>';
   for (var i=0;i<wallets.length;i++) {
     var w = wallets[i];
     html += '<div class="wallet-tab'+(w.address==activeWallet?" active":"")+'" onclick="selectWallet(\"'+w.address+'\")">'+
-      (w.label||w.address.slice(0,12)+"...")+
+      (w.label||w.address.slice(0,10)+"...")+
       '<span class="del" onclick="event.stopPropagation();delWallet('+w.id+')">&times;</span></div>';
   }
   document.getElementById("walletTabs").innerHTML = html;
 }
 
-function selectWallet(addr) {
-  activeWallet = addr;
-  renderWalletTabs();
-  loadView();
-}
+function selectWallet(addr) { activeWallet = addr; renderWalletTabs(); loadView(); }
 
 async function delWallet(id) {
   if (!confirm("Supprimer ce wallet ?")) return;
@@ -202,127 +204,93 @@ async function addWallet() {
 }
 
 async function loadView() {
-  if (activeWallet == "ALL") {
-    await loadAllWallets();
-  } else {
-    await loadOneWallet(activeWallet);
-  }
+  activeWallet == "ALL" ? await loadAllWallets() : await loadOneWallet(activeWallet);
 }
 
 async function loadOneWallet(addr) {
-  document.getElementById("walletTable").innerHTML = '<div class="loading">Scan de 9 blockchains...</div>';
+  document.getElementById("walletTable").innerHTML = '<div class="loading">Scan 9 blockchains...</div>';
   try {
     var r = await fetch("/api/portfolio?address="+addr);
-    var d = await r.json();
-    renderResult(d);
-  } catch(e) {
-    document.getElementById("walletTable").innerHTML = '<div class="error">Erreur: '+e.message+'</div>';
-  }
+    renderResult(await r.json());
+  } catch(e) { document.getElementById("walletTable").innerHTML = '<div class="error">Erreur</div>'; }
 }
 
 async function loadAllWallets() {
   if (wallets.length == 0) {
     document.getElementById("walletStats").innerHTML="";
-    document.getElementById("walletChains").innerHTML="";
     document.getElementById("walletTable").innerHTML='<div class="loading">Ajoute une adresse pour commencer</div>';
+    if (pieChart) pieChart.destroy();
     return;
   }
-  document.getElementById("walletTable").innerHTML = '<div class="loading">Scan de '+wallets.length+' wallet(s) sur 9 blockchains...</div>';
+  document.getElementById("walletTable").innerHTML = '<div class="loading">Scan '+wallets.length+' wallet(s)...</div>';
 
   try {
-    // Fetch all wallets in parallel
-    var promises = wallets.map(function(w) {
-      return fetch("/api/portfolio?address="+w.address).then(function(r){return r.json();});
-    });
+    var promises = wallets.map(function(w){return fetch("/api/portfolio?address="+w.address).then(function(r){return r.json();});});
     var results = await Promise.all(promises);
-
-    // Merge all portfolios
-    var merged = {};
-    var totalUsd = 0;
-    var allTokens = [];
-    var chainTotals = {};
-    var allErrors = [];
-    var chainCountSet = {};
-
-    for (var i = 0; i < results.length; i++) {
-      var d = results[i];
-      var w = wallets[i];
+    var totalUsd = 0, allTokens = [], chainTotals = {}, chainSet = {}, allErrors = [];
+    for (var i=0;i<results.length;i++) {
+      var d = results[i], w = wallets[i];
       totalUsd += d.total_usd || 0;
-
-      for (var j = 0; j < d.tokens.length; j++) {
-        var t = d.tokens[j];
-        t._wallet = w.label || w.address.slice(0,10)+"...";
-        allTokens.push(t);
-      }
-
-      for (var c in d.chains) {
-        if (d.chains.hasOwnProperty(c)) {
-          chainTotals[c] = (chainTotals[c] || 0) + d.chains[c];
-          chainCountSet[c] = true;
-        }
-      }
-
-      if (d.errors) {
-        for (var k = 0; k < d.errors.length; k++) {
-          allErrors.push({wallet: w.label||w.address.slice(0,10)+"...", chain: d.errors[k].chain, error: d.errors[k].error});
-        }
-      }
+      for (var j=0;j<d.tokens.length;j++) { var t=d.tokens[j]; t._wallet=w.label||w.address.slice(0,10)+"..."; allTokens.push(t); }
+      for (var c in d.chains) { if(d.chains.hasOwnProperty(c)){chainTotals[c]=(chainTotals[c]||0)+d.chains[c]; chainSet[c]=true;} }
+      if (d.errors) for (var k=0;k<d.errors.length;k++) allErrors.push({wallet:w.label||w.address.slice(0,10)+"...",chain:d.errors[k].chain,error:d.errors[k].error});
     }
-
-    // Sort all tokens by USD value
-    allTokens.sort(function(a,b){return b.usd_value - a.usd_value;});
-
-    var mergedResult = {
-      total_usd: Math.round(totalUsd*100)/100,
-      token_count: allTokens.length,
-      chain_count: Object.keys(chainCountSet).length,
-      chains: chainTotals,
-      tokens: allTokens.slice(0,200),
-      errors: allErrors.slice(0,10)
-    };
-    renderResult(mergedResult);
-  } catch(e) {
-    document.getElementById("walletTable").innerHTML = '<div class="error">Erreur: '+e.message+'</div>';
-  }
+    allTokens.sort(function(a,b){return b.usd_value-a.usd_value;});
+    renderResult({total_usd:Math.round(totalUsd*100)/100, token_count:allTokens.length, chain_count:Object.keys(chainSet).length, chains:chainTotals, tokens:allTokens.slice(0,200), errors:allErrors.slice(0,10)});
+  } catch(e) { document.getElementById("walletTable").innerHTML = '<div class="error">Erreur</div>'; }
 }
 
 function renderResult(d) {
+  var sym = currSymbol();
   document.getElementById("walletStats").innerHTML =
-    '<div class="stat"><div class="label">Valeur totale</div><div class="value">'+fmtCurr(d.total_usd)+'</div></div>'+
-    '<div class="stat"><div class="label">Tokens</div><div class="value">'+d.token_count+'</div></div>'+
-    '<div class="stat"><div class="label">Chaines</div><div class="value">'+d.chain_count+'</div></div>';
+    '<div class="stat-card"><div class="label">Valeur totale</div><div class="value">'+fmtCurr(d.total_usd)+'</div></div>'+
+    '<div class="stat-card"><div class="label">Tokens</div><div class="value">'+d.token_count+'</div></div>'+
+    '<div class="stat-card"><div class="label">Chaînes actives</div><div class="value">'+d.chain_count+'</div></div>'+
+    '<div class="stat-card"><div class="label">Wallets</div><div class="value">'+(activeWallet=="ALL"?wallets.length:1)+'</div></div>';
+
+  // Pie chart
+  if (pieChart) pieChart.destroy();
+  var ctx = document.getElementById("pieChart").getContext("2d");
+  var labels=[], data=[], bg=[], chainColors={"ethereum":"#627eea","optimism":"#ff0420","base":"#0052ff","arbitrum":"#28a0f0","polygon":"#8247e5","gnosis":"#04795b","zksync":"#1573fe","celo":"#35d07f","scroll":"#ebc28e"};
+  for (var c in d.chains) {
+    if (d.chains.hasOwnProperty(c) && d.chains[c] > 0.01) {
+      labels.push(c.charAt(0).toUpperCase()+c.slice(1));
+      data.push(Math.round(toCurr(d.chains[c])*100)/100);
+      bg.push(chainColors[c]||"#30363d");
+    }
+  }
+  if (data.length>0) {
+    pieChart = new Chart(ctx, {type:"doughnut",data:{labels:labels,datasets:[{data:data,backgroundColor:bg,borderColor:"#0a0e14",borderWidth:2}]},
+      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:"right",labels:{color:"#b0b8c4",padding:12,font:{size:11}}}}}});
+  }
 
   var chainsHtml = "";
   for (var c in d.chains) {
-    if (d.chains.hasOwnProperty(c))
+    if (d.chains.hasOwnProperty(c) && d.chains[c]>0)
       chainsHtml += '<span class="chain-tag">'+c+': '+fmtCurr(d.chains[c])+'</span>';
   }
-  document.getElementById("walletChains").innerHTML = chainsHtml;
+  document.getElementById("walletChains").innerHTML = chainsHtml || '<span style="color:#6e7681">Aucune chaîne</span>';
 
   var errHtml = "";
   if (d.errors && d.errors.length) {
-    errHtml = d.errors.map(function(e){
-      return '<div class="error">&#9888; '+(e.wallet?e.wallet+": ":"")+e.chain+': '+e.error+'</div>';
-    }).join("");
+    errHtml = d.errors.map(function(e){return '<div class="error">⚠ '+(e.wallet?e.wallet+": ":"")+e.chain+': '+e.error+'</div>';}).join("");
   }
   document.getElementById("walletError").innerHTML = errHtml;
 
   var showWallet = activeWallet=="ALL" && wallets.length > 1;
-  var sym = currSymbol();
   var table = '<table><thead><tr><th>Token</th>'+ (showWallet?'<th>Wallet</th>':'') +'<th>Chaîne</th><th>Balance</th><th>Prix</th><th>'+sym+' Valeur</th></tr></thead><tbody>';
   for (var i=0;i<d.tokens.length;i++) {
     var t = d.tokens[i];
     var icon = t.icon?'<img class="ti" src="'+t.icon+'" onerror="this.style.display=\'none\'">':'';
-    var priceCurr = t.usd_price<0.01 ? t.usd_price.toFixed(6) : t.usd_price.toFixed(4);
-    table += '<tr><td>'+icon+'<b>'+t.name+'</b> <span style="color:#8b949e;font-size:.75rem">'+t.symbol+'</span></td>'+
-      (showWallet?'<td style="font-size:.75rem;color:#8b949e">'+t._wallet+'</td>':'')+
-      '<td class="chain">'+t.chain+'</td><td>'+t.balance.toLocaleString()+'</td><td>'+sym+priceCurr+'</td><td class="usd">'+fmtCurr(t.usd_value)+'</td></tr>';
+    var priceF = sym+(t.usd_price<0.01?t.usd_price.toFixed(6):t.usd_price.toFixed(4));
+    table += '<tr><td>'+icon+'<b>'+t.name+'</b> <span style="color:#6e7681;font-size:.75rem">'+t.symbol+'</span></td>'+
+      (showWallet?'<td style="font-size:.75rem;color:#6e7681">'+t._wallet+'</td>':'')+
+      '<td class="chain">'+t.chain+'</td><td>'+t.balance.toLocaleString()+'</td><td>'+priceF+'</td><td class="usd">'+fmtCurr(t.usd_value)+'</td></tr>';
   }
   table += '</tbody></table>';
   document.getElementById("walletTable").innerHTML = table;
 }
 
-// Init
 (async function(){
   var r = await fetch("/api/auth/me");
   if (r.ok) showDash();
