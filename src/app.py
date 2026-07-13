@@ -42,6 +42,9 @@ async def lifespan(app: FastAPI):
                 user_id INTEGER NOT NULL,
                 total_usd REAL NOT NULL,
                 token_count INTEGER DEFAULT 0,
+                token_symbol TEXT DEFAULT NULL,
+                chain TEXT DEFAULT NULL,
+                wallet_label TEXT DEFAULT NULL,
                 created_at TEXT DEFAULT (datetime('now')),
                 FOREIGN KEY(user_id) REFERENCES users(id)
             )
@@ -244,7 +247,7 @@ async def portfolio(address: str = Query(...), force: bool = Query(False), user=
     try:
         async with aiosqlite.connect(DB_PATH) as db:
             cur = await db.execute(
-                "SELECT created_at FROM snapshots WHERE user_id=? ORDER BY created_at DESC LIMIT 1",
+                "SELECT created_at FROM snapshots WHERE user_id=? AND token_symbol IS NULL ORDER BY created_at DESC LIMIT 1",
                 (user["id"],))
             last = await cur.fetchone()
             if not last or (_time.time() - _time.mktime(_time.strptime(last["created_at"], "%Y-%m-%d %H:%M:%S"))) > 600:
@@ -259,12 +262,27 @@ async def portfolio(address: str = Query(...), force: bool = Query(False), user=
 
 
 @app.get("/api/snapshots")
-async def get_snapshots(user=Depends(get_current_user), db=Depends(get_db)):
-    cur = await db.execute(
-        "SELECT total_usd, token_count, created_at FROM snapshots WHERE user_id=? ORDER BY created_at ASC",
-        (user["id"],))
+async def get_snapshots(token: str = Query(None), user=Depends(get_current_user), db=Depends(get_db)):
+    if token:
+        cur = await db.execute(
+            "SELECT total_usd, token_count, created_at FROM snapshots WHERE user_id=? AND token_symbol=? ORDER BY created_at ASC",
+            (user["id"], token.upper()))
+    else:
+        cur = await db.execute(
+            "SELECT total_usd, token_count, created_at FROM snapshots WHERE user_id=? AND token_symbol IS NULL ORDER BY created_at ASC",
+            (user["id"],))
     rows = await cur.fetchall()
     return [{"total_usd": r["total_usd"], "token_count": r["token_count"], "date": r["created_at"]} for r in rows]
+
+
+@app.get("/api/snapshots/tokens")
+async def get_snapshot_tokens(user=Depends(get_current_user), db=Depends(get_db)):
+    """List distinct tokens that have snapshot data."""
+    cur = await db.execute(
+        "SELECT DISTINCT token_symbol FROM snapshots WHERE user_id=? AND token_symbol IS NOT NULL ORDER BY token_symbol",
+        (user["id"],))
+    rows = await cur.fetchall()
+    return [r["token_symbol"] for r in rows]
 
 
 @app.post("/api/snapshots/backfill")
@@ -325,7 +343,7 @@ async def backfill_snapshots(user=Depends(get_current_user), db=Depends(get_db))
             except Exception:
                 continue
 
-    # Generate weekly snapshots from creation to now
+    # Generate weekly snapshots from creation to now — both total and per-token
     new_snapshots = 0
     week_ms = 7 * 86400 * 1000
     start_ms = created_at * 1000
@@ -333,23 +351,36 @@ async def backfill_snapshots(user=Depends(get_current_user), db=Depends(get_db))
     
     for ts in range(int(start_ms), int(end_ms), int(week_ms)):
         total = 0.0
+        date_str = datetime.datetime.utcfromtimestamp(ts / 1000).strftime("%Y-%m-%d %H:%M:%S")
+        
         for tok in tokens_cg:
             prices = weekly_prices.get(tok["id"], [])
             price = 0
             for p in prices:
                 if p[0] <= ts:
                     price = p[1]
-            total += tok["balance"] * price
-        
-        if total > 0:
-            date_str = datetime.datetime.utcfromtimestamp(ts / 1000).strftime("%Y-%m-%d %H:%M:%S")
+            tok_usd = tok["balance"] * price
+            total += tok_usd
+            
+            # Per-token snapshot
             cur2 = await db.execute(
-                "SELECT id FROM snapshots WHERE user_id=? AND created_at=?",
-                (user["id"], date_str))
-            if not await cur2.fetchone():
+                "SELECT id FROM snapshots WHERE user_id=? AND created_at=? AND token_symbol=?",
+                (user["id"], date_str, tok["symbol"]))
+            if not await cur2.fetchone() and tok_usd > 0.01:
                 await db.execute(
-                    "INSERT INTO snapshots (user_id, total_usd, token_count, created_at) VALUES (?, ?, ?, ?)",
-                    (user["id"], round(total, 2), len(tokens_cg), date_str))
+                    "INSERT INTO snapshots (user_id, total_usd, token_count, token_symbol, chain) VALUES (?, ?, ?, ?, ?)",
+                    (user["id"], round(tok_usd, 2), 1, tok["symbol"], "ethereum"))
+                new_snapshots += 1
+        
+        # Total snapshot
+        if total > 0:
+            cur3 = await db.execute(
+                "SELECT id FROM snapshots WHERE user_id=? AND created_at=? AND token_symbol IS NULL",
+                (user["id"], date_str))
+            if not await cur3.fetchone():
+                await db.execute(
+                    "INSERT INTO snapshots (user_id, total_usd, token_count) VALUES (?, ?, ?)",
+                    (user["id"], round(total, 2), len(tokens_cg)))
                 new_snapshots += 1
 
     await db.commit()

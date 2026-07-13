@@ -64,7 +64,7 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
 <body>
 <div id="app">
   <div class="topbar">
-    <h1>🪙 Crypto Wallet Tracker <span>v1.7</span><span id="cacheBadge" style="display:none;font-size:.65rem;background:#2d5a3d;color:#40c463;padding:2px 8px;border-radius:10px;cursor:pointer;margin-left:6px" onclick="forceRefresh()">⚡ cache</span></h1>
+    <h1>🪙 Crypto Wallet Tracker <span>v1.8</span><span id="cacheBadge" style="display:none;font-size:.65rem;background:#2d5a3d;color:#40c463;padding:2px 8px;border-radius:10px;cursor:pointer;margin-left:6px" onclick="forceRefresh()">⚡ cache</span></h1>
     <div class="topbar-right">
       <select id="currency" onchange="switchCurrency()">
         <option value="usd">$ USD</option>
@@ -99,7 +99,13 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
     <div class="row">
       <div class="card"><h2>📊 Répartition par chaîne</h2><div class="chart-wrap"><canvas id="pieChart"></canvas></div></div>
       <div class="card"><h2>📈 Évolution du portefeuille
-        <span style="display:inline-flex;gap:4px;margin-left:12px;font-size:.65rem">
+        <span style="display:inline-flex;gap:6px;margin-left:12px;font-size:.65rem;align-items:center">
+          <select id="chartWallet" onchange="drawLineChart()" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:2px 6px;border-radius:4px;font-size:.65rem">
+            <option value="">Tous wallets</option>
+          </select>
+          <select id="chartToken" onchange="drawLineChart()" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:2px 6px;border-radius:4px;font-size:.65rem">
+            <option value="">Tous tokens</option>
+          </select>
           <span class="range-pill active" onclick="setRange('all',this)">All</span>
           <span class="range-pill" onclick="setRange('365',this)">1 an</span>
           <span class="range-pill" onclick="setRange('180',this)">6 mois</span>
@@ -299,6 +305,7 @@ function renderResult(d) {
 
   // Line chart — async snapshots fetch
   drawLineChart();
+  populateFilters();
 
   var chainsHtml = "";
   for (var c in d.chains) {
@@ -347,11 +354,36 @@ async function backfillHistory() {
   setTimeout(function(){ btn.disabled = false; btn.textContent = "📥 Backfill"; }, 5000);
 }
 
+async function populateFilters() {
+  // Populate wallet dropdown
+  var sel = document.getElementById("chartWallet");
+  sel.innerHTML = '<option value="">Tous wallets</option>';
+  for (var i=0;i<wallets.length;i++) {
+    sel.innerHTML += '<option value="'+wallets[i].address+'">'+(wallets[i].label||wallets[i].address.slice(0,10)+"...")+'</option>';
+  }
+  
+  // Populate token dropdown from snapshots
+  try {
+    var r = await fetch("/api/snapshots/tokens");
+    var tokens = await r.json();
+    var tsel = document.getElementById("chartToken");
+    tsel.innerHTML = '<option value="">Tous tokens</option>';
+    for (var j=0;j<tokens.length;j++) {
+      tsel.innerHTML += '<option value="'+tokens[j]+'">'+tokens[j]+'</option>';
+    }
+  } catch(e) {}
+}
+
 async function drawLineChart() {
   try {
-    var r = await fetch("/api/snapshots");
+    var token = document.getElementById("chartToken").value;
+    var url = "/api/snapshots" + (token ? "?token=" + token : "");
+    var r = await fetch(url);
     var snaps = await r.json();
-    if (snaps.length < 2) return;
+    if (snaps.length < 2) {
+      if (lineChart) lineChart.destroy();
+      return;
+    }
 
     // Filter by selected range
     if (chartRange != "all") {
