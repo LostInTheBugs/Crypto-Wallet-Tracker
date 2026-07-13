@@ -167,6 +167,15 @@ async def del_wallet(wallet_id: int, user=Depends(get_current_user), db=Depends(
     return {"ok": True}
 
 
+@app.put("/api/wallets/{wallet_id}")
+async def edit_wallet(wallet_id: int, request: Request, user=Depends(get_current_user), db=Depends(get_db)):
+    data = await request.json()
+    label = (data.get("label") or "").strip()[:50]
+    await db.execute("UPDATE wallets SET label=? WHERE id=? AND user_id=?", (label, wallet_id, user["id"]))
+    await db.commit()
+    return {"ok": True}
+
+
 # ── Portfolio engine ─────────────────────────────────────────────
 
 CHAINS = {

@@ -87,7 +87,7 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
 <body>
 
 <div class="sidebar hidden" id="sidebar">
-  <h2>🪙 Tracker <span style="font-size:.65rem;color:var(--accent)">v1.13.3</span></h2>
+  <h2>🪙 Tracker <span style="font-size:.65rem;color:var(--accent)">v1.14.0</span></h2>
   <a href="#" class="active" onclick="switchPage('dashboard')" data-page="dashboard">📊 <span>Dashboard</span></a>
   <a href="#" onclick="switchPage('stats')" data-page="stats">📈 <span>Statistiques</span></a>
   <a href="#" onclick="switchPage('tokens')" data-page="tokens">📋 <span>Détail tokens</span></a>
@@ -224,15 +224,32 @@ function renderWalletPage(){
   if (wallets.length == 0) {
     html += '<div class="loading">Aucun wallet</div>';
   } else {
-    html += '<table><thead><tr><th>Label</th><th>Adresse</th><th style="width:60px"></th></tr></thead><tbody>';
+    html += '<table><thead><tr><th>Label</th><th>Adresse</th><th style="width:80px"></th></tr></thead><tbody>';
     for (var i=0;i<wallets.length;i++) {
-      html += '<tr><td><b>'+(wallets[i].label||"—")+'</b></td><td style="font-family:monospace;font-size:.8rem">'+wallets[i].address+'</td>'+
+      html += '<tr><td><span id="wlbl_'+wallets[i].id+'" onclick="editLabel('+wallets[i].id+')" style="cursor:pointer;color:var(--accent)" title="Cliquer pour éditer">'+(wallets[i].label||"—")+' ✎</span></td>'+
+        '<td style="font-family:monospace;font-size:.8rem">'+wallets[i].address+'</td>'+
         '<td><button class="btn btn-red" style="padding:4px 10px;font-size:.7rem" onclick="delWallet('+wallets[i].id+')">✕</button></td></tr>';
     }
     html += '</tbody></table>';
   }
   html += '</div>';
   document.getElementById("pageWallets").innerHTML = html;
+}
+
+function editLabel(id){
+  var el=document.getElementById("wlbl_"+id);
+  var old=el.textContent.replace(" ✎","").trim();
+  if(old=="—")old="";
+  el.innerHTML='<input id="edit_'+id+'" value="'+old+'" style="width:120px;margin:0;padding:4px 6px;font-size:.8rem" onkeydown="if(event.key==\'Enter\')saveLabel('+id+')" onblur="saveLabel('+id+')">';
+  setTimeout(function(){document.getElementById("edit_"+id).focus()},50);
+}
+
+async function saveLabel(id){
+  var inp=document.getElementById("edit_"+id);
+  if(!inp)return;
+  var label=inp.value.trim();
+  var r=await fetch("/api/wallets/"+id,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({label:label})});
+  if(r.ok){await loadWallets();if(currentPage=="wallets")renderWalletPage()}
 }
 
 async function addWallet(){var addr=document.getElementById("walletAddr").value.trim(),label=document.getElementById("walletLabel").value.trim();if(!addr.startsWith("0x")||addr.length!=42)return alert("Adresse invalide");var r=await fetch("/api/wallets",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({address:addr,label:label})});if(!r.ok){var e=await r.json();alert(e.detail);return}await loadWallets();if(currentPage=="wallets")renderWalletPage()}
