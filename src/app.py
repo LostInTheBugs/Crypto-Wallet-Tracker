@@ -269,19 +269,32 @@ async def get_snapshots(user=Depends(get_current_user), db=Depends(get_db)):
 
 @app.post("/api/snapshots/backfill")
 async def backfill_snapshots(user=Depends(get_current_user), db=Depends(get_db)):
-    """Generate historical snapshots using CoinGecko weekly prices for current tokens."""
-    # Get all user wallets
+    """Generate historical snapshots using CoinGecko prices since wallet creation."""
     cur = await db.execute("SELECT address FROM wallets WHERE user_id=?", (user["id"],))
     wallet_rows = await cur.fetchall()
     if not wallet_rows:
         raise HTTPException(400, "Aucun wallet")
 
-    # Get current tokens for first wallet (simplified: use most representative)
     address = wallet_rows[0]["address"]
+    
+    # Find wallet creation date via Blockscout (oldest tx + 1 day margin)
+    created_at = _time.time() - 90 * 86400  # default 90 days
+    try:
+        async with httpx.AsyncClient(timeout=10) as bc:
+            r = await bc.get(f"https://eth.blockscout.com/api/v2/addresses/{address}/transactions?filter=from|to&limit=1&sort=asc")
+            if r.status_code == 200:
+                items = r.json().get("items", [])
+                if items:
+                    ts_str = items[0].get("timestamp", "")
+                    if ts_str:
+                        created_at = _time.mktime(_time.strptime(ts_str[:19], "%Y-%m-%dT%H:%M:%S")) - 86400
+    except Exception:
+        pass
+
+    # Get current tokens
     async with httpx.AsyncClient(follow_redirects=True) as client:
         results = await asyncio.gather(*[fetch_chain(client, c, h, address) for c, h in CHAINS.items()])
 
-    # Collect tokens with value > $1 and map to CoinGecko IDs
     tokens_cg = []
     for r in results:
         for t in r["tokens"]:
@@ -296,16 +309,15 @@ async def backfill_snapshots(user=Depends(get_current_user), db=Depends(get_db))
     if not tokens_cg:
         return {"ok": False, "msg": "Aucun token mappé CoinGecko"}
 
-    # Fetch 12 weeks of history for each token
     now = _time.time()
-    twelve_weeks = 12 * 7 * 86400
-    weekly_prices = {}  # {token_id: {timestamp: price}}
-    
+    created_at = max(created_at, now - 365 * 86400)  # cap at 1 year for CoinGecko free tier
+
+    weekly_prices = {}
     async with httpx.AsyncClient(timeout=20) as cg_client:
         for tok in tokens_cg:
             try:
                 url = f"https://api.coingecko.com/api/v3/coins/{tok['id']}/market_chart/range"
-                params = {"vs_currency": "usd", "from": int(now - twelve_weeks), "to": int(now)}
+                params = {"vs_currency": "usd", "from": int(created_at), "to": int(now)}
                 resp = await cg_client.get(url, params=params)
                 if resp.status_code == 200:
                     data = resp.json()
@@ -313,14 +325,16 @@ async def backfill_snapshots(user=Depends(get_current_user), db=Depends(get_db))
             except Exception:
                 continue
 
-    # Compute weekly snapshots
+    # Generate weekly snapshots from creation to now
     new_snapshots = 0
-    for week in range(12, 0, -1):
-        ts = (now - week * 7 * 86400) * 1000  # CoinGecko uses ms
+    week_ms = 7 * 86400 * 1000
+    start_ms = created_at * 1000
+    end_ms = now * 1000
+    
+    for ts in range(int(start_ms), int(end_ms), int(week_ms)):
         total = 0.0
         for tok in tokens_cg:
             prices = weekly_prices.get(tok["id"], [])
-            # Find closest price
             price = 0
             for p in prices:
                 if p[0] <= ts:
@@ -329,7 +343,6 @@ async def backfill_snapshots(user=Depends(get_current_user), db=Depends(get_db))
         
         if total > 0:
             date_str = datetime.datetime.utcfromtimestamp(ts / 1000).strftime("%Y-%m-%d %H:%M:%S")
-            # Check if snapshot already exists for this date
             cur2 = await db.execute(
                 "SELECT id FROM snapshots WHERE user_id=? AND created_at=?",
                 (user["id"], date_str))
@@ -340,7 +353,7 @@ async def backfill_snapshots(user=Depends(get_current_user), db=Depends(get_db))
                 new_snapshots += 1
 
     await db.commit()
-    return {"ok": True, "snapshots_added": new_snapshots}
+    return {"ok": True, "snapshots_added": new_snapshots, "from_date": datetime.datetime.utcfromtimestamp(created_at).strftime("%Y-%m-%d")}
 
 
 # CoinGecko symbol → id mapping (common tokens)
