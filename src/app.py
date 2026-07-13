@@ -153,6 +153,8 @@ CHAINS = {
     "scroll":   "scroll.blockscout.com",
 }
 
+_portfolio_cache = {}  # {address: {"data": ..., "ts": timestamp}}
+
 
 async def fetch_chain(client, chain, host, address):
     try:
@@ -179,10 +181,7 @@ async def fetch_chain(client, chain, host, address):
         return {"chain": chain, "tokens": [], "error": str(e)[:100]}
 
 
-@app.get("/api/portfolio")
-async def portfolio(address: str = Query(...), user=Depends(get_current_user)):
-    if not address.startswith("0x"):
-        raise HTTPException(400, "Adresse invalide")
+async def _compute_portfolio(address: str) -> dict:
     async with httpx.AsyncClient(follow_redirects=True) as client:
         results = await asyncio.gather(*[fetch_chain(client, c, h, address) for c, h in CHAINS.items()])
 
@@ -212,7 +211,25 @@ async def portfolio(address: str = Query(...), user=Depends(get_current_user)):
         "chains": {c: round(v, 2) for c, v in sorted(chain_totals.items(), key=lambda x: x[1], reverse=True)},
         "tokens": items[:200],
         "errors": [{"chain": r["chain"], "error": r["error"]} for r in results if r["error"]],
+        "cached": False,
     }
+
+
+@app.get("/api/portfolio")
+async def portfolio(address: str = Query(...), force: bool = Query(False), user=Depends(get_current_user)):
+    if not address.startswith("0x"):
+        raise HTTPException(400, "Adresse invalide")
+
+    now = _time.time()
+    entry = _portfolio_cache.get(address)
+    if not force and entry and (now - entry["ts"]) < 3600:  # 1 hour cache
+        data = dict(entry["data"])
+        data["cached"] = True
+        return data
+
+    data = await _compute_portfolio(address)
+    _portfolio_cache[address] = {"data": data, "ts": now}
+    return data
 
 
 # ── Currency rates ──────────────────────────────────────────────

@@ -61,7 +61,7 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
 <body>
 <div id="app">
   <div class="topbar">
-    <h1>🪙 Crypto Wallet Tracker <span>v1.1</span></h1>
+    <h1>🪙 Crypto Wallet Tracker <span>v1.2</span><span id="cacheBadge" style="display:none;font-size:.65rem;background:#2d5a3d;color:#40c463;padding:2px 8px;border-radius:10px;cursor:pointer;margin-left:6px" onclick="forceRefresh()">⚡ cache</span></h1>
     <div class="topbar-right">
       <select id="currency" onchange="switchCurrency()">
         <option value="usd">$ USD</option>
@@ -108,6 +108,8 @@ var activeWallet = "ALL";
 var eurRate = null;
 var currency = "usd";
 var pieChart = null;
+var lastResult = null;  // cached portfolio for instant currency switch
+var loadingAddr = null;
 
 async function switchCurrency() {
   currency = document.getElementById("currency").value;
@@ -115,7 +117,12 @@ async function switchCurrency() {
     try { var r = await fetch("/api/rates"); var d = await r.json(); eurRate = d.eur; }
     catch(e) { eurRate = 0.91; }
   }
-  loadView();
+  if (lastResult) renderResult(lastResult);  // no re-fetch, just re-render
+}
+
+async function forceRefresh() {
+  loadingAddr = null;
+  loadView(true);
 }
 
 function toCurr(usd) { return (currency=="eur"&&eurRate) ? usd*eurRate : usd; }
@@ -203,19 +210,22 @@ async function addWallet() {
   await loadWallets();
 }
 
-async function loadView() {
-  activeWallet == "ALL" ? await loadAllWallets() : await loadOneWallet(activeWallet);
+async function loadView(force) {
+  activeWallet == "ALL" ? await loadAllWallets(force) : await loadOneWallet(activeWallet, force);
 }
 
-async function loadOneWallet(addr) {
+async function loadOneWallet(addr, force) {
+  if (loadingAddr == addr && !force) return;
+  loadingAddr = addr;
   document.getElementById("walletTable").innerHTML = '<div class="loading">Scan 9 blockchains...</div>';
   try {
-    var r = await fetch("/api/portfolio?address="+addr);
+    var url = "/api/portfolio?address="+addr + (force?"&force=true":"");
+    var r = await fetch(url);
     renderResult(await r.json());
   } catch(e) { document.getElementById("walletTable").innerHTML = '<div class="error">Erreur</div>'; }
 }
 
-async function loadAllWallets() {
+async function loadAllWallets(force) {
   if (wallets.length == 0) {
     document.getElementById("walletStats").innerHTML="";
     document.getElementById("walletTable").innerHTML='<div class="loading">Ajoute une adresse pour commencer</div>';
@@ -225,7 +235,7 @@ async function loadAllWallets() {
   document.getElementById("walletTable").innerHTML = '<div class="loading">Scan '+wallets.length+' wallet(s)...</div>';
 
   try {
-    var promises = wallets.map(function(w){return fetch("/api/portfolio?address="+w.address).then(function(r){return r.json();});});
+    var promises = wallets.map(function(w){return fetch("/api/portfolio?address="+w.address+(force?"&force=true":"")).then(function(r){return r.json();});});
     var results = await Promise.all(promises);
     var totalUsd = 0, allTokens = [], chainTotals = {}, chainSet = {}, allErrors = [];
     for (var i=0;i<results.length;i++) {
@@ -241,7 +251,9 @@ async function loadAllWallets() {
 }
 
 function renderResult(d) {
+  lastResult = d;
   var sym = currSymbol();
+  document.getElementById("cacheBadge").style.display = d.cached ? "inline" : "none";
   document.getElementById("walletStats").innerHTML =
     '<div class="stat-card"><div class="label">Valeur totale</div><div class="value">'+fmtCurr(d.total_usd)+'</div></div>'+
     '<div class="stat-card"><div class="label">Tokens</div><div class="value">'+d.token_count+'</div></div>'+
