@@ -67,9 +67,10 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
 <body>
 
 <div class="sidebar hidden" id="sidebar">
-  <h2>🪙 Tracker <span style="font-size:.65rem;color:var(--accent)">v1.11.2</span></h2>
+  <h2>🪙 Tracker <span style="font-size:.65rem;color:var(--accent)">v1.12.0</span></h2>
   <a href="#" class="active" onclick="switchPage('dashboard')" data-page="dashboard">📊 Dashboard</a>
   <a href="#" onclick="switchPage('tokens')" data-page="tokens">📋 Détail tokens</a>
+  <a href="#" onclick="switchPage('wallets')" data-page="wallets">💼 Wallets</a>
 </div>
 
 <div class="main">
@@ -94,11 +95,6 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
   </div>
 
   <div id="viewDash" class="hidden">
-    <div class="add-form">
-      <input id="walletAddr" type="text" placeholder="Adresse EVM (0x...)">
-      <input id="walletLabel" type="text" placeholder="Label">
-      <button class="btn btn-blue" onclick="addWallet()">+ Ajouter</button>
-    </div>
     <div class="wallets-bar" id="walletTabs"></div>
 
     <div id="pageDashboard">
@@ -121,6 +117,7 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
     </div>
 
     <div id="pageTokens" class="hidden"></div>
+    <div id="pageWallets" class="hidden"></div>
   </div>
 </div>
 
@@ -133,11 +130,13 @@ function switchPage(page) {
   currentPage = page;
   document.querySelectorAll(".sidebar a").forEach(function(a){ a.classList.remove("active"); });
   document.querySelector('[data-page="'+page+'"]').classList.add("active");
-  document.getElementById("pageTitle").innerHTML = page=="dashboard" ? "📊 Dashboard" : "📋 Détail tokens";
+  document.getElementById("pageTitle").innerHTML = {"dashboard":"📊 Dashboard","tokens":"📋 Détail tokens","wallets":"💼 Wallets"}[page];
   document.getElementById("pageDashboard").classList.toggle("hidden", page!="dashboard");
   document.getElementById("pageTokens").classList.toggle("hidden", page!="tokens");
+  document.getElementById("pageWallets").classList.toggle("hidden", page!="wallets");
   if (page=="dashboard" && lastResult) { renderResult(lastResult); drawLineChart(); }
   if (page=="tokens" && lastResult) renderTokenTable(lastResult);
+  if (page=="wallets") renderWalletPage();
 }
 
 function setRange(range, el){ chartRange=range; document.querySelectorAll(".range-pill").forEach(function(p){p.classList.remove("active")}); el.classList.add("active"); drawLineChart(); }
@@ -178,9 +177,29 @@ function renderWalletTabs(){
 
 function selectWallet(addr){activeWallet=addr;renderWalletTabs();loadView()}
 
-async function delWallet(id){if(!confirm("Supprimer ?"))return;await fetch("/api/wallets/"+id,{method:"DELETE"});if(wallets.find(function(w){return w.id==id&&w.address==activeWallet}))activeWallet="ALL";loadWallets()}
+async function delWallet(id){if(!confirm("Supprimer ?"))return;await fetch("/api/wallets/"+id,{method:"DELETE"});if(wallets.find(function(w){return w.id==id&&w.address==activeWallet}))activeWallet="ALL";await loadWallets();if(currentPage=="wallets")renderWalletPage()}
 
-async function addWallet(){var addr=document.getElementById("walletAddr").value.trim(),label=document.getElementById("walletLabel").value.trim();if(!addr.startsWith("0x")||addr.length!=42)return alert("Adresse invalide");var r=await fetch("/api/wallets",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({address:addr,label:label})});if(!r.ok){var e=await r.json();alert(e.detail);return}document.getElementById("walletAddr").value="";document.getElementById("walletLabel").value="";await loadWallets()}
+function renderWalletPage(){
+  var html = '<div class="card" style="margin-bottom:16px"><h2>+ Ajouter un wallet</h2><div class="add-form">'+
+    '<input id="walletAddr" type="text" placeholder="Adresse EVM (0x...)">'+
+    '<input id="walletLabel" type="text" placeholder="Label">'+
+    '<button class="btn btn-blue" onclick="addWallet()">Ajouter</button></div></div>'+
+    '<div class="card"><h2>Mes wallets <span style="font-weight:400;font-size:.7rem;color:#6e7681">('+wallets.length+')</span></h2>';
+  if (wallets.length == 0) {
+    html += '<div class="loading">Aucun wallet</div>';
+  } else {
+    html += '<table><thead><tr><th>Label</th><th>Adresse</th><th style="width:60px"></th></tr></thead><tbody>';
+    for (var i=0;i<wallets.length;i++) {
+      html += '<tr><td><b>'+(wallets[i].label||"—")+'</b></td><td style="font-family:monospace;font-size:.8rem">'+wallets[i].address+'</td>'+
+        '<td><button class="btn btn-red" style="padding:4px 10px;font-size:.7rem" onclick="delWallet('+wallets[i].id+')">✕</button></td></tr>';
+    }
+    html += '</tbody></table>';
+  }
+  html += '</div>';
+  document.getElementById("pageWallets").innerHTML = html;
+}
+
+async function addWallet(){var addr=document.getElementById("walletAddr").value.trim(),label=document.getElementById("walletLabel").value.trim();if(!addr.startsWith("0x")||addr.length!=42)return alert("Adresse invalide");var r=await fetch("/api/wallets",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({address:addr,label:label})});if(!r.ok){var e=await r.json();alert(e.detail);return}await loadWallets();if(currentPage=="wallets")renderWalletPage()}
 
 async function loadView(force){activeWallet=="ALL"?await loadAllWallets(force):await loadOneWallet(activeWallet,force)}
 
