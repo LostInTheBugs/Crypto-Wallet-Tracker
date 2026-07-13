@@ -49,6 +49,19 @@ async def lifespan(app: FastAPI):
                 FOREIGN KEY(user_id) REFERENCES users(id)
             )
         """)
+        # Migrate old snapshots table — add columns if missing
+        try:
+            await db.execute("ALTER TABLE snapshots ADD COLUMN token_symbol TEXT DEFAULT NULL")
+        except:
+            pass
+        try:
+            await db.execute("ALTER TABLE snapshots ADD COLUMN chain TEXT DEFAULT NULL")
+        except:
+            pass
+        try:
+            await db.execute("ALTER TABLE snapshots ADD COLUMN wallet_label TEXT DEFAULT NULL")
+        except:
+            pass
         await db.commit()
     yield
 
