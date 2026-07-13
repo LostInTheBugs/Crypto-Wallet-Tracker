@@ -93,7 +93,6 @@ Crypto-Wallet-Tracker/
 ## Évolutions prévues
 
 - Support Solana et Cosmos
-- Graphique d'évolution du portefeuille
 - Export CSV / PDF des inventaires
 - Mode sombre/clair
 
