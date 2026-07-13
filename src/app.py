@@ -215,6 +215,30 @@ async def portfolio(address: str = Query(...), user=Depends(get_current_user)):
     }
 
 
+# ── Currency rates ──────────────────────────────────────────────
+
+import time as _time
+
+_rate_cache = {"eur": None, "ts": 0}
+
+@app.get("/api/rates")
+async def get_rates():
+    global _rate_cache
+    now = _time.time()
+    if _rate_cache["eur"] and (now - _rate_cache["ts"]) < 3600:
+        return _rate_cache["eur"]
+    try:
+        async with httpx.AsyncClient() as c:
+            r = await c.get("https://api.frankfurter.app/latest?from=USD&to=EUR", timeout=8)
+            if r.status_code == 200:
+                data = r.json()
+                _rate_cache = {"eur": {"eur": data["rates"]["EUR"]}, "ts": now}
+                return _rate_cache["eur"]
+    except Exception:
+        pass
+    return {"eur": 0.91}  # fallback ~rate
+
+
 # ── Frontend ─────────────────────────────────────────────────────
 
 @app.get("/")

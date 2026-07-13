@@ -52,7 +52,11 @@ img.ti{width:18px;height:18px;border-radius:50%;margin-right:6px;vertical-align:
 <div id="app">
   <div class="header">
     <h1>&#x1F4CA; Crypto Wallet Tracker</h1>
-    <div>
+    <div style="display:flex;align-items:center;gap:12px">
+      <select id="currency" onchange="switchCurrency()" style="padding:4px 8px;background:#0d1117;border:1px solid #30363d;color:#58a6ff;border-radius:4px;font-size:.8rem;cursor:pointer">
+        <option value="usd">$ USD</option>
+        <option value="eur">€ EUR</option>
+      </select>
       <span class="user" id="userInfo"></span>
       <button id="btnLogout" class="hidden" onclick="logout()">Deconnexion</button>
     </div>
@@ -90,6 +94,29 @@ img.ti{width:18px;height:18px;border-radius:50%;margin-right:6px;vertical-align:
 var authMode = "login";
 var wallets = [];
 var activeWallet = "ALL";
+var eurRate = null;
+var currency = "usd";
+
+async function switchCurrency() {
+  currency = document.getElementById("currency").value;
+  if (currency == "eur" && !eurRate) {
+    try { var r = await fetch("/api/rates"); var d = await r.json(); eurRate = d.eur; }
+    catch(e) { eurRate = 0.91; }
+  }
+  loadView();
+}
+
+function toCurr(usd) {
+  if (currency == "eur" && eurRate) return usd * eurRate;
+  return usd;
+}
+
+function currSymbol() { return currency == "eur" ? "€" : "$"; }
+
+function fmtCurr(usd) {
+  var v = toCurr(usd);
+  return currSymbol() + v.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
 
 function toggleAuth() {
   authMode = authMode=="login"?"register":"login";
@@ -261,14 +288,14 @@ async function loadAllWallets() {
 
 function renderResult(d) {
   document.getElementById("walletStats").innerHTML =
-    '<div class="stat"><div class="label">Valeur totale</div><div class="value">$'+d.total_usd.toLocaleString()+'</div></div>'+
+    '<div class="stat"><div class="label">Valeur totale</div><div class="value">'+fmtCurr(d.total_usd)+'</div></div>'+
     '<div class="stat"><div class="label">Tokens</div><div class="value">'+d.token_count+'</div></div>'+
-    '<div class="stat"><div class="label">Chainiers</div><div class="value">'+d.chain_count+'</div></div>';
+    '<div class="stat"><div class="label">Chaines</div><div class="value">'+d.chain_count+'</div></div>';
 
   var chainsHtml = "";
   for (var c in d.chains) {
     if (d.chains.hasOwnProperty(c))
-      chainsHtml += '<span class="chain-tag">'+c+': $'+d.chains[c].toLocaleString()+'</span>';
+      chainsHtml += '<span class="chain-tag">'+c+': '+fmtCurr(d.chains[c])+'</span>';
   }
   document.getElementById("walletChains").innerHTML = chainsHtml;
 
@@ -281,14 +308,15 @@ function renderResult(d) {
   document.getElementById("walletError").innerHTML = errHtml;
 
   var showWallet = activeWallet=="ALL" && wallets.length > 1;
-  var table = '<table><thead><tr><th>Token</th>'+ (showWallet?'<th>Wallet</th>':'') +'<th>Chaîne</th><th>Balance</th><th>Prix</th><th>USD</th></tr></thead><tbody>';
+  var sym = currSymbol();
+  var table = '<table><thead><tr><th>Token</th>'+ (showWallet?'<th>Wallet</th>':'') +'<th>Chaîne</th><th>Balance</th><th>Prix</th><th>'+sym+' Valeur</th></tr></thead><tbody>';
   for (var i=0;i<d.tokens.length;i++) {
     var t = d.tokens[i];
     var icon = t.icon?'<img class="ti" src="'+t.icon+'" onerror="this.style.display=\'none\'">':'';
-    var pf = t.usd_price<0.01?t.usd_price.toFixed(6):t.usd_price.toFixed(4);
+    var priceCurr = t.usd_price<0.01 ? t.usd_price.toFixed(6) : t.usd_price.toFixed(4);
     table += '<tr><td>'+icon+'<b>'+t.name+'</b> <span style="color:#8b949e;font-size:.75rem">'+t.symbol+'</span></td>'+
       (showWallet?'<td style="font-size:.75rem;color:#8b949e">'+t._wallet+'</td>':'')+
-      '<td class="chain">'+t.chain+'</td><td>'+t.balance.toLocaleString()+'</td><td>$'+pf+'</td><td class="usd">$'+t.usd_value.toLocaleString()+'</td></tr>';
+      '<td class="chain">'+t.chain+'</td><td>'+t.balance.toLocaleString()+'</td><td>'+sym+priceCurr+'</td><td class="usd">'+fmtCurr(t.usd_value)+'</td></tr>';
   }
   table += '</tbody></table>';
   document.getElementById("walletTable").innerHTML = table;
