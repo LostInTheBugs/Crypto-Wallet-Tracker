@@ -62,16 +62,36 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
 .range-pill.active{color:var(--accent);background:#1f6feb22;border-color:#1f6feb44;font-weight:600}
 .chains{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
 .chain-tag{padding:3px 8px;background:#1a2332;border:1px solid #1e2d42;border-radius:10px;font-size:.7rem;color:#c9d1d9}
+@media(max-width:768px){
+  body{flex-direction:column}
+  .sidebar{width:100%;min-height:auto;padding:8px 12px;display:flex;align-items:center;gap:4px;overflow-x:auto;border-right:none;border-bottom:1px solid var(--border)}
+  .sidebar h2{font-size:0;padding:0;border:none;margin:0;white-space:nowrap}
+  .sidebar a{font-size:1.1rem;padding:6px 10px;white-space:nowrap;border-left:none!important;border-bottom:2px solid transparent}
+  .sidebar a.active{border-left:none!important;border-bottom:2px solid var(--accent)}
+  .sidebar a span{display:none}
+  .main{padding:12px;width:100%}
+  .row{grid-template-columns:1fr}
+  .grid{grid-template-columns:repeat(2,1fr)}
+  .topbar h1{font-size:1rem}
+  .topbar-right{gap:4px;flex-wrap:wrap}
+  .chart-wrap{height:180px}
+  table{font-size:.7rem}
+  th,td{padding:5px 6px}
+  .add-form{flex-direction:column}
+  .add-form input+input{max-width:100%}
+  .wallets-bar{gap:4px}
+  .wallet-tab{padding:4px 6px;font-size:.7rem}
+}
 </style>
 </head>
 <body>
 
 <div class="sidebar hidden" id="sidebar">
-  <h2>🪙 Tracker <span style="font-size:.65rem;color:var(--accent)">v1.13.2</span></h2>
-  <a href="#" class="active" onclick="switchPage('dashboard')" data-page="dashboard">📊 Dashboard</a>
-  <a href="#" onclick="switchPage('stats')" data-page="stats">📈 Statistiques</a>
-  <a href="#" onclick="switchPage('tokens')" data-page="tokens">📋 Détail tokens</a>
-  <a href="#" onclick="switchPage('wallets')" data-page="wallets">💼 Wallets</a>
+  <h2>🪙 Tracker <span style="font-size:.65rem;color:var(--accent)">v1.13.3</span></h2>
+  <a href="#" class="active" onclick="switchPage('dashboard')" data-page="dashboard">📊 <span>Dashboard</span></a>
+  <a href="#" onclick="switchPage('stats')" data-page="stats">📈 <span>Statistiques</span></a>
+  <a href="#" onclick="switchPage('tokens')" data-page="tokens">📋 <span>Détail tokens</span></a>
+  <a href="#" onclick="switchPage('wallets')" data-page="wallets">💼 <span>Wallets</span></a>
 </div>
 
 <div class="main">
@@ -251,7 +271,7 @@ function renderResult(d){
     var ctx=document.getElementById("pieChart").getContext("2d");
     var labels=[],data=[],bg=[],cc={"ethereum":"#627eea","optimism":"#ff0420","base":"#0052ff","arbitrum":"#28a0f0","polygon":"#8247e5","gnosis":"#04795b","zksync":"#1573fe","celo":"#35d07f","scroll":"#ebc28e"};
     for(var c in d.chains){if(d.chains.hasOwnProperty(c)&&d.chains[c]>0.01){labels.push(c.charAt(0).toUpperCase()+c.slice(1));data.push(Math.round(toCurr(d.chains[c])*100)/100);bg.push(cc[c]||"#30363d")}}
-    if(data.length>0)pieChart=new Chart(ctx,{type:"doughnut",data:{labels:labels,datasets:[{data:data,backgroundColor:bg,borderColor:"#0a0e14",borderWidth:2}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:"right",labels:{color:"#b0b8c4",padding:12,font:{size:11},generateLabels:function(chart){var d=chart.data;return d.labels.map(function(l,i){var v=d.datasets[0].data[i];var total=d.datasets[0].data.reduce(function(a,b){return a+b},0);var pct=Math.round(v/total*100);return{text:l+"  "+pct+"%",fillStyle:d.datasets[0].backgroundColor[i],strokeStyle:d.datasets[0].backgroundColor[i],index:i}})}}}}}});
+    if(data.length>0)pieChart=new Chart(ctx,{type:"doughnut",data:{labels:labels,datasets:[{data:data,backgroundColor:bg,borderColor:"#0a0e14",borderWidth:2}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:"right",labels:{color:"#c9d1d9",padding:12,font:{size:11},generateLabels:function(chart){var d=chart.data;return d.labels.map(function(l,i){var v=d.datasets[0].data[i];var total=d.datasets[0].data.reduce(function(a,b){return a+b},0);var pct=Math.round(v/total*100);return{text:l+"  "+pct+"%",fillStyle:d.datasets[0].backgroundColor[i],strokeStyle:d.datasets[0].backgroundColor[i],fontColor:"#c9d1d9",index:i}})}}}}}});
     drawMiniChart();
     var chainsHtml="";for(var c in d.chains){if(d.chains.hasOwnProperty(c)&&d.chains[c]>0)chainsHtml+='<span class="chain-tag">'+c+': '+fmtCurr(d.chains[c])+'</span>'}
     document.getElementById("walletChains").innerHTML=chainsHtml||'<span style="color:#6e7681">Aucune</span>';
