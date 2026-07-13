@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — V1.4
+# Crypto Wallet Tracker — V1.5
 
 Outil web local pour inventorier les assets de vos wallets crypto.
 Multi-wallets et multi-chaînes EVM (tokens ERC-20), total global et détail par wallet, affichage en USD ou EUR (taux BCE via Frankfurter).

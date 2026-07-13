@@ -267,6 +267,100 @@ async def get_snapshots(user=Depends(get_current_user), db=Depends(get_db)):
     return [{"total_usd": r["total_usd"], "token_count": r["token_count"], "date": r["created_at"]} for r in rows]
 
 
+@app.post("/api/snapshots/backfill")
+async def backfill_snapshots(user=Depends(get_current_user), db=Depends(get_db)):
+    """Generate historical snapshots using CoinGecko weekly prices for current tokens."""
+    # Get all user wallets
+    cur = await db.execute("SELECT address FROM wallets WHERE user_id=?", (user["id"],))
+    wallet_rows = await cur.fetchall()
+    if not wallet_rows:
+        raise HTTPException(400, "Aucun wallet")
+
+    # Get current tokens for first wallet (simplified: use most representative)
+    address = wallet_rows[0]["address"]
+    async with httpx.AsyncClient(follow_redirects=True) as client:
+        results = await asyncio.gather(*[fetch_chain(client, c, h, address) for c, h in CHAINS.items()])
+
+    # Collect tokens with value > $1 and map to CoinGecko IDs
+    tokens_cg = []
+    for r in results:
+        for t in r["tokens"]:
+            try: bal = int(t["balance_raw"]) / (10 ** t["decimals"])
+            except: bal = 0
+            usd = bal * t["usd_price"]
+            if usd < 1: continue
+            cg_id = SYMBOL_TO_CG.get(t["symbol"].lower())
+            if cg_id:
+                tokens_cg.append({"id": cg_id, "balance": bal, "symbol": t["symbol"]})
+
+    if not tokens_cg:
+        return {"ok": False, "msg": "Aucun token mappé CoinGecko"}
+
+    # Fetch 12 weeks of history for each token
+    now = _time.time()
+    twelve_weeks = 12 * 7 * 86400
+    weekly_prices = {}  # {token_id: {timestamp: price}}
+    
+    async with httpx.AsyncClient(timeout=20) as cg_client:
+        for tok in tokens_cg:
+            try:
+                url = f"https://api.coingecko.com/api/v3/coins/{tok['id']}/market_chart/range"
+                params = {"vs_currency": "usd", "from": int(now - twelve_weeks), "to": int(now)}
+                resp = await cg_client.get(url, params=params)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    weekly_prices[tok["id"]] = data.get("prices", [])
+            except Exception:
+                continue
+
+    # Compute weekly snapshots
+    new_snapshots = 0
+    for week in range(12, 0, -1):
+        ts = (now - week * 7 * 86400) * 1000  # CoinGecko uses ms
+        total = 0.0
+        for tok in tokens_cg:
+            prices = weekly_prices.get(tok["id"], [])
+            # Find closest price
+            price = 0
+            for p in prices:
+                if p[0] <= ts:
+                    price = p[1]
+            total += tok["balance"] * price
+        
+        if total > 0:
+            date_str = datetime.datetime.utcfromtimestamp(ts / 1000).strftime("%Y-%m-%d %H:%M:%S")
+            # Check if snapshot already exists for this date
+            cur2 = await db.execute(
+                "SELECT id FROM snapshots WHERE user_id=? AND created_at=?",
+                (user["id"], date_str))
+            if not await cur2.fetchone():
+                await db.execute(
+                    "INSERT INTO snapshots (user_id, total_usd, token_count, created_at) VALUES (?, ?, ?, ?)",
+                    (user["id"], round(total, 2), len(tokens_cg), date_str))
+                new_snapshots += 1
+
+    await db.commit()
+    return {"ok": True, "snapshots_added": new_snapshots}
+
+
+# CoinGecko symbol → id mapping (common tokens)
+SYMBOL_TO_CG = {
+    "eth": "ethereum", "weth": "ethereum", "matic": "matic-network", "pol": "polygon-ecosystem-token",
+    "usdt": "tether", "usdc": "usd-coin", "dai": "dai", "wbtc": "wrapped-bitcoin", "btc": "bitcoin",
+    "link": "chainlink", "uni": "uniswap", "aave": "aave", "crv": "curve-dao-token",
+    "snx": "synthetix-network-token", "mkr": "maker", "comp": "compound-governance-token",
+    "grt": "the-graph", "sand": "the-sandbox", "mana": "decentraland", "enj": "enjincoin",
+    "bat": "basic-attention-token", "zrx": "0x", "1inch": "1inch", "ldo": "lido-dao",
+    "op": "optimism", "arb": "arbitrum", "ape": "apecoin", "shib": "shiba-inu",
+    "pepe": "pepe", "floki": "floki", "fet": "fetch-ai", "rndr": "render-token",
+    "imx": "immutable-x", "axs": "axie-infinity", "sand": "the-sandbox",
+    "gmx": "gmx", "dydx": "dydx", "stg": "stargate-finance", "woo": "woo-network",
+    "ens": "ethereum-name-service", "lrc": "loopring", "blur": "blur",
+    "strk": "starknet", "ena": "ethena", "eigen": "eigenlayer", "jup": "jupiter-exchange-solana",
+    "bonk": "bonk", "wif": "dogwifcoin", "pyth": "pyth-network",
+}
+
+
 # ── Currency rates ──────────────────────────────────────────────
 
 import time as _time
