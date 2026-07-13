@@ -36,6 +36,16 @@ async def lifespan(app: FastAPI):
                 FOREIGN KEY(user_id) REFERENCES users(id)
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                total_usd REAL NOT NULL,
+                token_count INTEGER DEFAULT 0,
+                created_at TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            )
+        """)
         await db.commit()
     yield
 
@@ -229,7 +239,32 @@ async def portfolio(address: str = Query(...), force: bool = Query(False), user=
 
     data = await _compute_portfolio(address)
     _portfolio_cache[address] = {"data": data, "ts": now}
+
+    # Save snapshot (max one per 10 min per user)
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            cur = await db.execute(
+                "SELECT created_at FROM snapshots WHERE user_id=? ORDER BY created_at DESC LIMIT 1",
+                (user["id"],))
+            last = await cur.fetchone()
+            if not last or (_time.time() - _time.mktime(_time.strptime(last["created_at"], "%Y-%m-%d %H:%M:%S"))) > 600:
+                await db.execute(
+                    "INSERT INTO snapshots (user_id, total_usd, token_count) VALUES (?, ?, ?)",
+                    (user["id"], data["total_usd"], data["token_count"]))
+                await db.commit()
+    except Exception:
+        pass
+
     return data
+
+
+@app.get("/api/snapshots")
+async def get_snapshots(user=Depends(get_current_user), db=Depends(get_db)):
+    cur = await db.execute(
+        "SELECT total_usd, token_count, created_at FROM snapshots WHERE user_id=? ORDER BY created_at ASC",
+        (user["id"],))
+    rows = await cur.fetchall()
+    return [{"total_usd": r["total_usd"], "token_count": r["token_count"], "date": r["created_at"]} for r in rows]
 
 
 # ── Currency rates ──────────────────────────────────────────────

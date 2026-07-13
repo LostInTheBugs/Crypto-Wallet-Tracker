@@ -61,7 +61,7 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
 <body>
 <div id="app">
   <div class="topbar">
-    <h1>🪙 Crypto Wallet Tracker <span>v1.3</span><span id="cacheBadge" style="display:none;font-size:.65rem;background:#2d5a3d;color:#40c463;padding:2px 8px;border-radius:10px;cursor:pointer;margin-left:6px" onclick="forceRefresh()">⚡ cache</span></h1>
+    <h1>🪙 Crypto Wallet Tracker <span>v1.4</span><span id="cacheBadge" style="display:none;font-size:.65rem;background:#2d5a3d;color:#40c463;padding:2px 8px;border-radius:10px;cursor:pointer;margin-left:6px" onclick="forceRefresh()">⚡ cache</span></h1>
     <div class="topbar-right">
       <select id="currency" onchange="switchCurrency()">
         <option value="usd">$ USD</option>
@@ -95,8 +95,9 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
     <div class="grid" id="walletStats"></div>
     <div class="row">
       <div class="card"><h2>📊 Répartition par chaîne</h2><div class="chart-wrap"><canvas id="pieChart"></canvas></div></div>
-      <div class="card"><h2>🏷️ Chaînes</h2><div class="chains" id="walletChains"></div><div id="walletError" style="margin-top:12px"></div></div>
+      <div class="card"><h2>📈 Évolution du portefeuille</h2><div class="chart-wrap"><canvas id="lineChart"></canvas></div></div>
     </div>
+    <div class="card"><h2>🏷️ Chaînes</h2><div class="chains" id="walletChains"></div><div id="walletError" style="margin-top:12px"></div></div>
     <div id="walletTable"></div>
   </div>
 </div>
@@ -108,7 +109,8 @@ var activeWallet = "ALL";
 var eurRate = null;
 var currency = "usd";
 var pieChart = null;
-var lastResult = null;  // cached portfolio for instant currency switch
+var lineChart = null;
+var lastResult = null;
 var loadingAddr = null;
 
 async function switchCurrency() {
@@ -117,7 +119,7 @@ async function switchCurrency() {
     try { var r = await fetch("/api/rates"); var d = await r.json(); eurRate = d.eur; }
     catch(e) { eurRate = 0.91; }
   }
-  if (lastResult) renderResult(lastResult);  // no re-fetch, just re-render
+  if (lastResult) { renderResult(lastResult); drawLineChart(); }  // no re-fetch, just re-render
 }
 
 async function forceRefresh() {
@@ -276,6 +278,9 @@ function renderResult(d) {
       options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:"right",labels:{color:"#b0b8c4",padding:12,font:{size:11}}}}}});
   }
 
+  // Line chart — async snapshots fetch
+  drawLineChart();
+
   var chainsHtml = "";
   for (var c in d.chains) {
     if (d.chains.hasOwnProperty(c) && d.chains[c]>0)
@@ -302,11 +307,51 @@ function renderResult(d) {
   table += '</tbody></table>';
   document.getElementById("walletTable").innerHTML = table;
 }
-
+// Init
 (async function(){
   var r = await fetch("/api/auth/me");
   if (r.ok) showDash();
 })();
+
+async function drawLineChart() {
+  try {
+    var r = await fetch("/api/snapshots");
+    var snaps = await r.json();
+    if (snaps.length < 2) return;
+    if (lineChart) lineChart.destroy();
+    var ctx = document.getElementById("lineChart").getContext("2d");
+    var sym = currSymbol();
+    lineChart = new Chart(ctx, {
+      type: "line",
+      data: {
+        labels: snaps.map(function(s){return s.date.slice(5,16).replace("T"," ");}),
+        datasets: [{
+          label: "Valeur totale ("+sym+")",
+          data: snaps.map(function(s){return Math.round(toCurr(s.total_usd)*100)/100;}),
+          borderColor: "#4dabf7",
+          backgroundColor: "rgba(77,171,247,0.1)",
+          fill: true,
+          tension: 0.3,
+          pointRadius: 1,
+          pointHoverRadius: 4,
+          borderWidth: 1.5,
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { intersect: false, mode: "index" },
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { ticks: { color: "#6e7681", font: { size: 9 }, maxTicksLimit: 8, maxRotation: 0 },
+               grid: { color: "#1e2530" } },
+          y: { ticks: { color: "#6e7681", font: { size: 9 }, callback: function(v){return sym+v.toLocaleString();} },
+               grid: { color: "#1e2530" } }
+        }
+      }
+    });
+  } catch(e) {}
+}
 </script>
 </body>
 </html>
