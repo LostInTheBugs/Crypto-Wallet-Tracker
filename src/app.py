@@ -142,6 +142,8 @@ async def add_wallet(request: Request, user=Depends(get_current_user), db=Depend
         raise HTTPException(400, "Adresse EVM invalide")
     await db.execute("INSERT INTO wallets (user_id, address, label) VALUES (?, ?, ?)", (user["id"], address, label))
     await db.commit()
+    # Auto-backfill in background
+    asyncio.create_task(_backfill_wallet(user["id"], address))
     return {"ok": True}
 
 
@@ -287,13 +289,17 @@ async def get_snapshot_tokens(user=Depends(get_current_user), db=Depends(get_db)
 
 @app.post("/api/snapshots/backfill")
 async def backfill_snapshots(user=Depends(get_current_user), db=Depends(get_db)):
-    """Generate historical snapshots using CoinGecko prices since wallet creation."""
+    """Manual trigger for backfill (also runs automatically on wallet add)."""
     cur = await db.execute("SELECT address FROM wallets WHERE user_id=?", (user["id"],))
     wallet_rows = await cur.fetchall()
     if not wallet_rows:
         raise HTTPException(400, "Aucun wallet")
+    result = await _backfill_wallet(user["id"], wallet_rows[0]["address"])
+    return result
 
-    address = wallet_rows[0]["address"]
+
+async def _backfill_wallet(user_id: int, address: str) -> dict:
+    """Generate historical snapshots using CoinGecko prices since wallet creation."""
     
     # Find wallet creation date via Blockscout (oldest tx + 1 day margin)
     created_at = _time.time() - 90 * 86400  # default 90 days
@@ -349,41 +355,42 @@ async def backfill_snapshots(user=Depends(get_current_user), db=Depends(get_db))
     start_ms = created_at * 1000
     end_ms = now * 1000
     
-    for ts in range(int(start_ms), int(end_ms), int(week_ms)):
-        total = 0.0
-        date_str = datetime.datetime.utcfromtimestamp(ts / 1000).strftime("%Y-%m-%d %H:%M:%S")
-        
-        for tok in tokens_cg:
-            prices = weekly_prices.get(tok["id"], [])
-            price = 0
-            for p in prices:
-                if p[0] <= ts:
-                    price = p[1]
-            tok_usd = tok["balance"] * price
-            total += tok_usd
+    async with aiosqlite.connect(DB_PATH) as db:
+        for ts in range(int(start_ms), int(end_ms), int(week_ms)):
+            total = 0.0
+            date_str = datetime.datetime.utcfromtimestamp(ts / 1000).strftime("%Y-%m-%d %H:%M:%S")
             
-            # Per-token snapshot
-            cur2 = await db.execute(
-                "SELECT id FROM snapshots WHERE user_id=? AND created_at=? AND token_symbol=?",
-                (user["id"], date_str, tok["symbol"]))
-            if not await cur2.fetchone() and tok_usd > 0.01:
-                await db.execute(
-                    "INSERT INTO snapshots (user_id, total_usd, token_count, token_symbol, chain) VALUES (?, ?, ?, ?, ?)",
-                    (user["id"], round(tok_usd, 2), 1, tok["symbol"], "ethereum"))
-                new_snapshots += 1
+            for tok in tokens_cg:
+                prices = weekly_prices.get(tok["id"], [])
+                price = 0
+                for p in prices:
+                    if p[0] <= ts:
+                        price = p[1]
+                tok_usd = tok["balance"] * price
+                total += tok_usd
+                
+                # Per-token snapshot
+                cur2 = await db.execute(
+                    "SELECT id FROM snapshots WHERE user_id=? AND created_at=? AND token_symbol=?",
+                    (user_id, date_str, tok["symbol"]))
+                if not await cur2.fetchone() and tok_usd > 0.01:
+                    await db.execute(
+                        "INSERT INTO snapshots (user_id, total_usd, token_count, token_symbol, chain) VALUES (?, ?, ?, ?, ?)",
+                        (user_id, round(tok_usd, 2), 1, tok["symbol"], "ethereum"))
+                    new_snapshots += 1
+            
+            # Total snapshot
+            if total > 0:
+                cur3 = await db.execute(
+                    "SELECT id FROM snapshots WHERE user_id=? AND created_at=? AND token_symbol IS NULL",
+                    (user_id, date_str))
+                if not await cur3.fetchone():
+                    await db.execute(
+                        "INSERT INTO snapshots (user_id, total_usd, token_count) VALUES (?, ?, ?)",
+                        (user_id, round(total, 2), len(tokens_cg)))
+                    new_snapshots += 1
         
-        # Total snapshot
-        if total > 0:
-            cur3 = await db.execute(
-                "SELECT id FROM snapshots WHERE user_id=? AND created_at=? AND token_symbol IS NULL",
-                (user["id"], date_str))
-            if not await cur3.fetchone():
-                await db.execute(
-                    "INSERT INTO snapshots (user_id, total_usd, token_count) VALUES (?, ?, ?)",
-                    (user["id"], round(total, 2), len(tokens_cg)))
-                new_snapshots += 1
-
-    await db.commit()
+        await db.commit()
     return {"ok": True, "snapshots_added": new_snapshots, "from_date": datetime.datetime.utcfromtimestamp(created_at).strftime("%Y-%m-%d")}
 
 
