@@ -334,10 +334,9 @@ async def _backfill_wallet(user_id: int, address: str) -> dict:
         return {"ok": False, "msg": "Aucun token mappé CoinGecko"}
 
     now = _time.time()
-    created_at = max(created_at, now - 365 * 86400)  # cap at 1 year for CoinGecko free tier
 
     weekly_prices = {}
-    async with httpx.AsyncClient(timeout=20) as cg_client:
+    async with httpx.AsyncClient(timeout=45) as cg_client:
         for tok in tokens_cg:
             try:
                 url = f"https://api.coingecko.com/api/v3/coins/{tok['id']}/market_chart/range"
