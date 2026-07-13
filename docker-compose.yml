@@ -1,0 +1,15 @@
+services:
+  app:
+    build: .
+    container_name: crypto-wallet-tracker
+    restart: unless-stopped
+    ports:
+      - "${PORT:-80}:80"
+    volumes:
+      - wallet-data:/data
+    environment:
+      - ALCHEMY_API_KEY=${ALCHEMY_API_KEY:-}
+      - SESSION_SECRET=${SESSION_SECRET:-}
+
+volumes:
+  wallet-data:

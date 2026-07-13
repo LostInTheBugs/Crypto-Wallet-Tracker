@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Crypto Wallet Tracker</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#0d1117;color:#c9d1d9;min-height:100vh}
+#app{max-width:1100px;margin:0 auto;padding:20px}
+.header{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid #21262d;margin-bottom:20px}
+.header h1{font-size:1.2rem;color:#f0f6fc}
+.header .user{color:#58a6ff;font-size:.85rem;margin-right:12px}
+.header button{background:#21262d;border:1px solid #30363d;color:#c9d1d9;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:.8rem}
+.header button:hover{background:#30363d}
+.card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:20px;margin-bottom:16px}
+.card h2{font-size:1rem;color:#f0f6fc;margin-bottom:12px}
+input{width:100%;padding:8px 12px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#f0f6fc;font-size:.85rem;margin-bottom:8px;outline:none}
+input:focus{border-color:#58a6ff}
+.btn{display:inline-block;padding:8px 18px;border-radius:6px;border:none;cursor:pointer;font-weight:600;font-size:.85rem}
+.btn-green{background:#238636;color:white}.btn-green:hover{background:#2ea043}
+.btn-blue{background:#1f6feb;color:white}.btn-blue:hover{background:#388bfd}
+.btn-red{background:#da3633;color:white}.btn-red:hover{background:#f85149}
+.stats{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+.stat{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:12px 16px;min-width:140px}
+.stat .label{font-size:.7rem;color:#8b949e;text-transform:uppercase}
+.stat .value{font-size:1.3rem;font-weight:700;color:#f0f6fc}
+.wallets-bar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;align-items:center}
+.wallet-tab{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:10px 14px;cursor:pointer;font-size:.85rem;display:flex;align-items:center;gap:8px}
+.wallet-tab:hover,.wallet-tab.active{border-color:#58a6ff;background:#1f6feb22}
+.wallet-tab.active{font-weight:700}
+.wallet-tab .del{color:#f85149;cursor:pointer;font-size:1rem;margin-left:4px}
+.wallet-tab.all{background:#23863622;border-color:#23863644;font-weight:700}
+.chains{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+.chain-tag{padding:3px 8px;background:#1f6feb22;border:1px solid #1f6feb44;border-radius:10px;font-size:.7rem;color:#58a6ff}
+table{width:100%;border-collapse:collapse}
+th{padding:8px 12px;text-align:left;font-size:.7rem;color:#8b949e;text-transform:uppercase;border-bottom:1px solid #21262d}
+td{padding:8px 12px;border-bottom:1px solid #21262d;font-size:.82rem}
+td.chain{color:#58a6ff;text-transform:capitalize}
+td.usd{color:#7ee787;font-weight:500}
+tr:hover td{background:#161b22}
+.loading{text-align:center;padding:30px;color:#8b949e}
+.error{color:#f85149;padding:6px 0;font-size:.8rem}
+img.ti{width:18px;height:18px;border-radius:50%;margin-right:6px;vertical-align:middle;background:#21262d}
+.hidden{display:none}
+.add-form{display:flex;gap:8px}
+.add-form input{flex:1;margin-bottom:0}
+.add-form input+input{max-width:160px}
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="header">
+    <h1>&#x1F4CA; Crypto Wallet Tracker</h1>
+    <div>
+      <span class="user" id="userInfo"></span>
+      <button id="btnLogout" class="hidden" onclick="logout()">Deconnexion</button>
+    </div>
+  </div>
+
+  <div id="viewLogin">
+    <div class="card" style="max-width:380px;margin:60px auto">
+      <h2 id="authTitle">Connexion</h2>
+      <input id="authUser" type="text" placeholder="Nom d'utilisateur">
+      <input id="authPass" type="password" placeholder="Mot de passe">
+      <button class="btn btn-green" onclick="doAuth()" style="width:100%;margin-bottom:8px" id="authBtn">Se connecter</button>
+      <div id="authError" class="error"></div>
+      <div style="text-align:center;font-size:.8rem;color:#8b949e">
+        <a href="#" onclick="toggleAuth()" style="color:#58a6ff">Creer un compte</a>
+      </div>
+    </div>
+  </div>
+
+  <div id="viewDash" class="hidden">
+    <div class="card add-form">
+      <input id="walletAddr" type="text" placeholder="Adresse EVM (0x...)">
+      <input id="walletLabel" type="text" placeholder="Label (optionnel)">
+      <button class="btn btn-blue" onclick="addWallet()">+ Ajouter</button>
+    </div>
+
+    <div class="wallets-bar" id="walletTabs"></div>
+    <div id="walletStats"></div>
+    <div id="walletChains"></div>
+    <div id="walletError"></div>
+    <div id="walletTable"></div>
+  </div>
+</div>
+
+<script>
+var authMode = "login";
+var wallets = [];
+var activeWallet = "ALL";
+
+function toggleAuth() {
+  authMode = authMode=="login"?"register":"login";
+  document.getElementById("authTitle").textContent = authMode=="login"?"Connexion":"Creer un compte";
+  document.getElementById("authBtn").textContent = authMode=="login"?"Se connecter":"Creer le compte";
+}
+
+async function doAuth() {
+  var u = document.getElementById("authUser").value.trim();
+  var p = document.getElementById("authPass").value;
+  var path = authMode=="login" ? "/api/auth/login" : "/api/auth/register";
+  try {
+    var r = await fetch(path, {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:u,password:p})});
+    var d = await r.json();
+    if (!r.ok) { document.getElementById("authError").textContent = d.detail||d.msg||"Erreur"; return; }
+    if (authMode=="register") { toggleAuth(); document.getElementById("authError").textContent="Compte cree ! Connecte-toi."; return; }
+    showDash();
+  } catch(e) { document.getElementById("authError").textContent = "Erreur reseau"; }
+}
+
+async function logout() {
+  await fetch("/api/auth/logout", {method:"POST"});
+  document.getElementById("viewLogin").classList.remove("hidden");
+  document.getElementById("viewDash").classList.add("hidden");
+  document.getElementById("userInfo").textContent = "";
+  document.getElementById("btnLogout").classList.add("hidden");
+  activeWallet = "ALL";
+}
+
+async function showDash() {
+  document.getElementById("viewLogin").classList.add("hidden");
+  document.getElementById("viewDash").classList.remove("hidden");
+  document.getElementById("btnLogout").classList.remove("hidden");
+  document.getElementById("authError").textContent = "";
+  var r = await fetch("/api/auth/me");
+  if (r.ok) {
+    var u = await r.json();
+    document.getElementById("userInfo").textContent = u.username;
+  }
+  await loadWallets();
+}
+
+async function loadWallets() {
+  var r = await fetch("/api/wallets");
+  wallets = await r.json();
+  renderWalletTabs();
+  loadView();
+}
+
+function renderWalletTabs() {
+  var html = '<div class="wallet-tab all'+(activeWallet=="ALL"?" active":"")+'" onclick="selectWallet(\"ALL\")">&#x1F3E0; Tous les wallets</div>';
+  for (var i=0;i<wallets.length;i++) {
+    var w = wallets[i];
+    html += '<div class="wallet-tab'+(w.address==activeWallet?" active":"")+'" onclick="selectWallet(\"'+w.address+'\")">'+
+      (w.label||w.address.slice(0,12)+"...")+
+      '<span class="del" onclick="event.stopPropagation();delWallet('+w.id+')">&times;</span></div>';
+  }
+  document.getElementById("walletTabs").innerHTML = html;
+}
+
+function selectWallet(addr) {
+  activeWallet = addr;
+  renderWalletTabs();
+  loadView();
+}
+
+async function delWallet(id) {
+  if (!confirm("Supprimer ce wallet ?")) return;
+  await fetch("/api/wallets/"+id, {method:"DELETE"});
+  if (wallets.find(function(w){return w.id==id&&w.address==activeWallet})) activeWallet="ALL";
+  loadWallets();
+}
+
+async function addWallet() {
+  var addr = document.getElementById("walletAddr").value.trim();
+  var label = document.getElementById("walletLabel").value.trim();
+  if (!addr.startsWith("0x")||addr.length!=42) return alert("Adresse invalide");
+  var r = await fetch("/api/wallets", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({address:addr,label:label})});
+  if (!r.ok) { var e=await r.json(); alert(e.detail); return; }
+  document.getElementById("walletAddr").value="";
+  document.getElementById("walletLabel").value="";
+  await loadWallets();
+}
+
+async function loadView() {
+  if (activeWallet == "ALL") {
+    await loadAllWallets();
+  } else {
+    await loadOneWallet(activeWallet);
+  }
+}
+
+async function loadOneWallet(addr) {
+  document.getElementById("walletTable").innerHTML = '<div class="loading">Scan de 9 blockchains...</div>';
+  try {
+    var r = await fetch("/api/portfolio?address="+addr);
+    var d = await r.json();
+    renderResult(d);
+  } catch(e) {
+    document.getElementById("walletTable").innerHTML = '<div class="error">Erreur: '+e.message+'</div>';
+  }
+}
+
+async function loadAllWallets() {
+  if (wallets.length == 0) {
+    document.getElementById("walletStats").innerHTML="";
+    document.getElementById("walletChains").innerHTML="";
+    document.getElementById("walletTable").innerHTML='<div class="loading">Ajoute une adresse pour commencer</div>';
+    return;
+  }
+  document.getElementById("walletTable").innerHTML = '<div class="loading">Scan de '+wallets.length+' wallet(s) sur 9 blockchains...</div>';
+
+  try {
+    // Fetch all wallets in parallel
+    var promises = wallets.map(function(w) {
+      return fetch("/api/portfolio?address="+w.address).then(function(r){return r.json();});
+    });
+    var results = await Promise.all(promises);
+
+    // Merge all portfolios
+    var merged = {};
+    var totalUsd = 0;
+    var allTokens = [];
+    var chainTotals = {};
+    var allErrors = [];
+    var chainCountSet = {};
+
+    for (var i = 0; i < results.length; i++) {
+      var d = results[i];
+      var w = wallets[i];
+      totalUsd += d.total_usd || 0;
+
+      for (var j = 0; j < d.tokens.length; j++) {
+        var t = d.tokens[j];
+        t._wallet = w.label || w.address.slice(0,10)+"...";
+        allTokens.push(t);
+      }
+
+      for (var c in d.chains) {
+        if (d.chains.hasOwnProperty(c)) {
+          chainTotals[c] = (chainTotals[c] || 0) + d.chains[c];
+          chainCountSet[c] = true;
+        }
+      }
+
+      if (d.errors) {
+        for (var k = 0; k < d.errors.length; k++) {
+          allErrors.push({wallet: w.label||w.address.slice(0,10)+"...", chain: d.errors[k].chain, error: d.errors[k].error});
+        }
+      }
+    }
+
+    // Sort all tokens by USD value
+    allTokens.sort(function(a,b){return b.usd_value - a.usd_value;});
+
+    var mergedResult = {
+      total_usd: Math.round(totalUsd*100)/100,
+      token_count: allTokens.length,
+      chain_count: Object.keys(chainCountSet).length,
+      chains: chainTotals,
+      tokens: allTokens.slice(0,200),
+      errors: allErrors.slice(0,10)
+    };
+    renderResult(mergedResult);
+  } catch(e) {
+    document.getElementById("walletTable").innerHTML = '<div class="error">Erreur: '+e.message+'</div>';
+  }
+}
+
+function renderResult(d) {
+  document.getElementById("walletStats").innerHTML =
+    '<div class="stat"><div class="label">Valeur totale</div><div class="value">$'+d.total_usd.toLocaleString()+'</div></div>'+
+    '<div class="stat"><div class="label">Tokens</div><div class="value">'+d.token_count+'</div></div>'+
+    '<div class="stat"><div class="label">Chainiers</div><div class="value">'+d.chain_count+'</div></div>';
+
+  var chainsHtml = "";
+  for (var c in d.chains) {
+    if (d.chains.hasOwnProperty(c))
+      chainsHtml += '<span class="chain-tag">'+c+': $'+d.chains[c].toLocaleString()+'</span>';
+  }
+  document.getElementById("walletChains").innerHTML = chainsHtml;
+
+  var errHtml = "";
+  if (d.errors && d.errors.length) {
+    errHtml = d.errors.map(function(e){
+      return '<div class="error">&#9888; '+(e.wallet?e.wallet+": ":"")+e.chain+': '+e.error+'</div>';
+    }).join("");
+  }
+  document.getElementById("walletError").innerHTML = errHtml;
+
+  var showWallet = activeWallet=="ALL" && wallets.length > 1;
+  var table = '<table><thead><tr><th>Token</th>'+ (showWallet?'<th>Wallet</th>':'') +'<th>Chaîne</th><th>Balance</th><th>Prix</th><th>USD</th></tr></thead><tbody>';
+  for (var i=0;i<d.tokens.length;i++) {
+    var t = d.tokens[i];
+    var icon = t.icon?'<img class="ti" src="'+t.icon+'" onerror="this.style.display=\'none\'">':'';
+    var pf = t.usd_price<0.01?t.usd_price.toFixed(6):t.usd_price.toFixed(4);
+    table += '<tr><td>'+icon+'<b>'+t.name+'</b> <span style="color:#8b949e;font-size:.75rem">'+t.symbol+'</span></td>'+
+      (showWallet?'<td style="font-size:.75rem;color:#8b949e">'+t._wallet+'</td>':'')+
+      '<td class="chain">'+t.chain+'</td><td>'+t.balance.toLocaleString()+'</td><td>$'+pf+'</td><td class="usd">$'+t.usd_value.toLocaleString()+'</td></tr>';
+  }
+  table += '</tbody></table>';
+  document.getElementById("walletTable").innerHTML = table;
+}
+
+// Init
+(async function(){
+  var r = await fetch("/api/auth/me");
+  if (r.ok) showDash();
+})();
+</script>
+</body>
+</html>
