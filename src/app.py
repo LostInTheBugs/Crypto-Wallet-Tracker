@@ -516,6 +516,7 @@ async def _enrich_transactions_for_user(user_id: int):
                             usd_val = tx["amount"] * price if tx else 0
                             await db.execute("UPDATE transactions SET usd_price=?, usd_value=? WHERE id=?", (price, round(usd_val, 2), r["id"]))
                             count += 1
+                            await asyncio.sleep(0.6)  # CoinGecko free tier rate limit
                 except Exception:
                     continue
         await db.commit()
@@ -559,6 +560,7 @@ async def enrich_transactions(user=Depends(get_current_user), db=Depends(get_db)
                         usd_val = tx["amount"] * price if tx else 0
                         await db.execute("UPDATE transactions SET usd_price=?, usd_value=? WHERE id=?", (price, round(usd_val, 2), r["id"]))
                         count += 1
+                        await asyncio.sleep(0.6)  # CoinGecko free tier rate limit
             except Exception:
                 continue
     await db.commit()
@@ -669,11 +671,16 @@ SYMBOL_TO_CG = {
     "bat": "basic-attention-token", "zrx": "0x", "1inch": "1inch", "ldo": "lido-dao",
     "op": "optimism", "arb": "arbitrum", "ape": "apecoin", "shib": "shiba-inu",
     "pepe": "pepe", "floki": "floki", "fet": "fetch-ai", "rndr": "render-token",
-    "imx": "immutable-x", "axs": "axie-infinity", "sand": "the-sandbox",
+    "imx": "immutable-x", "axs": "axie-infinity",
     "gmx": "gmx", "dydx": "dydx", "stg": "stargate-finance", "woo": "woo-network",
     "ens": "ethereum-name-service", "lrc": "loopring", "blur": "blur",
     "strk": "starknet", "ena": "ethena", "eigen": "eigenlayer", "jup": "jupiter-exchange-solana",
     "bonk": "bonk", "wif": "dogwifcoin", "pyth": "pyth-network",
+    "celo": "celo", "cusd": "celo-dollar", "creal": "celo-real",
+    "zro": "layerzero", "joe": "joe", "magic": "treasure",
+    "edu": "open-campus", "ube": "ubeswap", "gmx_dao": "gmx",
+    "usdc.e": "usd-coin", "usdt0": "tether", "orbeth": "ethereum",
+    "doge": "dogecoin", "wld": "worldcoin-wld",
 }
 
 
