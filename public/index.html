@@ -87,7 +87,7 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
 <body>
 
 <div class="sidebar hidden" id="sidebar">
-  <h2>🪙 Tracker <span style="font-size:.65rem;color:var(--accent)">v1.14.3</span></h2>
+  <h2>🪙 Tracker <span style="font-size:.65rem;color:var(--accent)">v1.14.4</span></h2>
   <a href="#" class="active" onclick="switchPage('dashboard')" data-page="dashboard">📊 <span>Dashboard</span></a>
   <a href="#" onclick="switchPage('stats')" data-page="stats">📈 <span>Statistiques</span></a>
   <a href="#" onclick="switchPage('tokens')" data-page="tokens">📋 <span>Détail tokens</span></a>
@@ -136,10 +136,10 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
       <div class="card"><h2>📈 Évolution du portefeuille
         <span style="display:inline-flex;gap:6px;margin-left:12px;align-items:center">
           <select id="chartWallet" onchange="drawLineChart()" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:2px 6px;border-radius:4px;font-size:.65rem"><option value="">Tous wallets</option></select>
-          <select id="chartChain" onchange="onChainFilter()" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:2px 6px;border-radius:4px;font-size:.65rem"><option value="">Toutes chaînes</option></select>
-          <button onclick="toggleFavChain()" title="⭐ Favori" style="background:none;border:none;color:#8b949e;cursor:pointer;font-size:.8rem;padding:0 2px">☆</button>
-          <select id="chartToken" onchange="drawLineChart()" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:2px 6px;border-radius:4px;font-size:.65rem"><option value="">Tous tokens</option></select>
-          <button onclick="toggleFavToken()" title="⭐ Favori" style="background:none;border:none;color:#8b949e;cursor:pointer;font-size:.8rem;padding:0 2px">☆</button>
+          <select id="chartChain" onchange="onChainFilter();updateFavBtns()" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:2px 6px;border-radius:4px;font-size:.65rem"><option value="">Toutes chaînes</option></select>
+          <button onclick="toggleFavChain()" title="Ajouter/retirer ce favori" id="favChainBtn" style="background:none;border:none;color:#8b949e;cursor:pointer;font-size:.8rem;padding:0 2px">☆</button>
+          <select id="chartToken" onchange="drawLineChart();updateFavBtns()" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:2px 6px;border-radius:4px;font-size:.65rem"><option value="">Tous tokens</option></select>
+          <button onclick="toggleFavToken()" title="Ajouter/retirer ce favori" id="favTokenBtn" style="background:none;border:none;color:#8b949e;cursor:pointer;font-size:.8rem;padding:0 2px">☆</button>
           <span class="range-pill active" onclick="setRange('all',this)">All</span>
           <span class="range-pill" onclick="setRange('365',this)">1 an</span>
           <span class="range-pill" onclick="setRange('180',this)">6 mois</span>
@@ -370,7 +370,7 @@ function toggleFavChain(){
   var idx=favs.indexOf(c);
   if(idx==-1)favs.push(c);else favs.splice(idx,1);
   localStorage.setItem("favChains",JSON.stringify(favs));
-  populateFilters();drawLineChart();
+  populateFilters();drawLineChart();updateFavBtns();
 }
 
 function toggleFavToken(){
@@ -380,12 +380,24 @@ function toggleFavToken(){
   var idx=favs.indexOf(t);
   if(idx==-1)favs.push(t);else favs.splice(idx,1);
   localStorage.setItem("favTokens",JSON.stringify(favs));
-  populateFilters();drawLineChart();
+  populateFilters();drawLineChart();updateFavBtns();
+}
+
+function updateFavBtns(){
+  var favChains=JSON.parse(localStorage.getItem("favChains")||"[]");
+  var favTokens=JSON.parse(localStorage.getItem("favTokens")||"[]");
+  var c=document.getElementById("chartChain").value;
+  var t=document.getElementById("chartToken").value;
+  document.getElementById("favChainBtn").textContent=favChains.indexOf(c)!=-1?"★":"☆";
+  document.getElementById("favChainBtn").style.color=favChains.indexOf(c)!=-1?"#f0c040":"#8b949e";
+  document.getElementById("favTokenBtn").textContent=favTokens.indexOf(t)!=-1?"★":"☆";
+  document.getElementById("favTokenBtn").style.color=favTokens.indexOf(t)!=-1?"#f0c040":"#8b949e";
 }
 
 function onChainFilter(){
   populateFilters();
   drawLineChart();
+  updateFavBtns();
 }
 
 (async function(){var r=await fetch("/api/auth/me");if(r.ok)showDash()})();
