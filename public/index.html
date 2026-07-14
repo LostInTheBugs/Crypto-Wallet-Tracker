@@ -542,7 +542,7 @@ function onChainFilter(){
 function renderSettingsPage(){
   document.getElementById("setLang").value = LANG;
   document.getElementById("setCurrency").value = currency;
-  document.getElementById("verCurrent").textContent = "v2.3.0";
+  // Don't overwrite verCurrent — it's set in HTML
   checkVersion();
 }
 
@@ -550,11 +550,10 @@ async function checkVersion(){
   var el = document.getElementById("verStatus");
   el.textContent = "...";
   try {
-    var r = await fetch("https://api.github.com/repos/LostInTheBugs/Crypto-Wallet-Tracker/tags?per_page=1");
+    var r = await fetch("/api/version/latest");
     if (!r.ok) throw new Error("HTTP "+r.status);
     var data = await r.json();
-    var latest = (data[0] && data[0].name) || "";
-    latest = latest.replace(/^v/,"");
+    var latest = data.tag || "";
     var current = document.getElementById("verCurrent").textContent.replace(/^v/,"");
     if (latest === current) {
       el.innerHTML = '<span style="color:#40c463">'+t("verUpToDate")+' (v'+latest+')</span>';

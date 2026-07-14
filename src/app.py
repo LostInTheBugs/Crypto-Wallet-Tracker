@@ -739,6 +739,24 @@ async def get_rates():
     return {"eur": 0.91}  # fallback ~rate
 
 
+@app.get("/api/version/latest")
+async def latest_version():
+    """Proxy GitHub tags API to avoid browser CORS/rate-limit issues."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.get(
+                "https://api.github.com/repos/LostInTheBugs/Crypto-Wallet-Tracker/tags?per_page=1",
+                headers={"Accept": "application/vnd.github+json"}
+            )
+            if r.status_code == 200:
+                data = r.json()
+                tag = (data[0]["name"] if data else "").lstrip("v")
+                return {"tag": tag}
+    except Exception:
+        pass
+    return {"tag": ""}
+
+
 # ── Frontend ─────────────────────────────────────────────────────
 
 @app.get("/")
