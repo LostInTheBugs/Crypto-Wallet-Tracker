@@ -53,7 +53,6 @@ tr:hover td{background:#161c24}
 .loading{text-align:center;padding:30px;color:#6e7681}
 .error{color:var(--red);padding:6px 0;font-size:.8rem}
 img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:middle;background:var(--border)}
-.hidden{display:none}
 .add-form{display:flex;gap:8px;margin-bottom:16px}
 .add-form input{flex:1}
 .add-form input+input{max-width:150px}
@@ -90,12 +89,13 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
 .modal-box .progress-text{color:var(--text);font-size:.85rem}
 .spinner{display:inline-block;width:24px;height:24px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite;margin-bottom:12px}
 @keyframes spin{to{transform:rotate(360deg)}}
+.hidden{display:none !important}
 </style>
 </head>
 <body>
 
 <div class="sidebar hidden" id="sidebar">
-  <h2>🪙 Tracker <span style="font-size:.65rem;color:var(--accent)">v2.1.6</span></h2>
+  <h2>🪙 Tracker <span style="font-size:.65rem;color:var(--accent)">v2.1.7</span></h2>
   <a href="#" class="active" onclick="switchPage('dashboard')" data-page="dashboard">📊 <span>Dashboard</span></a>
   <a href="#" onclick="switchPage('stats')" data-page="stats">📈 <span>Statistiques</span></a>
   <a href="#" onclick="switchPage('tokens')" data-page="tokens">📋 <span>Détail tokens</span></a>
