@@ -87,7 +87,7 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
 <body>
 
 <div class="sidebar hidden" id="sidebar">
-  <h2>🪙 Tracker <span style="font-size:.65rem;color:var(--accent)">v1.14.2</span></h2>
+  <h2>🪙 Tracker <span style="font-size:.65rem;color:var(--accent)">v1.14.3</span></h2>
   <a href="#" class="active" onclick="switchPage('dashboard')" data-page="dashboard">📊 <span>Dashboard</span></a>
   <a href="#" onclick="switchPage('stats')" data-page="stats">📈 <span>Statistiques</span></a>
   <a href="#" onclick="switchPage('tokens')" data-page="tokens">📋 <span>Détail tokens</span></a>
@@ -137,7 +137,9 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
         <span style="display:inline-flex;gap:6px;margin-left:12px;align-items:center">
           <select id="chartWallet" onchange="drawLineChart()" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:2px 6px;border-radius:4px;font-size:.65rem"><option value="">Tous wallets</option></select>
           <select id="chartChain" onchange="onChainFilter()" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:2px 6px;border-radius:4px;font-size:.65rem"><option value="">Toutes chaînes</option></select>
+          <button onclick="toggleFavChain()" title="⭐ Favori" style="background:none;border:none;color:#8b949e;cursor:pointer;font-size:.8rem;padding:0 2px">☆</button>
           <select id="chartToken" onchange="drawLineChart()" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:2px 6px;border-radius:4px;font-size:.65rem"><option value="">Tous tokens</option></select>
+          <button onclick="toggleFavToken()" title="⭐ Favori" style="background:none;border:none;color:#8b949e;cursor:pointer;font-size:.8rem;padding:0 2px">☆</button>
           <span class="range-pill active" onclick="setRange('all',this)">All</span>
           <span class="range-pill" onclick="setRange('365',this)">1 an</span>
           <span class="range-pill" onclick="setRange('180',this)">6 mois</span>
@@ -331,16 +333,54 @@ async function drawMiniChart(){
 
 async function populateFilters(){
   var sel=document.getElementById("chartWallet");sel.innerHTML='<option value="">Tous wallets</option>';for(var i=0;i<wallets.length;i++)sel.innerHTML+='<option value="'+wallets[i].address+'">'+(wallets[i].label||wallets[i].address.slice(0,10)+"...")+'</option>';
-  // Chain dropdown from portfolio
+
+  // Load favorites
+  var favChains=JSON.parse(localStorage.getItem("favChains")||"[]");
+  var favTokens=JSON.parse(localStorage.getItem("favTokens")||"[]");
+
+  // Chain dropdown — sorted, favorites first
   var csel=document.getElementById("chartChain");csel.innerHTML='<option value="">Toutes chaînes</option>';
-  var seenChains={};
-  if(lastResult&&lastResult.tokens){for(var j=0;j<lastResult.tokens.length;j++){var c=lastResult.tokens[j].chain;if(!seenChains[c]){seenChains[c]=true;csel.innerHTML+='<option value="'+c+'">'+c.charAt(0).toUpperCase()+c.slice(1)+'</option>'}}}
-  // Token dropdown from current portfolio
+  var chains=[];
+  if(lastResult&&lastResult.tokens){for(var j=0;j<lastResult.tokens.length;j++){var c=lastResult.tokens[j].chain;if(chains.indexOf(c)==-1)chains.push(c)}}
+  chains.sort();
+  // Favorites first
+  var favC=chains.filter(function(c){return favChains.indexOf(c)!=-1});
+  var nonFavC=chains.filter(function(c){return favChains.indexOf(c)==-1});
+  if(favC.length){csel.innerHTML+='<optgroup label="⭐ Favoris">';for(var fi=0;fi<favC.length;fi++)csel.innerHTML+='<option value="'+favC[fi]+'">⭐ '+favC[fi].charAt(0).toUpperCase()+favC[fi].slice(1)+'</option>';csel.innerHTML+='</optgroup>'}
+  if(nonFavC.length){csel.innerHTML+='<optgroup label="Toutes">';for(var ni=0;ni<nonFavC.length;ni++)csel.innerHTML+='<option value="'+nonFavC[ni]+'">'+nonFavC[ni].charAt(0).toUpperCase()+nonFavC[ni].slice(1)+'</option>';csel.innerHTML+='</optgroup>'}
+
+  // Token dropdown — sorted, filtered by chain, favorites first
   var tsel=document.getElementById("chartToken");tsel.innerHTML='<option value="">Tous tokens</option>';
   var seen={},chain=document.getElementById("chartChain").value;
-  if(lastResult&&lastResult.tokens){for(var j=0;j<lastResult.tokens.length;j++){var t=lastResult.tokens[j];if(chain&&t.chain!=chain)continue;var s=t.symbol;if(!seen[s]){seen[s]=true;tsel.innerHTML+='<option value="'+s+'">'+s+'</option>'}}}
+  var tokens=[];
+  if(lastResult&&lastResult.tokens){for(var j=0;j<lastResult.tokens.length;j++){var t=lastResult.tokens[j];if(chain&&t.chain!=chain)continue;if(!seen[t.symbol]){seen[t.symbol]=true;tokens.push(t.symbol)}}}
+  tokens.sort();
+  var favT=tokens.filter(function(s){return favTokens.indexOf(s)!=-1});
+  var nonFavT=tokens.filter(function(s){return favTokens.indexOf(s)==-1});
+  if(favT.length){tsel.innerHTML+='<optgroup label="⭐ Favoris">';for(var fi=0;fi<favT.length;fi++)tsel.innerHTML+='<option value="'+favT[fi]+'">⭐ '+favT[fi]+'</option>';tsel.innerHTML+='</optgroup>'}
+  if(nonFavT.length){tsel.innerHTML+='<optgroup label="Tous">';for(var ni=0;ni<nonFavT.length;ni++)tsel.innerHTML+='<option value="'+nonFavT[ni]+'">'+nonFavT[ni]+'</option>';tsel.innerHTML+='</optgroup>'}
   // From snapshots
-  try{var r=await fetch("/api/snapshots/tokens");var tokens=await r.json();for(var k=0;k<tokens.length;k++){if(!seen[tokens[k]]){seen[tokens[k]]=true;tsel.innerHTML+='<option value="'+tokens[k]+'">'+tokens[k]+'</option>'}}}catch(e){}
+  try{var r=await fetch("/api/snapshots/tokens");var st=await r.json();for(var k=0;k<st.length;k++){if(!seen[st[k]]&&favTokens.indexOf(st[k])==-1){tsel.innerHTML+='<option value="'+st[k]+'">'+st[k]+'</option>'}}}catch(e){}
+}
+
+function toggleFavChain(){
+  var c=document.getElementById("chartChain").value;
+  if(!c)return;
+  var favs=JSON.parse(localStorage.getItem("favChains")||"[]");
+  var idx=favs.indexOf(c);
+  if(idx==-1)favs.push(c);else favs.splice(idx,1);
+  localStorage.setItem("favChains",JSON.stringify(favs));
+  populateFilters();drawLineChart();
+}
+
+function toggleFavToken(){
+  var t=document.getElementById("chartToken").value;
+  if(!t)return;
+  var favs=JSON.parse(localStorage.getItem("favTokens")||"[]");
+  var idx=favs.indexOf(t);
+  if(idx==-1)favs.push(t);else favs.splice(idx,1);
+  localStorage.setItem("favTokens",JSON.stringify(favs));
+  populateFilters();drawLineChart();
 }
 
 function onChainFilter(){
