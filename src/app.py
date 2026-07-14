@@ -189,9 +189,9 @@ async def del_wallet(wallet_id: int, user=Depends(get_current_user), db=Depends(
     if not row:
         raise HTTPException(404, "Wallet introuvable")
     address = row["address"]
-    # Delete associated data
+    # Delete associated data + clear cache
     await db.execute("DELETE FROM transactions WHERE wallet_address=? AND user_id=?", (address, user["id"]))
-    await db.execute("DELETE FROM snapshots WHERE user_id=?", (user["id"],))
+    _portfolio_cache.pop(address, None)
     await db.execute("DELETE FROM wallets WHERE id=? AND user_id=?", (wallet_id, user["id"]))
     await db.commit()
     return {"ok": True}
