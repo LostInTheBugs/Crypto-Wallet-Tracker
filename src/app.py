@@ -616,19 +616,26 @@ async def _backfill_wallet(user_id: int, address: str) -> dict:
             try: bal = int(t["balance_raw"]) / (10 ** t["decimals"])
             except: bal = 0
             usd = bal * t["usd_price"]
-            if usd < 1: continue
+            if usd < 0.01: continue
             cg_id = SYMBOL_TO_CG.get(t["symbol"].lower())
-            if cg_id:
-                tokens_cg.append({"id": cg_id, "balance": bal, "symbol": t["symbol"]})
+            tokens_cg.append({
+                "id": cg_id or t["symbol"].lower(),
+                "balance": bal,
+                "symbol": t["symbol"],
+                "current_price": t["usd_price"],
+                "has_cg": bool(cg_id),
+            })
 
     if not tokens_cg:
-        return {"ok": False, "msg": "Aucun token mappé CoinGecko"}
+        return {"ok": False, "msg": "Aucun token dans le portfolio"}
 
     now = _time.time()
 
     weekly_prices = {}
     async with httpx.AsyncClient(timeout=45) as cg_client:
         for tok in tokens_cg:
+            if not tok["has_cg"]:
+                continue  # use current_price as constant, skip CoinGecko
             try:
                 url = f"https://api.coingecko.com/api/v3/coins/{tok['id']}/market_chart/range"
                 params = {"vs_currency": "usd", "from": int(created_at), "to": int(now)}
@@ -652,7 +659,7 @@ async def _backfill_wallet(user_id: int, address: str) -> dict:
             
             for tok in tokens_cg:
                 prices = weekly_prices.get(tok["id"], [])
-                price = 0
+                price = tok["current_price"]  # default to current price
                 for p in prices:
                     if p[0] <= ts:
                         price = p[1]
