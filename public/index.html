@@ -451,8 +451,8 @@ function renderTokenTable(d){
 }
 
 async function drawLineChart(){
-  try{var token=document.getElementById("chartToken").value;var r=await fetch("/api/snapshots"+(token?"?token="+token:""));var snaps=await r.json();if(snaps.length<2){if(lineChart)lineChart.destroy();return}
-    if(chartRange!="all"){var cutoff=Date.now()-parseInt(chartRange)*86400*1000;snaps=snaps.filter(function(s){return new Date(s.date+"Z").getTime()>cutoff});if(snaps.length<2){if(lineChart)lineChart.destroy();return}}
+  try{var token=document.getElementById("chartToken").value;var r=await fetch("/api/snapshots"+(token?"?token="+token:""));var snaps=await r.json();if(snaps.length<1){if(lineChart)lineChart.destroy();return}
+    if(chartRange!="all"){var cutoff=Date.now()-parseInt(chartRange)*86400*1000;snaps=snaps.filter(function(s){return new Date(s.date+"Z").getTime()>cutoff});if(snaps.length<1){if(lineChart)lineChart.destroy();return}}
     if(lineChart)lineChart.destroy();var ctx=document.getElementById("lineChart").getContext("2d");var sym=currSymbol();
     var datasets=[{label:t("valueLine")+" ("+sym+")",data:snaps.map(function(s){return Math.round(toCurr(s.total_usd)*100)/100}),borderColor:"#4dabf7",backgroundColor:"rgba(77,171,247,0.1)",fill:true,tension:0.3,pointRadius:1,pointHoverRadius:4,borderWidth:1.5}];
     var hasCost=snaps.some(function(s){return s.cost_basis>0});
@@ -463,11 +463,11 @@ async function drawLineChart(){
 async function drawMiniChart(){
   try{
     var r=await fetch("/api/snapshots");var snaps=await r.json();
-    if(snaps.length<2){if(miniChart)miniChart.destroy();return}
+    if(snaps.length<1){if(miniChart)miniChart.destroy();return}
     var days={"day":1,"week":7,"month":30};
     var cutoff=Date.now()-days[quickRange]*86400*1000;
     snaps=snaps.filter(function(s){return new Date(s.date+"Z").getTime()>cutoff});
-    if(snaps.length<2){if(miniChart)miniChart.destroy();return}
+    if(snaps.length<1){if(miniChart)miniChart.destroy();return}
     if(miniChart)miniChart.destroy();
     var ctx=document.getElementById("miniChart").getContext("2d");var sym=currSymbol();
     miniChart=new Chart(ctx,{type:"line",data:{labels:snaps.map(function(s){return s.date.slice(5,16).replace("T"," ")}),datasets:[{data:snaps.map(function(s){return Math.round(toCurr(s.total_usd)*100)/100}),borderColor:"#4dabf7",backgroundColor:"rgba(77,171,247,0.1)",fill:true,tension:0.3,pointRadius:0,borderWidth:1.5}]},options:{responsive:true,maintainAspectRatio:false,interaction:{intersect:false,mode:"index"},plugins:{legend:{display:false}},scales:{x:{ticks:{color:"#6e7681",font:{size:9},maxTicksLimit:5},grid:{color:"#1e2530"}},y:{ticks:{color:"#6e7681",font:{size:9},callback:function(v){return sym+v.toLocaleString()}},grid:{color:"#1e2530"}}}}});
