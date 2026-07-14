@@ -87,7 +87,7 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
 <body>
 
 <div class="sidebar hidden" id="sidebar">
-  <h2>🪙 Tracker <span style="font-size:.65rem;color:var(--accent)">v1.14.0</span></h2>
+  <h2>🪙 Tracker <span style="font-size:.65rem;color:var(--accent)">v1.14.1</span></h2>
   <a href="#" class="active" onclick="switchPage('dashboard')" data-page="dashboard">📊 <span>Dashboard</span></a>
   <a href="#" onclick="switchPage('stats')" data-page="stats">📈 <span>Statistiques</span></a>
   <a href="#" onclick="switchPage('tokens')" data-page="tokens">📋 <span>Détail tokens</span></a>
@@ -330,7 +330,13 @@ async function drawMiniChart(){
 
 async function populateFilters(){
   var sel=document.getElementById("chartWallet");sel.innerHTML='<option value="">Tous</option>';for(var i=0;i<wallets.length;i++)sel.innerHTML+='<option value="'+wallets[i].address+'">'+(wallets[i].label||wallets[i].address.slice(0,10)+"...")+'</option>';
-  try{var r=await fetch("/api/snapshots/tokens");var tokens=await r.json();var tsel=document.getElementById("chartToken");tsel.innerHTML='<option value="">Tous</option>';for(var j=0;j<tokens.length;j++)tsel.innerHTML+='<option value="'+tokens[j]+'">'+tokens[j]+'</option>'}catch(e){}
+  // Populate token dropdown from current portfolio + snapshots
+  var tsel=document.getElementById("chartToken");tsel.innerHTML='<option value="">Tous</option>';
+  var seen={};
+  // From current portfolio (all tokens)
+  if(lastResult&&lastResult.tokens){for(var j=0;j<lastResult.tokens.length;j++){var s=lastResult.tokens[j].symbol;if(!seen[s]){seen[s]=true;tsel.innerHTML+='<option value="'+s+'">'+s+'</option>'}}}
+  // From snapshots (backfilled tokens)
+  try{var r=await fetch("/api/snapshots/tokens");var tokens=await r.json();for(var k=0;k<tokens.length;k++){if(!seen[tokens[k]]){seen[tokens[k]]=true;tsel.innerHTML+='<option value="'+tokens[k]+'">'+tokens[k]+'</option>'}}}catch(e){}
 }
 
 (async function(){var r=await fetch("/api/auth/me");if(r.ok)showDash()})();
