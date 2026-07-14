@@ -42,6 +42,7 @@ async def lifespan(app: FastAPI):
                 user_id INTEGER NOT NULL,
                 total_usd REAL NOT NULL,
                 token_count INTEGER DEFAULT 0,
+                token_quantity REAL DEFAULT 0,
                 token_symbol TEXT DEFAULT NULL,
                 chain TEXT DEFAULT NULL,
                 wallet_label TEXT DEFAULT NULL,
@@ -49,6 +50,25 @@ async def lifespan(app: FastAPI):
                 FOREIGN KEY(user_id) REFERENCES users(id)
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS transactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                wallet_address TEXT NOT NULL,
+                token_symbol TEXT NOT NULL,
+                token_name TEXT DEFAULT '',
+                amount REAL NOT NULL,
+                usd_value REAL DEFAULT 0,
+                usd_price REAL DEFAULT 0,
+                chain TEXT DEFAULT 'ethereum',
+                tx_hash TEXT DEFAULT '',
+                block_time TEXT NOT NULL,
+                created_at TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            )
+        """)
+        try: await db.execute("ALTER TABLE snapshots ADD COLUMN token_quantity REAL DEFAULT 0")
+        except: pass
         # Migrate old snapshots table — add columns if missing
         try:
             await db.execute("ALTER TABLE snapshots ADD COLUMN token_symbol TEXT DEFAULT NULL")
@@ -289,14 +309,14 @@ async def portfolio(address: str = Query(...), force: bool = Query(False), user=
 async def get_snapshots(token: str = Query(None), user=Depends(get_current_user), db=Depends(get_db)):
     if token:
         cur = await db.execute(
-            "SELECT total_usd, token_count, created_at FROM snapshots WHERE user_id=? AND token_symbol=? ORDER BY created_at ASC",
+            "SELECT total_usd, token_quantity, token_count, created_at FROM snapshots WHERE user_id=? AND token_symbol=? ORDER BY created_at ASC",
             (user["id"], token.upper()))
     else:
         cur = await db.execute(
-            "SELECT total_usd, token_count, created_at FROM snapshots WHERE user_id=? AND token_symbol IS NULL ORDER BY created_at ASC",
+            "SELECT total_usd, token_quantity, token_count, created_at FROM snapshots WHERE user_id=? AND token_symbol IS NULL ORDER BY created_at ASC",
             (user["id"],))
     rows = await cur.fetchall()
-    return [{"total_usd": r["total_usd"], "token_count": r["token_count"], "date": r["created_at"]} for r in rows]
+    return [{"total_usd": r["total_usd"], "quantity": r["token_quantity"] or 0, "token_count": r["token_count"], "date": r["created_at"]} for r in rows]
 
 
 @app.get("/api/snapshots/tokens")
