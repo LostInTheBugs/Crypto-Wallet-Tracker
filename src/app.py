@@ -284,12 +284,15 @@ async def _compute_portfolio(address: str) -> dict:
 
 async def _auto_fetch_and_enrich(user_id: int, address: str):
     """Fetch transactions then enrich with historical prices."""
-    _import_progress[user_id] = {"stage": "fetch", "done": 0, "total": len(CHAINS)}
-    count = await _fetch_transactions_for_wallet(user_id, address)
-    _import_progress[user_id] = {"stage": "enrich", "done": 0, "total": count}
-    if count > 0:
-        await _enrich_transactions_for_user(user_id)
-    _import_progress[user_id] = {"stage": "done", "done": count, "total": count}
+    try:
+        _import_progress[user_id] = {"stage": "fetch", "done": 0, "total": len(CHAINS)}
+        count = await _fetch_transactions_for_wallet(user_id, address)
+        _import_progress[user_id] = {"stage": "enrich", "done": 0, "total": count}
+        if count > 0:
+            await _enrich_transactions_for_user(user_id)
+        _import_progress[user_id] = {"stage": "done", "done": count, "total": count}
+    except Exception:
+        _import_progress[user_id] = {"stage": "done", "done": 0, "total": 0, "error": True}
 
 
 _import_progress = {}  # {user_id: {stage, done, total}}
@@ -431,6 +434,7 @@ async def _fetch_transactions_for_wallet(user_id: int, address: str) -> int:
 async def _enrich_transactions_for_user(user_id: int):
     """Add CoinGecko prices to all unpriced transactions for a user."""
     async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT id, token_symbol, block_time FROM transactions WHERE user_id=? AND usd_price=0 ORDER BY block_time", (user_id,))
         rows = await cur.fetchall()
         count = 0
@@ -459,6 +463,7 @@ async def _enrich_transactions_for_user(user_id: int):
 async def _daily_tx_refresh(user_id: int):
     """Fetch new transactions for all wallets and enrich them."""
     async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT address FROM wallets WHERE user_id=?", (user_id,))
         wallets_list = await cur.fetchall()
     for w in wallets_list:
