@@ -526,7 +526,7 @@ async def _enrich_transactions_for_user(user_id: int):
                     params = {"date": date_str, "localization": "false"}
                     resp = await cg.get(url, params=params)
                     if resp.status_code == 429:
-                        await asyncio.sleep(30)  # rate limit — wait and retry
+                        await asyncio.sleep(65)  # rate limit — wait full window
                         continue
                     if resp.status_code == 200:
                         price = resp.json().get("market_data", {}).get("current_price", {}).get("usd", 0)
@@ -536,7 +536,7 @@ async def _enrich_transactions_for_user(user_id: int):
                             usd_val = tx["amount"] * price if tx else 0
                             await db.execute("UPDATE transactions SET usd_price=?, usd_value=? WHERE id=?", (price, round(usd_val, 2), r["id"]))
                             count += 1
-                            await asyncio.sleep(0.6)  # CoinGecko free tier rate limit
+                            await asyncio.sleep(3.0)  # CoinGecko free tier: ~20 calls/min
                 except Exception:
                     continue
         await db.commit()
@@ -573,7 +573,7 @@ async def enrich_transactions(user=Depends(get_current_user), db=Depends(get_db)
                 params = {"date": r["block_time"][:10].replace("-", "-"), "localization": "false"}
                 resp = await cg.get(url, params=params)
                 if resp.status_code == 429:
-                    await asyncio.sleep(30)  # rate limit — wait and retry
+                    await asyncio.sleep(65)  # rate limit — wait full window
                     continue
                 if resp.status_code == 200:
                     price = resp.json().get("market_data", {}).get("current_price", {}).get("usd", 0)
@@ -583,7 +583,7 @@ async def enrich_transactions(user=Depends(get_current_user), db=Depends(get_db)
                         usd_val = tx["amount"] * price if tx else 0
                         await db.execute("UPDATE transactions SET usd_price=?, usd_value=? WHERE id=?", (price, round(usd_val, 2), r["id"]))
                         count += 1
-                        await asyncio.sleep(0.6)  # CoinGecko free tier rate limit
+                        await asyncio.sleep(3.0)  # CoinGecko free tier: ~20 calls/min
             except Exception:
                 continue
     await db.commit()
