@@ -95,18 +95,18 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
 <body>
 
 <div class="sidebar hidden" id="sidebar">
-  <h2>🪙 Tracker <span style="font-size:.65rem;color:var(--accent)">v2.2.1</span></h2>
+  <h2>🪙 Tracker</h2>
   <a href="#" class="active" onclick="switchPage('dashboard')" data-page="dashboard">📊 <span>Dashboard</span></a>
   <a href="#" onclick="switchPage('stats')" data-page="stats">📈 <span>Statistiques</span></a>
   <a href="#" onclick="switchPage('tokens')" data-page="tokens">📋 <span>Détail tokens</span></a>
   <a href="#" onclick="switchPage('wallets')" data-page="wallets">💼 <span>Wallets</span></a>
+  <a href="#" onclick="switchPage('settings')" data-page="settings" style="margin-top:auto">⚙️ <span>Paramètres</span></a>
 </div>
 
 <div class="main">
   <div class="topbar">
     <h1 id="pageTitle">📊 Dashboard</h1>
     <div class="topbar-right">
-      <select id="currency" onchange="switchCurrency()"><option value="usd">$ USD</option><option value="eur">€ EUR</option></select>
       <span class="user" id="userInfo"></span>
       <button id="btnLogout" class="hidden" onclick="logout()">Déconnexion</button>
     </div>
@@ -168,27 +168,125 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
 
     <div id="pageTokens" class="hidden"></div>
     <div id="pageWallets" class="hidden"></div>
+    <div id="pageSettings" class="hidden">
+      <div class="card" style="margin-bottom:16px">
+        <h2>🌐 Langue</h2>
+        <select id="setLang" onchange="changeLang()" style="max-width:200px">
+          <option value="fr">🇫🇷 Français</option>
+          <option value="en">🇬🇧 English</option>
+        </select>
+      </div>
+      <div class="card" style="margin-bottom:16px">
+        <h2>💱 Monnaie</h2>
+        <select id="setCurrency" onchange="changeCurrency()" style="max-width:200px">
+          <option value="usd">$ USD</option>
+          <option value="eur">€ EUR</option>
+        </select>
+      </div>
+      <div class="card" style="margin-bottom:16px">
+        <h2>📦 Version</h2>
+        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.3.0</strong></p>
+        <p id="verStatus" style="font-size:.85rem"></p>
+      </div>
+      <div class="card" style="margin-bottom:16px">
+        <h2>🔒 Mot de passe</h2>
+        <input id="oldPass" type="password" placeholder="Mot de passe actuel" style="margin-bottom:8px;max-width:300px">
+        <input id="newPass1" type="password" placeholder="Nouveau mot de passe" style="margin-bottom:8px;max-width:300px">
+        <input id="newPass2" type="password" placeholder="Confirmer le mot de passe" style="margin-bottom:8px;max-width:300px">
+        <button class="btn btn-blue" onclick="doChangePassword()">Changer le mot de passe</button>
+        <div id="pwdMsg" style="margin-top:8px;font-size:.85rem"></div>
+      </div>
+    </div>
   </div>
 </div>
 
 <script>
+// ── i18n ──────────────────────────────────────────────────
+var LANG = localStorage.getItem("lang") || "fr";
+var T = {
+  fr: {
+    dashboard: "📊 Dashboard", stats: "📈 Statistiques", tokens: "📋 Détail tokens",
+    wallets: "💼 Wallets", settings: "⚙️ Paramètres", logout: "Déconnexion",
+    login: "Connexion", register: "Créer un compte", loginBtn: "Se connecter",
+    registerBtn: "Créer le compte", username: "Nom d'utilisateur", password: "Mot de passe",
+    addWallet: "Ajouter", invalidAddr: "Adresse invalide", noWallet: "Aucun wallet",
+    importTitle: "Importation en cours...", importScan: "Scan des blockchains...",
+    importDone: "✅ Import terminé", importPrice: "Prix historiques...",
+    valueLine: "Valeur actuelle", costLine: "Coût d'achat",
+    langLabel: "🌐 Langue", currLabel: "💱 Monnaie", versionLabel: "📦 Version",
+    pwdLabel: "🔒 Mot de passe", oldPwd: "Mot de passe actuel",
+    newPwd: "Nouveau mot de passe", confirmPwd: "Confirmer le mot de passe",
+    changePwd: "Changer le mot de passe", pwdChanged: "✅ Mot de passe modifié",
+    pwdError: "❌ Ancien mot de passe incorrect", pwdMismatch: "❌ Les mots de passe ne correspondent pas",
+    pwdTooShort: "❌ 4 caractères minimum",
+    verCurrent: "Version actuelle", verLatest: "Dernière version",
+    verUpToDate: "✅ À jour", verOutdated: "⚠️ Nouvelle version disponible",
+    verCheckError: "❌ Impossible de vérifier",
+  },
+  en: {
+    dashboard: "📊 Dashboard", stats: "📈 Statistics", tokens: "📋 Token Details",
+    wallets: "💼 Wallets", settings: "⚙️ Settings", logout: "Logout",
+    login: "Login", register: "Register", loginBtn: "Login",
+    registerBtn: "Create Account", username: "Username", password: "Password",
+    addWallet: "Add", invalidAddr: "Invalid address", noWallet: "No wallets",
+    importTitle: "Importing...", importScan: "Scanning blockchains...",
+    importDone: "✅ Import complete", importPrice: "Historical prices...",
+    valueLine: "Current Value", costLine: "Cost Basis",
+    langLabel: "🌐 Language", currLabel: "💱 Currency", versionLabel: "📦 Version",
+    pwdLabel: "🔒 Password", oldPwd: "Current password",
+    newPwd: "New password", confirmPwd: "Confirm password",
+    changePwd: "Change password", pwdChanged: "✅ Password changed",
+    pwdError: "❌ Incorrect current password", pwdMismatch: "❌ Passwords don't match",
+    pwdTooShort: "❌ 4 characters minimum",
+    verCurrent: "Current version", verLatest: "Latest version",
+    verUpToDate: "✅ Up to date", verOutdated: "⚠️ New version available",
+    verCheckError: "❌ Unable to check",
+  }
+};
+function t(key) { return (T[LANG] && T[LANG][key]) || key; }
+function applyLang() {
+  document.getElementById("setLang").value = LANG;
+  // Update sidebar
+  var links = document.querySelectorAll(".sidebar a");
+  var keys = ["dashboard","stats","tokens","wallets","settings"];
+  for (var i=0;i<Math.min(links.length,keys.length);i++) {
+    var span = links[i].querySelector("span");
+    if (span) span.textContent = t(keys[i]);
+  }
+  document.getElementById("btnLogout").textContent = t("logout");
+  // Update auth page
+  document.getElementById("authUser").placeholder = t("username");
+  document.getElementById("authPass").placeholder = t("password");
+  document.getElementById("authBtn").textContent = t("loginBtn");
+  document.getElementById("authTitle").textContent = t("login");
+  // Update page title
+  switchPage(currentPage);
+}
+function changeLang() {
+  LANG = document.getElementById("setLang").value;
+  localStorage.setItem("lang", LANG);
+  applyLang();
+}
+
 var currentPage = "dashboard";
-var authMode="login", wallets=[], activeWallet="ALL", eurRate=null, currency="usd";
+var authMode="login", wallets=[], activeWallet="ALL", eurRate=null, currency=localStorage.getItem("currency")||"usd";
 var pieChart=null, lineChart=null, miniChart=null, lastResult=null, loadingAddr=null, chartRange="all", quickRange="day";
 
 function switchPage(page) {
   currentPage = page;
   document.querySelectorAll(".sidebar a").forEach(function(a){ a.classList.remove("active"); });
   document.querySelector('[data-page="'+page+'"]').classList.add("active");
-  document.getElementById("pageTitle").innerHTML = {"dashboard":"📊 Dashboard","stats":"📈 Statistiques","tokens":"📋 Détail tokens","wallets":"💼 Wallets"}[page];
+  document.getElementById("pageTitle").innerHTML = t(page);
   document.getElementById("pageDashboard").classList.toggle("hidden", page!="dashboard");
   document.getElementById("pageStats").classList.toggle("hidden", page!="stats");
   document.getElementById("pageTokens").classList.toggle("hidden", page!="tokens");
   document.getElementById("pageWallets").classList.toggle("hidden", page!="wallets");
+  document.getElementById("pageSettings").classList.toggle("hidden", page!="settings");
   if (page=="dashboard" && lastResult) { renderResult(lastResult); drawMiniChart(); }
   if (page=="stats" && lastResult) { drawLineChart(); populateFilters(); }
   if (page=="tokens" && lastResult) renderTokenTable(lastResult);
   if (page=="wallets") renderWalletPage();
+  if (page=="settings") renderSettingsPage();
 }
 
 function setRange(range, el){ chartRange=range; document.querySelectorAll("#pageStats .range-pill").forEach(function(p){p.classList.remove("active")}); el.classList.add("active"); drawLineChart(); }
@@ -196,7 +294,8 @@ function setRange(range, el){ chartRange=range; document.querySelectorAll("#page
 function setQuickRange(range, el){ quickRange=range; document.querySelectorAll("#pageDashboard .range-pill").forEach(function(p){p.classList.remove("active")}); el.classList.add("active"); drawMiniChart(); }
 
 async function switchCurrency(){
-  currency=document.getElementById("currency").value;
+  currency=document.getElementById("setCurrency").value;
+  localStorage.setItem("currency", currency);
   if(currency=="eur"&&!eurRate){try{var r=await fetch("/api/rates");var d=await r.json();eurRate=d.eur}catch(e){eurRate=0.91}}
   if(lastResult){ renderResult(lastResult); if(currentPage=="dashboard") drawMiniChart(); else if(currentPage=="stats") drawLineChart(); else if(currentPage=="tokens") renderTokenTable(lastResult); }
 }
@@ -218,6 +317,7 @@ async function logout(){await fetch("/api/auth/logout",{method:"POST"});document
 async function showDash(){
   document.getElementById("viewLogin").classList.add("hidden");document.getElementById("viewDash").classList.remove("hidden");document.getElementById("sidebar").classList.remove("hidden");document.getElementById("btnLogout").classList.remove("hidden");
   var r=await fetch("/api/auth/me");if(r.ok){var u=await r.json();document.getElementById("userInfo").textContent="👤 "+u.username}
+  applyLang();
   await loadWallets();
 }
 
@@ -346,10 +446,9 @@ async function drawLineChart(){
   try{var token=document.getElementById("chartToken").value;var r=await fetch("/api/snapshots"+(token?"?token="+token:""));var snaps=await r.json();if(snaps.length<2){if(lineChart)lineChart.destroy();return}
     if(chartRange!="all"){var cutoff=Date.now()-parseInt(chartRange)*86400*1000;snaps=snaps.filter(function(s){return new Date(s.date+"Z").getTime()>cutoff});if(snaps.length<2){if(lineChart)lineChart.destroy();return}}
     if(lineChart)lineChart.destroy();var ctx=document.getElementById("lineChart").getContext("2d");var sym=currSymbol();
-    var datasets=[{label:"Valeur actuelle ("+sym+")",data:snaps.map(function(s){return Math.round(toCurr(s.total_usd)*100)/100}),borderColor:"#4dabf7",backgroundColor:"rgba(77,171,247,0.1)",fill:true,tension:0.3,pointRadius:1,pointHoverRadius:4,borderWidth:1.5}];
-    // Add cost basis line if data available
+    var datasets=[{label:t("valueLine")+" ("+sym+")",data:snaps.map(function(s){return Math.round(toCurr(s.total_usd)*100)/100}),borderColor:"#4dabf7",backgroundColor:"rgba(77,171,247,0.1)",fill:true,tension:0.3,pointRadius:1,pointHoverRadius:4,borderWidth:1.5}];
     var hasCost=snaps.some(function(s){return s.cost_basis>0});
-    if(hasCost)datasets.push({label:"Coût d'achat ("+sym+")",data:snaps.map(function(s){return Math.round(toCurr(s.cost_basis)*100)/100}),borderColor:"#f0c040",backgroundColor:"rgba(240,192,64,0.1)",fill:false,tension:0.3,pointRadius:1,pointHoverRadius:4,borderWidth:1.5,borderDash:[5,3]});
+    if(hasCost)datasets.push({label:t("costLine")+" ("+sym+")",data:snaps.map(function(s){return Math.round(toCurr(s.cost_basis)*100)/100}),borderColor:"#f0c040",backgroundColor:"rgba(240,192,64,0.1)",fill:false,tension:0.3,pointRadius:1,pointHoverRadius:4,borderWidth:1.5,borderDash:[5,3]});
     lineChart=new Chart(ctx,{type:"line",data:{labels:snaps.map(function(s){return s.date.slice(5,16).replace("T"," ")}),datasets:datasets},options:{responsive:true,maintainAspectRatio:false,interaction:{intersect:false,mode:"index"},plugins:{legend:{display:true,labels:{color:"#8b949e",font:{size:10},usePointStyle:true,padding:16}}},scales:{x:{ticks:{color:"#6e7681",font:{size:9},maxTicksLimit:8},grid:{color:"#1e2530"}},y:{ticks:{color:"#6e7681",font:{size:9},callback:function(v){return sym+v.toLocaleString()}},grid:{color:"#1e2530"}}}}})}catch(e){}
 }
 
@@ -434,6 +533,59 @@ function onChainFilter(){
   populateFilters();
   drawLineChart();
   updateFavBtns();
+}
+
+// ── Settings page ──────────────────────────────────────────
+function renderSettingsPage(){
+  document.getElementById("setLang").value = LANG;
+  document.getElementById("setCurrency").value = currency;
+  document.getElementById("verCurrent").textContent = "v2.3.0";
+  checkVersion();
+}
+
+async function checkVersion(){
+  var el = document.getElementById("verStatus");
+  el.textContent = "...";
+  try {
+    var r = await fetch("https://api.github.com/repos/LostInTheBugs/Crypto-Wallet-Tracker/releases/latest");
+    if (!r.ok) throw new Error("HTTP "+r.status);
+    var data = await r.json();
+    var latest = data.tag_name || "";
+    latest = latest.replace(/^v/,"");
+    if (latest === "2.3.0") {
+      el.innerHTML = '<span style="color:#40c463">'+t("verUpToDate")+' (v'+latest+')</span>';
+    } else {
+      el.innerHTML = '<span style="color:#f0c040">'+t("verOutdated")+': v'+latest+'</span>';
+    }
+  } catch(e) {
+    el.textContent = t("verCheckError");
+  }
+}
+
+function changeCurrency(){
+  currency = document.getElementById("setCurrency").value;
+  localStorage.setItem("currency", currency);
+  if (lastResult) { renderResult(lastResult); if (currentPage=="stats") drawLineChart(); }
+}
+
+async function doChangePassword(){
+  var old = document.getElementById("oldPass").value;
+  var n1 = document.getElementById("newPass1").value;
+  var n2 = document.getElementById("newPass2").value;
+  var msg = document.getElementById("pwdMsg");
+  if (n1.length < 4) { msg.innerHTML = '<span style="color:#f85149">'+t("pwdTooShort")+'</span>'; return; }
+  if (n1 !== n2) { msg.innerHTML = '<span style="color:#f85149">'+t("pwdMismatch")+'</span>'; return; }
+  try {
+    var r = await fetch("/api/auth/password", {method:"PUT", headers:{"Content-Type":"application/json"}, body:JSON.stringify({old_password:old, new_password:n1})});
+    if (r.ok) {
+      msg.innerHTML = '<span style="color:#40c463">'+t("pwdChanged")+'</span>';
+    } else {
+      var d = await r.json();
+      msg.innerHTML = '<span style="color:#f85149">'+(d.detail||t("pwdError"))+'</span>';
+    }
+  } catch(e) {
+    msg.innerHTML = '<span style="color:#f85149">'+t("pwdError")+'</span>';
+  }
 }
 
 (async function(){var r=await fetch("/api/auth/me");if(r.ok)showDash()})();

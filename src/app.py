@@ -162,6 +162,23 @@ async def logout():
     return resp
 
 
+@app.put("/api/auth/password")
+async def change_password(request: Request, user=Depends(get_current_user), db=Depends(get_db)):
+    data = await request.json()
+    old = data.get("old_password", "")
+    new = data.get("new_password", "")
+    if len(new) < 4:
+        raise HTTPException(400, "Nouveau mot de passe >= 4 caractères")
+    cur = await db.execute("SELECT password_hash FROM users WHERE id=?", (user["id"],))
+    row = await cur.fetchone()
+    if not row or not bcrypt.checkpw(old.encode(), row["password_hash"].encode()):
+        raise HTTPException(401, "Ancien mot de passe incorrect")
+    h = bcrypt.hashpw(new.encode(), bcrypt.gensalt())
+    await db.execute("UPDATE users SET password_hash=? WHERE id=?", (h.decode(), user["id"]))
+    await db.commit()
+    return {"ok": True, "msg": "Mot de passe modifié"}
+
+
 # ── Wallet CRUD ──────────────────────────────────────────────────
 
 @app.get("/api/wallets")
