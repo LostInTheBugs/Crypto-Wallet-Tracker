@@ -284,9 +284,15 @@ async def _compute_portfolio(address: str) -> dict:
 
 async def _auto_fetch_and_enrich(user_id: int, address: str):
     """Fetch transactions then enrich with historical prices."""
+    _import_progress[user_id] = {"stage": "fetch", "done": 0, "total": len(CHAINS)}
     count = await _fetch_transactions_for_wallet(user_id, address)
+    _import_progress[user_id] = {"stage": "enrich", "done": 0, "total": count}
     if count > 0:
         await _enrich_transactions_for_user(user_id)
+    _import_progress[user_id] = {"stage": "done", "done": count, "total": count}
+
+
+_import_progress = {}  # {user_id: {stage, done, total}}
 
 
 _last_tx_refresh = {}  # {user_id: timestamp}
@@ -366,6 +372,11 @@ async def backfill_snapshots(user=Depends(get_current_user), db=Depends(get_db))
 
 
 # ── Transactions & Real History ─────────────────────────────────
+
+@app.get("/api/import/progress")
+async def import_progress(user=Depends(get_current_user)):
+    return _import_progress.get(user["id"], {"stage": "idle", "done": 0, "total": 0})
+
 
 @app.post("/api/transactions/fetch")
 async def fetch_transactions(user=Depends(get_current_user), db=Depends(get_db)):

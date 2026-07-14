@@ -82,12 +82,20 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
   .wallets-bar{gap:4px}
   .wallet-tab{padding:4px 6px;font-size:.7rem}
 }
+.modal-overlay{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;z-index:1000}
+.modal-box{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:30px 40px;text-align:center;min-width:320px}
+.modal-box h3{color:var(--title);margin-bottom:12px}
+.modal-box .progress-bar{width:100%;height:6px;background:var(--border);border-radius:3px;margin:16px 0;overflow:hidden}
+.modal-box .progress-fill{height:100%;background:var(--accent);border-radius:3px;transition:width .3s}
+.modal-box .progress-text{color:var(--text);font-size:.85rem}
+.spinner{display:inline-block;width:24px;height:24px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite;margin-bottom:12px}
+@keyframes spin{to{transform:rotate(360deg)}}
 </style>
 </head>
 <body>
 
 <div class="sidebar hidden" id="sidebar">
-  <h2>🪙 Tracker <span style="font-size:.65rem;color:var(--accent)">v2.1.2</span></h2>
+  <h2>🪙 Tracker <span style="font-size:.65rem;color:var(--accent)">v2.1.3</span></h2>
   <a href="#" class="active" onclick="switchPage('dashboard')" data-page="dashboard">📊 <span>Dashboard</span></a>
   <a href="#" onclick="switchPage('stats')" data-page="stats">📈 <span>Statistiques</span></a>
   <a href="#" onclick="switchPage('tokens')" data-page="tokens">📋 <span>Détail tokens</span></a>
@@ -116,6 +124,15 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
   </div>
 
   <div id="viewDash" class="hidden">
+
+    <div id="importModal" class="modal-overlay hidden">
+      <div class="modal-box">
+        <div class="spinner"></div>
+        <h3 id="importTitle">Importation en cours...</h3>
+        <div class="progress-bar"><div class="progress-fill" id="importBar" style="width:0%"></div></div>
+        <div class="progress-text" id="importText">Scan des blockchains...</div>
+      </div>
+    </div>
 
     <div id="pageDashboard">
       <div class="grid" id="walletStats"></div>
@@ -256,7 +273,21 @@ async function saveLabel(id){
   if(r.ok){await loadWallets();if(currentPage=="wallets")renderWalletPage()}
 }
 
-async function addWallet(){var addr=document.getElementById("walletAddr").value.trim(),label=document.getElementById("walletLabel").value.trim();if(!addr.startsWith("0x")||addr.length!=42)return alert("Adresse invalide");var r=await fetch("/api/wallets",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({address:addr,label:label})});if(!r.ok){var e=await r.json();alert(e.detail);return}await loadWallets();if(currentPage=="wallets")renderWalletPage()}
+async function addWallet(){var addr=document.getElementById("walletAddr").value.trim(),label=document.getElementById("walletLabel").value.trim();if(!addr.startsWith("0x")||addr.length!=42)return alert("Adresse invalide");var r=await fetch("/api/wallets",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({address:addr,label:label})});if(!r.ok){var e=await r.json();alert(e.detail);return}
+  // Show progress modal
+  document.getElementById("importModal").classList.remove("hidden");
+  document.getElementById("importBar").style.width="0%";
+  document.getElementById("importTitle").textContent="Importation en cours...";
+  document.getElementById("importText").textContent="Scan des blockchains...";
+  var poll=setInterval(async function(){
+    try{var pr=await fetch("/api/import/progress");var p=await pr.json();
+      if(p.stage=="fetch"){document.getElementById("importText").textContent="Scan blockchain "+p.done+"/"+p.total;document.getElementById("importBar").style.width=(p.done/p.total*40)+"%"}
+      else if(p.stage=="enrich"){document.getElementById("importText").textContent="Prix historiques...";document.getElementById("importBar").style.width=(40+Math.min(p.done/10,60))+"%"}
+      else if(p.stage=="done"){clearInterval(poll);document.getElementById("importBar").style.width="100%";document.getElementById("importTitle").textContent="✅ Import terminé";document.getElementById("importText").textContent=p.done+" transactions";
+        setTimeout(function(){document.getElementById("importModal").classList.add("hidden");loadWallets()},1500)}
+    }catch(e){}
+  },800);
+  await loadWallets();if(currentPage=="wallets")renderWalletPage()}
 
 async function loadView(force){activeWallet=="ALL"?await loadAllWallets(force):await loadOneWallet(activeWallet,force)}
 
