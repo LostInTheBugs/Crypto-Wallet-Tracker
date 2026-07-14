@@ -185,7 +185,7 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>📦 Version</h2>
-        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.3.0</strong></p>
+        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.3.7</strong></p>
         <p id="verStatus" style="font-size:.85rem"></p>
       </div>
       <div class="card" style="margin-bottom:16px">
@@ -548,15 +548,18 @@ async function checkVersion(){
   var el = document.getElementById("verStatus");
   el.textContent = "...";
   try {
-    var r = await fetch("https://api.github.com/repos/LostInTheBugs/Crypto-Wallet-Tracker/releases/latest");
+    var r = await fetch("https://api.github.com/repos/LostInTheBugs/Crypto-Wallet-Tracker/tags?per_page=1");
     if (!r.ok) throw new Error("HTTP "+r.status);
     var data = await r.json();
-    var latest = data.tag_name || "";
+    var latest = (data[0] && data[0].name) || "";
     latest = latest.replace(/^v/,"");
-    if (latest === "2.3.0") {
+    var current = document.getElementById("verCurrent").textContent.replace(/^v/,"");
+    if (latest === current) {
       el.innerHTML = '<span style="color:#40c463">'+t("verUpToDate")+' (v'+latest+')</span>';
-    } else {
+    } else if (latest) {
       el.innerHTML = '<span style="color:#f0c040">'+t("verOutdated")+': v'+latest+'</span>';
+    } else {
+      el.textContent = t("verCheckError");
     }
   } catch(e) {
     el.textContent = t("verCheckError");
