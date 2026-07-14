@@ -175,9 +175,9 @@ async def add_wallet(request: Request, user=Depends(get_current_user), db=Depend
         raise HTTPException(400, "Adresse EVM invalide")
     await db.execute("INSERT INTO wallets (user_id, address, label) VALUES (?, ?, ?)", (user["id"], address, label))
     await db.commit()
-    # Auto-backfill in background
+    # Auto-backfill + fetch transactions in background
     asyncio.create_task(_backfill_wallet(user["id"], address))
-    asyncio.create_task(_fetch_transactions_for_wallet(user["id"], address))
+    asyncio.create_task(_auto_fetch_and_enrich(user["id"], address))
     return {"ok": True}
 
 
@@ -282,10 +282,25 @@ async def _compute_portfolio(address: str) -> dict:
     }
 
 
+async def _auto_fetch_and_enrich(user_id: int, address: str):
+    """Fetch transactions then enrich with historical prices."""
+    count = await _fetch_transactions_for_wallet(user_id, address)
+    if count > 0:
+        await _enrich_transactions_for_user(user_id)
+
+
+_last_tx_refresh = {}  # {user_id: timestamp}
+
 @app.get("/api/portfolio")
 async def portfolio(address: str = Query(...), force: bool = Query(False), user=Depends(get_current_user)):
     if not address.startswith("0x"):
         raise HTTPException(400, "Adresse invalide")
+
+    # Daily auto-refresh transactions (once per 24h)
+    now = _time.time()
+    if now - _last_tx_refresh.get(user["id"], 0) > 86400:
+        _last_tx_refresh[user["id"]] = now
+        asyncio.create_task(_daily_tx_refresh(user["id"]))
 
     now = _time.time()
     entry = _portfolio_cache.get(address)
@@ -400,6 +415,45 @@ async def _fetch_transactions_for_wallet(user_id: int, address: str) -> int:
         except Exception:
             continue
     return total_tx
+
+
+async def _enrich_transactions_for_user(user_id: int):
+    """Add CoinGecko prices to all unpriced transactions for a user."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT id, token_symbol, block_time FROM transactions WHERE user_id=? AND usd_price=0 ORDER BY block_time", (user_id,))
+        rows = await cur.fetchall()
+        count = 0
+        async with httpx.AsyncClient(timeout=30) as cg:
+            for r in rows:
+                cg_id = SYMBOL_TO_CG.get(r["token_symbol"].lower())
+                if not cg_id: continue
+                try:
+                    date_str = r["block_time"][:10]
+                    url = f"https://api.coingecko.com/api/v3/coins/{cg_id}/history"
+                    params = {"date": date_str, "localization": "false"}
+                    resp = await cg.get(url, params=params)
+                    if resp.status_code == 200:
+                        price = resp.json().get("market_data", {}).get("current_price", {}).get("usd", 0)
+                        if price:
+                            cur2 = await db.execute("SELECT amount FROM transactions WHERE id=?", (r["id"],))
+                            tx = await cur2.fetchone()
+                            usd_val = tx["amount"] * price if tx else 0
+                            await db.execute("UPDATE transactions SET usd_price=?, usd_value=? WHERE id=?", (price, round(usd_val, 2), r["id"]))
+                            count += 1
+                except Exception:
+                    continue
+        await db.commit()
+
+
+async def _daily_tx_refresh(user_id: int):
+    """Fetch new transactions for all wallets and enrich them."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT address FROM wallets WHERE user_id=?", (user_id,))
+        wallets_list = await cur.fetchall()
+    for w in wallets_list:
+        count = await _fetch_transactions_for_wallet(user_id, w["address"])
+        if count > 0:
+            await _enrich_transactions_for_user(user_id)
 
 
 @app.post("/api/transactions/enrich")

@@ -87,7 +87,7 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
 <body>
 
 <div class="sidebar hidden" id="sidebar">
-  <h2>🪙 Tracker <span style="font-size:.65rem;color:var(--accent)">v2.1.1</span></h2>
+  <h2>🪙 Tracker <span style="font-size:.65rem;color:var(--accent)">v2.1.2</span></h2>
   <a href="#" class="active" onclick="switchPage('dashboard')" data-page="dashboard">📊 <span>Dashboard</span></a>
   <a href="#" onclick="switchPage('stats')" data-page="stats">📈 <span>Statistiques</span></a>
   <a href="#" onclick="switchPage('tokens')" data-page="tokens">📋 <span>Détail tokens</span></a>
@@ -146,7 +146,6 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
           <span class="range-pill" onclick="setRange('90',this)">3 mois</span>
           <span class="range-pill" onclick="setRange('30',this)">1 mois</span>
           <button onclick="toggleChartMode()" id="chartModeBtn" title="Basculer valeur/quantité" style="font-size:.65rem;background:transparent;border:1px solid var(--border);color:var(--text);padding:2px 8px;border-radius:4px;cursor:pointer;margin-left:4px">💰</button>
-        <button onclick="fetchTx()" id="fetchTxBtn" title="Récupérer les transactions" style="font-size:.65rem;background:transparent;border:1px solid var(--border);color:var(--text);padding:2px 8px;border-radius:4px;cursor:pointer;margin-left:4px">📥 TX</button>
         </span>
       </h2><div class="chart-wrap" style="height:350px"><canvas id="lineChart"></canvas></div></div>
     </div>
@@ -406,14 +405,6 @@ function toggleChartMode(){
   chartMode = chartMode=="value" ? "quantity" : "value";
   document.getElementById("chartModeBtn").textContent = chartMode=="value" ? "💰" : "📊";
   drawLineChart();
-}
-
-async function fetchTx(){
-  var btn=document.getElementById("fetchTxBtn");
-  btn.disabled=true;btn.textContent="⏳ Fetch...";
-  try{var r=await fetch("/api/transactions/fetch",{method:"POST"});var d=await r.json();btn.textContent="✅ "+d.transactions_fetched+" TX"}
-  catch(e){btn.textContent="❌ Erreur"}
-  setTimeout(function(){btn.disabled=false;btn.textContent="📥 TX"},5000);
 }
 
 (async function(){var r=await fetch("/api/auth/me");if(r.ok)showDash()})();
