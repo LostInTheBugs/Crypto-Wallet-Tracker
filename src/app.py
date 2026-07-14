@@ -319,9 +319,16 @@ async def _auto_fetch_and_enrich(user_id: int, address: str):
 async def _fetch_then_backfill(user_id: int, address: str):
     """Fetch transactions first, then backfill snapshots using earliest tx date."""
     try:
-        _import_progress[user_id] = {"stage": "fetch", "done": 0, "total": len(CHAINS)}
+        _import_progress[user_id] = {"stage": "fetch", "done": 0, "total": len(CHAINS), "in_done": 0, "in_total": 0, "out_done": 0, "out_total": 0}
         count = await _fetch_transactions_for_wallet(user_id, address)
-        _import_progress[user_id] = {"stage": "enrich", "done": 0, "total": count}
+        # Query per-direction totals for progress tracking
+        async with aiosqlite.connect(DB_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute("SELECT direction, COUNT(*) as c FROM transactions WHERE user_id=? AND usd_price=0 GROUP BY direction", (user_id,))
+            dirs = {r["direction"]: r["c"] for r in await cur.fetchall()}
+        in_total = dirs.get("in", 0)
+        out_total = dirs.get("out", 0)
+        _import_progress[user_id] = {"stage": "enrich", "done": 0, "total": count, "in_done": 0, "in_total": in_total, "out_done": 0, "out_total": out_total}
         if count > 0:
             await _enrich_transactions_for_user(user_id)
         # Now backfill — uses MIN(block_time) from fetched transactions
@@ -514,9 +521,11 @@ async def _enrich_transactions_for_user(user_id: int):
     """Add CoinGecko prices to all unpriced transactions for a user."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        cur = await db.execute("SELECT id, token_symbol, block_time FROM transactions WHERE user_id=? AND usd_price=0 ORDER BY block_time", (user_id,))
+        cur = await db.execute("SELECT id, token_symbol, block_time, direction FROM transactions WHERE user_id=? AND usd_price=0 ORDER BY block_time", (user_id,))
         rows = await cur.fetchall()
         count = 0
+        in_done = 0
+        out_done = 0
         async with httpx.AsyncClient(timeout=30) as cg:
             for r in rows:
                 cg_id = SYMBOL_TO_CG.get(r["token_symbol"].lower())
@@ -537,6 +546,13 @@ async def _enrich_transactions_for_user(user_id: int):
                             usd_val = tx["amount"] * price if tx else 0
                             await db.execute("UPDATE transactions SET usd_price=?, usd_value=? WHERE id=?", (price, round(usd_val, 2), r["id"]))
                             count += 1
+                            if r["direction"] == "in": in_done += 1
+                            else: out_done += 1
+                            # Update detailed progress
+                            if user_id in _import_progress:
+                                p = _import_progress[user_id]
+                                p["in_done"] = in_done
+                                p["out_done"] = out_done
                             await asyncio.sleep(3.0)  # CoinGecko free tier: ~20 calls/min
                 except Exception:
                     continue

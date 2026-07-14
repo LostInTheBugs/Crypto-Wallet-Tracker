@@ -82,7 +82,7 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
   .wallet-tab{padding:4px 6px;font-size:.7rem}
 }
 .modal-overlay{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;z-index:1000}
-.modal-box{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:30px 40px;text-align:center;min-width:320px}
+.modal-box{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:30px 40px;text-align:center;min-width:360px}
 .modal-box h3{color:var(--title);margin-bottom:12px}
 .modal-box .progress-bar{width:100%;height:6px;background:var(--border);border-radius:3px;margin:16px 0;overflow:hidden}
 .modal-box .progress-fill{height:100%;background:var(--accent);border-radius:3px;transition:width .3s}
@@ -187,7 +187,7 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>📦 Version</h2>
-        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.3.9</strong></p>
+        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.4.0</strong></p>
         <p id="verStatus" style="font-size:.85rem"></p>
       </div>
       <div class="card" style="margin-bottom:16px">
@@ -384,8 +384,13 @@ async function addWallet(){var addr=document.getElementById("walletAddr").value.
   var poll=setInterval(async function(){
     try{var pr=await fetch("/api/import/progress");var p=await pr.json();
       if(p.stage=="idle"){clearInterval(poll);document.getElementById("importModal").classList.add("hidden");return}
-      if(p.stage=="fetch"){document.getElementById("importText").textContent="Scan blockchain "+p.done+"/"+p.total;document.getElementById("importBar").style.width=(p.done/p.total*40)+"%"}
-      else if(p.stage=="enrich"){document.getElementById("importText").textContent="Prix historiques...";document.getElementById("importBar").style.width=(40+Math.min(p.done/10,60))+"%"}
+      if(p.stage=="fetch"){document.getElementById("importText").innerHTML="🔍 Scan blockchain "+p.done+"/"+p.total;document.getElementById("importBar").style.width=(p.done/p.total*25)+"%"}
+      else if(p.stage=="enrich"){
+        var txt="📥 Dépôts: "+(p.in_done||0)+"/"+(p.in_total||0)+" &nbsp; 📤 Retraits: "+(p.out_done||0)+"/"+(p.out_total||0);
+        document.getElementById("importText").innerHTML=txt;
+        var total=p.in_total+p.out_total||1;
+        document.getElementById("importBar").style.width=(25+Math.min((p.in_done+p.out_done)/total*75,75))+"%";
+      }
       else if(p.stage=="done"){clearInterval(poll);document.getElementById("importBar").style.width="100%";document.getElementById("importTitle").textContent="✅ Import terminé";document.getElementById("importText").textContent=p.done+" transactions";
         setTimeout(function(){document.getElementById("importModal").classList.add("hidden");loadWallets()},1500)}
     }catch(e){clearInterval(poll);document.getElementById("importModal").classList.add("hidden")}

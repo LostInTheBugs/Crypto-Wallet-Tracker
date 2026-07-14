@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — V2.3.4
+# Crypto Wallet Tracker — V2.4.0
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
