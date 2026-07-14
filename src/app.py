@@ -82,6 +82,10 @@ async def lifespan(app: FastAPI):
             await db.execute("ALTER TABLE snapshots ADD COLUMN wallet_label TEXT DEFAULT NULL")
         except:
             pass
+        try:
+            await db.execute("ALTER TABLE transactions ADD COLUMN direction TEXT DEFAULT 'in'")
+        except:
+            pass
         await db.commit()
     yield
 
@@ -175,9 +179,8 @@ async def add_wallet(request: Request, user=Depends(get_current_user), db=Depend
         raise HTTPException(400, "Adresse EVM invalide")
     await db.execute("INSERT INTO wallets (user_id, address, label) VALUES (?, ?, ?)", (user["id"], address, label))
     await db.commit()
-    # Auto-backfill + fetch transactions in background
-    asyncio.create_task(_backfill_wallet(user["id"], address))
-    asyncio.create_task(_auto_fetch_and_enrich(user["id"], address))
+    # Fetch transactions first, then backfill (needs tx data for wallet creation date)
+    asyncio.create_task(_fetch_then_backfill(user["id"], address))
     return {"ok": True}
 
 
@@ -295,6 +298,21 @@ async def _auto_fetch_and_enrich(user_id: int, address: str):
         _import_progress[user_id] = {"stage": "done", "done": 0, "total": 0, "error": True}
 
 
+async def _fetch_then_backfill(user_id: int, address: str):
+    """Fetch transactions first, then backfill snapshots using earliest tx date."""
+    try:
+        _import_progress[user_id] = {"stage": "fetch", "done": 0, "total": len(CHAINS)}
+        count = await _fetch_transactions_for_wallet(user_id, address)
+        _import_progress[user_id] = {"stage": "enrich", "done": 0, "total": count}
+        if count > 0:
+            await _enrich_transactions_for_user(user_id)
+        # Now backfill — uses MIN(block_time) from fetched transactions
+        await _backfill_wallet(user_id, address)
+        _import_progress[user_id] = {"stage": "done", "done": count, "total": count}
+    except Exception:
+        _import_progress[user_id] = {"stage": "done", "done": 0, "total": 0, "error": True}
+
+
 _import_progress = {}  # {user_id: {stage, done, total}}
 
 
@@ -350,10 +368,15 @@ async def get_snapshots(token: str = Query(None), user=Depends(get_current_user)
             "SELECT total_usd, token_quantity, token_count, created_at FROM snapshots WHERE user_id=? AND token_symbol IS NULL ORDER BY created_at ASC",
             (user["id"],))
     rows = await cur.fetchall()
-    # Compute cumulative cost basis per snapshot date
-    cost_cur = await db.execute(
-        "SELECT block_time, usd_value FROM transactions WHERE user_id=? ORDER BY block_time ASC",
-        (user["id"],))
+    # Compute cumulative cost basis per snapshot date, using direction
+    if token:
+        cost_cur = await db.execute(
+            "SELECT block_time, usd_value, direction FROM transactions WHERE user_id=? AND token_symbol=? ORDER BY block_time ASC",
+            (user["id"], token.upper()))
+    else:
+        cost_cur = await db.execute(
+            "SELECT block_time, usd_value, direction FROM transactions WHERE user_id=? ORDER BY block_time ASC",
+            (user["id"],))
     txns = await cost_cur.fetchall()
     # Build cumulative cost basis per snapshot date
     result = []
@@ -361,9 +384,13 @@ async def get_snapshots(token: str = Query(None), user=Depends(get_current_user)
     cum_cost = 0.0
     for r in rows:
         date_str = r["created_at"]
-        # Add transactions up to this snapshot date
+        # Normalize date for comparison (snapshot created_at uses space, block_time now also uses space)
         while txn_idx < len(txns) and txns[txn_idx]["block_time"] <= date_str:
-            cum_cost += txns[txn_idx]["usd_value"] or 0
+            val = txns[txn_idx]["usd_value"] or 0
+            if txns[txn_idx]["direction"] == "in":
+                cum_cost += val
+            else:
+                cum_cost -= val
             txn_idx += 1
         result.append({
             "total_usd": r["total_usd"],
@@ -425,29 +452,41 @@ async def _fetch_transactions_for_wallet(user_id: int, address: str) -> int:
         try:
             async with httpx.AsyncClient(timeout=30, follow_redirects=True) as bc:
                 url = f"https://{host}/api/v2/addresses/{address}/token-transfers"
-                params = {"type": "ERC-20,ERC-721,ERC-1155"}
-                resp = await bc.get(url, params=params)
-                if resp.status_code != 200: continue
-                data = resp.json()
-                async with aiosqlite.connect(DB_PATH) as db:
-                    for item in data.get("items", []):
-                        token = item.get("token") or {}
-                        tx_hash = item.get("tx_hash", "")
-                        cur2 = await db.execute("SELECT id FROM transactions WHERE tx_hash=? AND user_id=?", (tx_hash, user_id))
-                        if await cur2.fetchone(): continue
-                        try:
-                            amount = int(item.get("total", {}).get("value", "0") or "0") / (10 ** (int(token.get("decimals") or 18)))
-                        except:
-                            amount = 0
-                        if amount == 0: continue
-                        symbol = token.get("symbol", "?")
-                        name = token.get("name", "Unknown")
-                        ts = item.get("timestamp", "")
-                        await db.execute(
-                            "INSERT INTO transactions (user_id, wallet_address, token_symbol, token_name, amount, chain, tx_hash, block_time) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                            (user_id, address, symbol, name, amount, chain, tx_hash, ts[:19] if ts else ""))
-                        total_tx += 1
-                    await db.commit()
+                params: dict = {"type": "ERC-20,ERC-721,ERC-1155"}
+                # Paginate up to 5 pages (max ~250 transfers per chain)
+                for page in range(5):
+                    resp = await bc.get(url, params=params)
+                    if resp.status_code != 200: break
+                    data = resp.json()
+                    items = data.get("items", [])
+                    if not items: break
+                    async with aiosqlite.connect(DB_PATH) as db:
+                        for item in items:
+                            token = item.get("token") or {}
+                            tx_hash = item.get("transaction_hash") or item.get("tx_hash", "")
+                            # Skip dedup only if we have a real hash
+                            if tx_hash:
+                                cur2 = await db.execute("SELECT id FROM transactions WHERE tx_hash=? AND user_id=?", (tx_hash, user_id))
+                                if await cur2.fetchone(): continue
+                            try:
+                                amount = int(item.get("total", {}).get("value", "0") or "0") / (10 ** (int(token.get("decimals") or 18)))
+                            except:
+                                amount = 0
+                            if amount == 0: continue
+                            symbol = token.get("symbol", "?")
+                            name = token.get("name", "Unknown")
+                            ts = item.get("timestamp", "")
+                            to_addr = (item.get("to") or {}).get("hash", "")
+                            direction = "in" if to_addr.lower() == address.lower() else "out"
+                            await db.execute(
+                                "INSERT INTO transactions (user_id, wallet_address, token_symbol, token_name, amount, chain, tx_hash, block_time, direction) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                (user_id, address, symbol, name, amount, chain, tx_hash, ts[:19].replace("T", " ") if ts else "", direction))
+                            total_tx += 1
+                        await db.commit()
+                    # Follow next_page_params for next iteration
+                    nxt = data.get("next_page_params")
+                    if not nxt: break
+                    params = {**params, **nxt}
         except Exception:
             continue
     return total_tx
@@ -529,17 +568,16 @@ async def enrich_transactions(user=Depends(get_current_user), db=Depends(get_db)
 async def _backfill_wallet(user_id: int, address: str) -> dict:
     """Generate historical snapshots using CoinGecko prices since wallet creation."""
     
-    # Find wallet creation date via Blockscout (oldest tx + 1 day margin)
+    # Find wallet creation date from earliest stored transaction
     created_at = _time.time() - 90 * 86400  # default 90 days
     try:
-        async with httpx.AsyncClient(timeout=10) as bc:
-            r = await bc.get(f"https://eth.blockscout.com/api/v2/addresses/{address}/transactions?filter=from|to&limit=1&sort=asc")
-            if r.status_code == 200:
-                items = r.json().get("items", [])
-                if items:
-                    ts_str = items[0].get("timestamp", "")
-                    if ts_str:
-                        created_at = _time.mktime(_time.strptime(ts_str[:19], "%Y-%m-%dT%H:%M:%S")) - 86400
+        async with aiosqlite.connect(DB_PATH) as db:
+            cur = await db.execute(
+                "SELECT MIN(block_time) FROM transactions WHERE user_id=? AND wallet_address=?",
+                (user_id, address))
+            row = await cur.fetchone()
+            if row and row[0]:
+                created_at = _time.mktime(_time.strptime(row[0][:19], "%Y-%m-%d %H:%M:%S")) - 86400
     except Exception:
         pass
 
@@ -602,8 +640,8 @@ async def _backfill_wallet(user_id: int, address: str) -> dict:
                     (user_id, date_str, tok["symbol"]))
                 if not await cur2.fetchone() and tok_usd > 0.01:
                     await db.execute(
-                        "INSERT INTO snapshots (user_id, total_usd, token_count, token_quantity, token_symbol, chain) VALUES (?, ?, ?, ?, ?, ?)",
-                        (user_id, round(tok_usd, 2), 1, round(tok["balance"], 6), tok["symbol"], "ethereum"))
+                        "INSERT INTO snapshots (user_id, total_usd, token_count, token_quantity, token_symbol, chain, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (user_id, round(tok_usd, 2), 1, round(tok["balance"], 6), tok["symbol"], "ethereum", date_str))
                     new_snapshots += 1
             
             # Total snapshot
@@ -613,8 +651,8 @@ async def _backfill_wallet(user_id: int, address: str) -> dict:
                     (user_id, date_str))
                 if not await cur3.fetchone():
                     await db.execute(
-                        "INSERT INTO snapshots (user_id, total_usd, token_count) VALUES (?, ?, ?)",
-                        (user_id, round(total, 2), len(tokens_cg)))
+                        "INSERT INTO snapshots (user_id, total_usd, token_count, created_at) VALUES (?, ?, ?, ?)",
+                        (user_id, round(total, 2), len(tokens_cg), date_str))
                     new_snapshots += 1
         
         await db.commit()
