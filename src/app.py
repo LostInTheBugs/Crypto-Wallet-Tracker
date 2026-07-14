@@ -525,6 +525,9 @@ async def _enrich_transactions_for_user(user_id: int):
                     url = f"https://api.coingecko.com/api/v3/coins/{cg_id}/history"
                     params = {"date": date_str, "localization": "false"}
                     resp = await cg.get(url, params=params)
+                    if resp.status_code == 429:
+                        await asyncio.sleep(30)  # rate limit — wait and retry
+                        continue
                     if resp.status_code == 200:
                         price = resp.json().get("market_data", {}).get("current_price", {}).get("usd", 0)
                         if price:
@@ -569,6 +572,9 @@ async def enrich_transactions(user=Depends(get_current_user), db=Depends(get_db)
                 url = f"https://api.coingecko.com/api/v3/coins/{cg_id}/history"
                 params = {"date": r["block_time"][:10].replace("-", "-"), "localization": "false"}
                 resp = await cg.get(url, params=params)
+                if resp.status_code == 429:
+                    await asyncio.sleep(30)  # rate limit — wait and retry
+                    continue
                 if resp.status_code == 200:
                     price = resp.json().get("market_data", {}).get("current_price", {}).get("usd", 0)
                     if price:
