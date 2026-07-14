@@ -95,7 +95,7 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
 <body>
 
 <div class="sidebar hidden" id="sidebar">
-  <h2>🪙 Tracker <span style="font-size:.65rem;color:var(--accent)">v2.1.8</span></h2>
+  <h2>🪙 Tracker <span style="font-size:.65rem;color:var(--accent)">v2.1.9</span></h2>
   <a href="#" class="active" onclick="switchPage('dashboard')" data-page="dashboard">📊 <span>Dashboard</span></a>
   <a href="#" onclick="switchPage('stats')" data-page="stats">📈 <span>Statistiques</span></a>
   <a href="#" onclick="switchPage('tokens')" data-page="tokens">📋 <span>Détail tokens</span></a>
@@ -162,7 +162,6 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
           <span class="range-pill" onclick="setRange('180',this)">6 mois</span>
           <span class="range-pill" onclick="setRange('90',this)">3 mois</span>
           <span class="range-pill" onclick="setRange('30',this)">1 mois</span>
-          <button onclick="toggleChartMode()" id="chartModeBtn" title="Basculer valeur/montant" style="font-size:.65rem;background:transparent;border:1px solid var(--border);color:var(--text);padding:2px 8px;border-radius:4px;cursor:pointer;margin-left:4px">💰</button>
         </span>
       </h2><div class="chart-wrap" style="height:350px"><canvas id="lineChart"></canvas></div></div>
     </div>
@@ -175,7 +174,7 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
 <script>
 var currentPage = "dashboard";
 var authMode="login", wallets=[], activeWallet="ALL", eurRate=null, currency="usd";
-var pieChart=null, lineChart=null, miniChart=null, lastResult=null, loadingAddr=null, chartRange="all", quickRange="day", chartMode="value";
+var pieChart=null, lineChart=null, miniChart=null, lastResult=null, loadingAddr=null, chartRange="all", quickRange="day";
 
 function switchPage(page) {
   currentPage = page;
@@ -347,7 +346,11 @@ async function drawLineChart(){
   try{var token=document.getElementById("chartToken").value;var r=await fetch("/api/snapshots"+(token?"?token="+token:""));var snaps=await r.json();if(snaps.length<2){if(lineChart)lineChart.destroy();return}
     if(chartRange!="all"){var cutoff=Date.now()-parseInt(chartRange)*86400*1000;snaps=snaps.filter(function(s){return new Date(s.date+"Z").getTime()>cutoff});if(snaps.length<2){if(lineChart)lineChart.destroy();return}}
     if(lineChart)lineChart.destroy();var ctx=document.getElementById("lineChart").getContext("2d");var sym=currSymbol();
-    lineChart=new Chart(ctx,{type:"line",data:{labels:snaps.map(function(s){return s.date.slice(5,16).replace("T"," ")}),datasets:[{label:chartMode=="value"?"Valeur ("+sym+")":"Montant",data:snaps.map(function(s){return chartMode=="value"?Math.round(toCurr(s.total_usd)*100)/100:Math.round((s.quantity||0)*100)/100}),borderColor:chartMode=="value"?"#4dabf7":"#f0c040",backgroundColor:chartMode=="value"?"rgba(77,171,247,0.1)":"rgba(240,192,64,0.1)",fill:true,tension:0.3,pointRadius:1,pointHoverRadius:4,borderWidth:1.5}]},options:{responsive:true,maintainAspectRatio:false,interaction:{intersect:false,mode:"index"},plugins:{legend:{display:false}},scales:{x:{ticks:{color:"#6e7681",font:{size:9},maxTicksLimit:8},grid:{color:"#1e2530"}},y:{ticks:{color:"#6e7681",font:{size:9},callback:chartMode=="value"?function(v){return sym+v.toLocaleString()}:function(v){return v.toLocaleString()}},grid:{color:"#1e2530"}}}}})}catch(e){}
+    var datasets=[{label:"Valeur actuelle ("+sym+")",data:snaps.map(function(s){return Math.round(toCurr(s.total_usd)*100)/100}),borderColor:"#4dabf7",backgroundColor:"rgba(77,171,247,0.1)",fill:true,tension:0.3,pointRadius:1,pointHoverRadius:4,borderWidth:1.5}];
+    // Add cost basis line if data available
+    var hasCost=snaps.some(function(s){return s.cost_basis>0});
+    if(hasCost)datasets.push({label:"Coût d'achat ("+sym+")",data:snaps.map(function(s){return Math.round(toCurr(s.cost_basis)*100)/100}),borderColor:"#f0c040",backgroundColor:"rgba(240,192,64,0.1)",fill:false,tension:0.3,pointRadius:1,pointHoverRadius:4,borderWidth:1.5,borderDash:[5,3]});
+    lineChart=new Chart(ctx,{type:"line",data:{labels:snaps.map(function(s){return s.date.slice(5,16).replace("T"," ")}),datasets:datasets},options:{responsive:true,maintainAspectRatio:false,interaction:{intersect:false,mode:"index"},plugins:{legend:{display:true,labels:{color:"#8b949e",font:{size:10},usePointStyle:true,padding:16}}},scales:{x:{ticks:{color:"#6e7681",font:{size:9},maxTicksLimit:8},grid:{color:"#1e2530"}},y:{ticks:{color:"#6e7681",font:{size:9},callback:function(v){return sym+v.toLocaleString()}},grid:{color:"#1e2530"}}}}})}catch(e){}
 }
 
 async function drawMiniChart(){
@@ -431,12 +434,6 @@ function onChainFilter(){
   populateFilters();
   drawLineChart();
   updateFavBtns();
-}
-
-function toggleChartMode(){
-  chartMode = chartMode=="value" ? "quantity" : "value";
-  document.getElementById("chartModeBtn").textContent = chartMode=="value" ? "💰" : "📊";
-  drawLineChart();
 }
 
 (async function(){var r=await fetch("/api/auth/me");if(r.ok)showDash()})();

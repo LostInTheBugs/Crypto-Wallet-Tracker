@@ -350,7 +350,29 @@ async def get_snapshots(token: str = Query(None), user=Depends(get_current_user)
             "SELECT total_usd, token_quantity, token_count, created_at FROM snapshots WHERE user_id=? AND token_symbol IS NULL ORDER BY created_at ASC",
             (user["id"],))
     rows = await cur.fetchall()
-    return [{"total_usd": r["total_usd"], "quantity": r["token_quantity"] or 0, "token_count": r["token_count"], "date": r["created_at"]} for r in rows]
+    # Compute cumulative cost basis per snapshot date
+    cost_cur = await db.execute(
+        "SELECT block_time, usd_value FROM transactions WHERE user_id=? ORDER BY block_time ASC",
+        (user["id"],))
+    txns = await cost_cur.fetchall()
+    # Build cumulative cost basis per snapshot date
+    result = []
+    txn_idx = 0
+    cum_cost = 0.0
+    for r in rows:
+        date_str = r["created_at"]
+        # Add transactions up to this snapshot date
+        while txn_idx < len(txns) and txns[txn_idx]["block_time"] <= date_str:
+            cum_cost += txns[txn_idx]["usd_value"] or 0
+            txn_idx += 1
+        result.append({
+            "total_usd": r["total_usd"],
+            "quantity": r["token_quantity"] or 0,
+            "token_count": r["token_count"],
+            "date": date_str,
+            "cost_basis": round(cum_cost, 2),
+        })
+    return result
 
 
 @app.get("/api/snapshots/tokens")
@@ -580,8 +602,8 @@ async def _backfill_wallet(user_id: int, address: str) -> dict:
                     (user_id, date_str, tok["symbol"]))
                 if not await cur2.fetchone() and tok_usd > 0.01:
                     await db.execute(
-                        "INSERT INTO snapshots (user_id, total_usd, token_count, token_symbol, chain) VALUES (?, ?, ?, ?, ?)",
-                        (user_id, round(tok_usd, 2), 1, tok["symbol"], "ethereum"))
+                        "INSERT INTO snapshots (user_id, total_usd, token_count, token_quantity, token_symbol, chain) VALUES (?, ?, ?, ?, ?, ?)",
+                        (user_id, round(tok_usd, 2), 1, round(tok["balance"], 6), tok["symbol"], "ethereum"))
                     new_snapshots += 1
             
             # Total snapshot
