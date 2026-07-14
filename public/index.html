@@ -95,7 +95,7 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
 <body>
 
 <div class="sidebar hidden" id="sidebar">
-  <h2>🪙 Tracker <span style="font-size:.65rem;color:var(--accent)">v2.1.4</span></h2>
+  <h2>🪙 Tracker <span style="font-size:.65rem;color:var(--accent)">v2.1.5</span></h2>
   <a href="#" class="active" onclick="switchPage('dashboard')" data-page="dashboard">📊 <span>Dashboard</span></a>
   <a href="#" onclick="switchPage('stats')" data-page="stats">📈 <span>Statistiques</span></a>
   <a href="#" onclick="switchPage('tokens')" data-page="tokens">📋 <span>Détail tokens</span></a>
@@ -281,11 +281,12 @@ async function addWallet(){var addr=document.getElementById("walletAddr").value.
   document.getElementById("importText").textContent="Scan des blockchains...";
   var poll=setInterval(async function(){
     try{var pr=await fetch("/api/import/progress");var p=await pr.json();
+      if(p.stage=="idle"){clearInterval(poll);document.getElementById("importModal").classList.add("hidden");return}
       if(p.stage=="fetch"){document.getElementById("importText").textContent="Scan blockchain "+p.done+"/"+p.total;document.getElementById("importBar").style.width=(p.done/p.total*40)+"%"}
       else if(p.stage=="enrich"){document.getElementById("importText").textContent="Prix historiques...";document.getElementById("importBar").style.width=(40+Math.min(p.done/10,60))+"%"}
       else if(p.stage=="done"){clearInterval(poll);document.getElementById("importBar").style.width="100%";document.getElementById("importTitle").textContent="✅ Import terminé";document.getElementById("importText").textContent=p.done+" transactions";
         setTimeout(function(){document.getElementById("importModal").classList.add("hidden");loadWallets()},1500)}
-    }catch(e){}
+    }catch(e){clearInterval(poll);document.getElementById("importModal").classList.add("hidden")}
   },800);
   await loadWallets();if(currentPage=="wallets")renderWalletPage()}
 
