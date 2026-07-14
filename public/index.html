@@ -205,8 +205,8 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
 var LANG = localStorage.getItem("lang") || "fr";
 var T = {
   fr: {
-    dashboard: "📊 Dashboard", stats: "📈 Statistiques", tokens: "📋 Détail tokens",
-    wallets: "💼 Wallets", settings: "⚙️ Paramètres", logout: "Déconnexion",
+    dashboard: "Dashboard", stats: "Statistiques", tokens: "Détail tokens",
+    wallets: "Wallets", settings: "Paramètres", logout: "Déconnexion",
     login: "Connexion", register: "Créer un compte", loginBtn: "Se connecter",
     registerBtn: "Créer le compte", username: "Nom d'utilisateur", password: "Mot de passe",
     addWallet: "Ajouter", invalidAddr: "Adresse invalide", noWallet: "Aucun wallet",
@@ -224,8 +224,8 @@ var T = {
     verCheckError: "❌ Impossible de vérifier",
   },
   en: {
-    dashboard: "📊 Dashboard", stats: "📈 Statistics", tokens: "📋 Token Details",
-    wallets: "💼 Wallets", settings: "⚙️ Settings", logout: "Logout",
+    dashboard: "Dashboard", stats: "Statistics", tokens: "Token Details",
+    wallets: "Wallets", settings: "Settings", logout: "Logout",
     login: "Login", register: "Register", loginBtn: "Login",
     registerBtn: "Create Account", username: "Username", password: "Password",
     addWallet: "Add", invalidAddr: "Invalid address", noWallet: "No wallets",
@@ -276,7 +276,8 @@ function switchPage(page) {
   currentPage = page;
   document.querySelectorAll(".sidebar a").forEach(function(a){ a.classList.remove("active"); });
   document.querySelector('[data-page="'+page+'"]').classList.add("active");
-  document.getElementById("pageTitle").innerHTML = t(page);
+  var titles = {dashboard:"📊 "+t("dashboard"),stats:"📈 "+t("stats"),tokens:"📋 "+t("tokens"),wallets:"💼 "+t("wallets"),settings:"⚙️ "+t("settings")};
+  document.getElementById("pageTitle").innerHTML = titles[page] || t(page);
   document.getElementById("pageDashboard").classList.toggle("hidden", page!="dashboard");
   document.getElementById("pageStats").classList.toggle("hidden", page!="stats");
   document.getElementById("pageTokens").classList.toggle("hidden", page!="tokens");
