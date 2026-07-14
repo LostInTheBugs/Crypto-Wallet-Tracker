@@ -177,6 +177,7 @@ async def add_wallet(request: Request, user=Depends(get_current_user), db=Depend
     await db.commit()
     # Auto-backfill in background
     asyncio.create_task(_backfill_wallet(user["id"], address))
+    asyncio.create_task(_fetch_transactions_for_wallet(user["id"], address))
     return {"ok": True}
 
 
@@ -338,6 +339,90 @@ async def backfill_snapshots(user=Depends(get_current_user), db=Depends(get_db))
         raise HTTPException(400, "Aucun wallet")
     result = await _backfill_wallet(user["id"], wallet_rows[0]["address"])
     return result
+
+
+# ── Transactions & Real History ─────────────────────────────────
+
+@app.post("/api/transactions/fetch")
+async def fetch_transactions(user=Depends(get_current_user), db=Depends(get_db)):
+    """Fetch all token transfers for all user wallets from Blockscout."""
+    cur = await db.execute("SELECT address, label FROM wallets WHERE user_id=?", (user["id"],))
+    wallets_list = await cur.fetchall()
+    if not wallets_list:
+        raise HTTPException(400, "Aucun wallet")
+
+    total_tx = 0
+    for w in wallets_list:
+        total_tx += await _fetch_transactions_for_wallet(user["id"], w["address"])
+    await db.commit()
+    return {"ok": True, "transactions_fetched": total_tx}
+
+
+async def _fetch_transactions_for_wallet(user_id: int, address: str) -> int:
+    """Fetch token transfers for one wallet, return count of new transactions."""
+    total_tx = 0
+    for chain, host in CHAINS.items():
+        try:
+            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as bc:
+                url = f"https://{host}/api/v2/addresses/{address}/token-transfers"
+                params = {"type": "ERC-20,ERC-721,ERC-1155"}
+                resp = await bc.get(url, params=params)
+                if resp.status_code != 200: continue
+                data = resp.json()
+                async with aiosqlite.connect(DB_PATH) as db:
+                    for item in data.get("items", []):
+                        token = item.get("token") or {}
+                        tx_hash = item.get("tx_hash", "")
+                        cur2 = await db.execute("SELECT id FROM transactions WHERE tx_hash=? AND user_id=?", (tx_hash, user_id))
+                        if await cur2.fetchone(): continue
+                        try:
+                            amount = int(item.get("total", {}).get("value", "0") or "0") / (10 ** (int(token.get("decimals") or 18)))
+                        except:
+                            amount = 0
+                        if amount == 0: continue
+                        symbol = token.get("symbol", "?")
+                        name = token.get("name", "Unknown")
+                        ts = item.get("timestamp", "")
+                        await db.execute(
+                            "INSERT INTO transactions (user_id, wallet_address, token_symbol, token_name, amount, chain, tx_hash, block_time) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                            (user_id, address, symbol, name, amount, chain, tx_hash, ts[:19] if ts else ""))
+                        total_tx += 1
+                    await db.commit()
+        except Exception:
+            continue
+    return total_tx
+
+
+@app.post("/api/transactions/enrich")
+async def enrich_transactions(user=Depends(get_current_user), db=Depends(get_db)):
+    """Add CoinGecko historical prices to stored transactions."""
+    cur = await db.execute("SELECT id, token_symbol, block_time FROM transactions WHERE user_id=? AND usd_price=0 ORDER BY block_time", (user["id"],))
+    rows = await cur.fetchall()
+    if not rows:
+        return {"ok": True, "enriched": 0}
+
+    count = 0
+    async with httpx.AsyncClient(timeout=30) as cg:
+        for r in rows:
+            cg_id = SYMBOL_TO_CG.get(r["token_symbol"].lower())
+            if not cg_id: continue
+            try:
+                ts = _time.mktime(_time.strptime(r["block_time"][:10], "%Y-%m-%d"))
+                url = f"https://api.coingecko.com/api/v3/coins/{cg_id}/history"
+                params = {"date": r["block_time"][:10].replace("-", "-"), "localization": "false"}
+                resp = await cg.get(url, params=params)
+                if resp.status_code == 200:
+                    price = resp.json().get("market_data", {}).get("current_price", {}).get("usd", 0)
+                    if price:
+                        cur2 = await db.execute("SELECT amount FROM transactions WHERE id=?", (r["id"],))
+                        tx = await cur2.fetchone()
+                        usd_val = tx["amount"] * price if tx else 0
+                        await db.execute("UPDATE transactions SET usd_price=?, usd_value=? WHERE id=?", (price, round(usd_val, 2), r["id"]))
+                        count += 1
+            except Exception:
+                continue
+    await db.commit()
+    return {"ok": True, "enriched": count}
 
 
 async def _backfill_wallet(user_id: int, address: str) -> dict:
