@@ -543,16 +543,16 @@ async def _fetch_defillama_batch(mapped_syms: dict, from_ts: int, to_ts: int) ->
     syms_list = list(mapped_syms.items())  # [(sym, cg_id), ...]
     
     # Build batches of up to 10 tokens per call
-    for i in range(0, len(syms_list), 10):
-        batch = syms_list[i:i+10]
+    for i in range(0, len(syms_list), 5):
+        batch = syms_list[i:i+5]
         ids = ",".join(f"coingecko:{cg_id}" for _, cg_id in batch)
-        span_days = (to_ts - from_ts) // 86400 + 1
+        max_span = max(10, 500 // len(batch))  # DefiLlama limit: 500 points total
         
-        # Split into 200-day windows (DefiLlama limit ~200 points)
+        # Split into windows respecting the 500-point limit
         all_points = {}  # {sym: {ts_sec: price}}
         window_start = from_ts
         while window_start < to_ts:
-            window_span = min(200, (to_ts - window_start) // 86400 + 1)
+            window_span = min(max_span, (to_ts - window_start) // 86400 + 1)
             url = f"https://coins.llama.fi/chart/{ids}?start={window_start}&span={window_span}&period=1d"
             
             for attempt in range(3):
@@ -585,7 +585,7 @@ async def _fetch_defillama_batch(mapped_syms: dict, from_ts: int, to_ts: int) ->
             else:
                 failed += 1
             
-            window_start += 200 * 86400
+            window_start += max_span * 86400
             if window_start < to_ts:
                 await asyncio.sleep(0.5)  # rate limit
         
