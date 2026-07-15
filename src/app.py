@@ -871,7 +871,7 @@ async def get_transactions(wallet: str = Query(None), chain: str = Query(None), 
     total = (await total_cur.fetchone())[0]
     # Fetch page
     cur = await db.execute(
-        f"SELECT id, wallet_address, token_symbol, token_name, amount, usd_price, usd_value, chain, tx_hash, block_time, direction, log_index FROM transactions WHERE {where} ORDER BY block_time DESC LIMIT ? OFFSET ?",
+        f"SELECT id, wallet_address, token_symbol, token_name, amount, usd_price, usd_value, chain, tx_hash, block_time, direction, log_index, gas_fee_usd FROM transactions WHERE {where} ORDER BY block_time DESC LIMIT ? OFFSET ?",
         tuple(params + [limit, offset]))
     rows = await cur.fetchall()
     items = [{
