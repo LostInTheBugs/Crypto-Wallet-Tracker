@@ -86,6 +86,15 @@ async def lifespan(app: FastAPI):
         except: pass
         try: await db.execute("CREATE INDEX IF NOT EXISTS idx_dh_wallet ON daily_history(wallet_address, date)")
         except: pass
+        # Price cache for DefiLlama
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS price_history (
+                token_symbol TEXT NOT NULL,
+                date TEXT NOT NULL,
+                price_usd REAL NOT NULL,
+                PRIMARY KEY(token_symbol, date)
+            )
+        """)
         # Migrations
         for col, typ in [("token_quantity", "REAL DEFAULT 0"), ("token_symbol", "TEXT DEFAULT NULL"),
                           ("chain", "TEXT DEFAULT NULL"), ("wallet_label", "TEXT DEFAULT NULL")]:
@@ -383,65 +392,87 @@ async def _fetch_transactions_for_wallet(user_id: int, address: str) -> int:
     return total_tx
 
 
-# ── Price enrichment: 1 call per token ───────────────────────────
+# ── Price enrichment: DefiLlama (primary) + CoinGecko (optional) ─
 
 async def _fetch_prices_per_token(user_id: int, wallet_address: str) -> dict:
-    """Fetch historical prices for ALL mapped tokens in this wallet.
-    Returns {token_symbol_lower: {timestamp_ms: price_usd}} and enriches transactions.
-    Always called before _rebuild_history so price series are fresh."""
-    global _CG_BACKOFF_UNTIL
+    """Fetch historical daily prices using DefiLlama API (free, no key).
+    Caches results in price_history table. Enriches transactions."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        # Get ALL distinct token symbols for this wallet (not just unpriced ones)
         cur = await db.execute(
             "SELECT DISTINCT LOWER(token_symbol) as sym FROM transactions WHERE user_id=? AND wallet_address=?",
             (user_id, wallet_address))
         symbols = [r["sym"] for r in await cur.fetchall()]
 
-    prices = {}
-    unmapped = []
-    now = int(_time.time())
+    prices = {}           # {sym_lower: {ts_ms: price_usd}}
+    unmapped = []         # tokens not in SYMBOL_TO_CG
+    degraded = []         # mapped tokens where API failed
+    api_calls_ok = 0
+    api_calls_failed = 0
 
-    # If CoinGecko is in backoff, skip all CG calls and use fallback
-    if _time.time() >= _CG_BACKOFF_UNTIL:
-        for sym_lower in symbols:
-            cg_id = SYMBOL_TO_CG.get(sym_lower)
-            if not cg_id:
-                unmapped.append(sym_lower.upper())
-                continue
+    # Separate mapped vs unmapped
+    mapped_syms = {}  # sym_lower → cg_id
+    for s in symbols:
+        cg_id = SYMBOL_TO_CG.get(s)
+        if cg_id:
+            mapped_syms[s] = cg_id
+        else:
+            unmapped.append(s.upper())
 
-            # Get earliest tx for this token
-            async with aiosqlite.connect(DB_PATH) as db:
-                db.row_factory = aiosqlite.Row
-                cur = await db.execute(
-                    "SELECT MIN(block_time) as earliest FROM transactions WHERE user_id=? AND wallet_address=? AND LOWER(token_symbol)=?",
-                    (user_id, wallet_address, sym_lower))
-                row = await cur.fetchone()
-            if not row or not row["earliest"]:
-                from_ts = now - 90 * 86400
-            else:
-                try:
-                    from_ts = int(_time.mktime(_time.strptime(row["earliest"][:19], "%Y-%m-%d %H:%M:%S"))) - 86400
-                except:
-                    from_ts = now - 365 * 86400
-
-            await _cg_rate_limit_wait()
+    if mapped_syms:
+        # Determine date range from earliest tx
+        now = int(_time.time())
+        async with aiosqlite.connect(DB_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT MIN(block_time) as earliest FROM transactions WHERE user_id=? AND wallet_address=?",
+                (user_id, wallet_address))
+            row = await cur.fetchone()
+        if row and row["earliest"]:
             try:
-                async with httpx.AsyncClient(timeout=45) as cg:
-                    url = f"https://api.coingecko.com/api/v3/coins/{cg_id}/market_chart/range"
-                    resp = await cg.get(url, params={"vs_currency": "usd", "from": from_ts, "to": now})
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        prices[sym_lower] = {p[0]: p[1] for p in data.get("prices", [])}
-                        await asyncio.sleep(3.0)
-                    elif resp.status_code == 429:
-                        _CG_BACKOFF_UNTIL = _time.time() + 600  # 10 min backoff
-                        await asyncio.sleep(5)
-                        break
-            except Exception:
-                continue
+                from_ts = int(_time.mktime(_time.strptime(row["earliest"][:19], "%Y-%m-%d %H:%M:%S"))) - 86400
+            except:
+                from_ts = now - 365 * 86400
+        else:
+            from_ts = now - 365 * 86400
 
-    # Enrich transactions using the fetched price series
+        # Try loading from cache first
+        for sym in list(mapped_syms.keys()):
+            cached = await _load_prices_from_cache(sym)
+            if cached:
+                prices[sym] = cached
+                del mapped_syms[sym]  # no need to fetch
+
+        # Fetch remaining tokens from DefiLlama in batches
+        if mapped_syms:
+            fetched_prices, ok, failed = await _fetch_defillama_batch(mapped_syms, from_ts, now)
+            api_calls_ok += ok
+            api_calls_failed += failed
+            for sym, p_dict in fetched_prices.items():
+                prices[sym] = p_dict
+                # Mark as degraded if API failed for this token
+                if not p_dict:
+                    degraded.append(sym.upper())
+            
+            # Try CoinGecko as fallback if API key is set
+            cg_key = os.environ.get("COINGECKO_API_KEY", "")
+            still_missing = {s: c for s, c in mapped_syms.items() if not prices.get(s)}
+            if cg_key and still_missing:
+                cg_prices, cg_ok, cg_failed = await _fetch_coingecko_batch(still_missing, from_ts, now, cg_key)
+                api_calls_ok += cg_ok
+                api_calls_failed += cg_failed
+                for sym, p_dict in cg_prices.items():
+                    if p_dict:
+                        prices[sym] = p_dict
+                    else:
+                        degraded.append(sym.upper())
+
+        # Any mapped token still without prices → degraded
+        for sym in mapped_syms:
+            if not prices.get(sym):
+                degraded.append(sym.upper())
+
+    # Enrich transactions
     enriched = 0
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
@@ -464,25 +495,137 @@ async def _fetch_prices_per_token(user_id: int, wallet_address: str) -> dict:
                 enriched += 1
         await db.commit()
 
-    # Always supplement with current portfolio prices for any mapped tokens missing from CG
-    try:
-        async with httpx.AsyncClient(follow_redirects=True) as client:
-            results = await asyncio.gather(*[fetch_chain(client, c, h, wallet_address) for c, h in CHAINS.items()])
-        now_ms = int(_time.time() * 1000)
-        for r in results:
-            for t in r["tokens"]:
-                sym = t["symbol"].lower()
-                if SYMBOL_TO_CG.get(sym) and t["usd_price"] > 0:
-                    if sym not in prices:
-                        prices[sym] = {now_ms: t["usd_price"]}
-    except Exception:
-        pass
-
-    return {"enriched": enriched, "unmapped": unmapped, "prices": prices}
+    return {
+        "enriched": enriched, "unmapped": unmapped, "prices": prices,
+        "degraded": degraded,
+        "price_calls_ok": api_calls_ok, "price_calls_failed": api_calls_failed,
+    }
 
 
-_CG_LAST_CALL = 0.0
-_CG_BACKOFF_UNTIL = 0.0  # global: skip CG calls until this timestamp
+async def _load_prices_from_cache(sym_lower: str) -> dict:
+    """Load cached daily prices from price_history. Returns {ts_ms: price} or {}."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT date, price_usd FROM price_history WHERE token_symbol=? ORDER BY date ASC",
+            (sym_lower,))
+        rows = await cur.fetchall()
+    if not rows:
+        return {}
+    result = {}
+    for r in rows:
+        try:
+            ts = int(_time.mktime(_time.strptime(r["date"], "%Y-%m-%d"))) * 1000
+            result[ts] = r["price_usd"]
+        except:
+            pass
+    return result
+
+
+async def _save_prices_to_cache(sym_lower: str, prices: dict):
+    """Save daily prices to price_history (idempotent: INSERT OR REPLACE)."""
+    if not prices:
+        return
+    async with aiosqlite.connect(DB_PATH) as db:
+        for ts_ms, price in prices.items():
+            date_str = datetime.datetime.utcfromtimestamp(ts_ms / 1000).strftime("%Y-%m-%d")
+            await db.execute(
+                "INSERT OR REPLACE INTO price_history (token_symbol, date, price_usd) VALUES (?, ?, ?)",
+                (sym_lower, date_str, price))
+        await db.commit()
+
+
+async def _fetch_defillama_batch(mapped_syms: dict, from_ts: int, to_ts: int) -> tuple:
+    """Fetch prices from DefiLlama in batches. Returns (prices_dict, calls_ok, calls_failed)."""
+    prices = {}
+    ok = 0
+    failed = 0
+    syms_list = list(mapped_syms.items())  # [(sym, cg_id), ...]
+    
+    # Build batches of up to 10 tokens per call
+    for i in range(0, len(syms_list), 10):
+        batch = syms_list[i:i+10]
+        ids = ",".join(f"coingecko:{cg_id}" for _, cg_id in batch)
+        span_days = (to_ts - from_ts) // 86400 + 1
+        
+        # Split into 200-day windows (DefiLlama limit ~200 points)
+        all_points = {}  # {sym: {ts_sec: price}}
+        window_start = from_ts
+        while window_start < to_ts:
+            window_span = min(200, (to_ts - window_start) // 86400 + 1)
+            url = f"https://coins.llama.fi/chart/{ids}?start={window_start}&span={window_span}&period=1d"
+            
+            for attempt in range(3):
+                try:
+                    async with httpx.AsyncClient(timeout=30) as c:
+                        resp = await c.get(url)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        coins = data.get("coins", {})
+                        for coin_id, coin_data in coins.items():
+                            sym = None
+                            for s, cg in batch:
+                                if f"coingecko:{cg}" == coin_id:
+                                    sym = s
+                                    break
+                            if sym:
+                                if sym not in all_points:
+                                    all_points[sym] = {}
+                                for pt in coin_data.get("prices", []):
+                                    # DefiLlama returns timestamps in seconds
+                                    all_points[sym][pt["timestamp"] * 1000] = pt["price"]
+                        ok += 1
+                        break
+                    elif resp.status_code == 429:
+                        await asyncio.sleep(2 ** attempt * 2)
+                    else:
+                        await asyncio.sleep(2 ** attempt)
+                except Exception:
+                    await asyncio.sleep(2 ** attempt)
+            else:
+                failed += 1
+            
+            window_start += 200 * 86400
+            if window_start < to_ts:
+                await asyncio.sleep(0.5)  # rate limit
+        
+        # Save to cache
+        for sym, pts in all_points.items():
+            await _save_prices_to_cache(sym, pts)
+            prices[sym] = pts
+    
+    return prices, ok, failed
+
+
+async def _fetch_coingecko_batch(mapped_syms: dict, from_ts: int, to_ts: int, api_key: str) -> tuple:
+    """Fallback: CoinGecko if API key is available."""
+    prices = {}
+    ok = 0
+    failed = 0
+    for sym_lower, cg_id in mapped_syms.items():
+        for attempt in range(3):
+            try:
+                async with httpx.AsyncClient(timeout=45) as cg:
+                    url = f"https://api.coingecko.com/api/v3/coins/{cg_id}/market_chart/range"
+                    resp = await cg.get(url, params={"vs_currency": "usd", "from": from_ts, "to": to_ts},
+                                        headers={"x-cg-demo-api-key": api_key})
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        prices[sym_lower] = {p[0]: p[1] for p in data.get("prices", [])}
+                        await _save_prices_to_cache(sym_lower, prices[sym_lower])
+                        ok += 1
+                        break
+                    elif resp.status_code == 429:
+                        await asyncio.sleep(2 ** attempt * 5)
+                    else:
+                        await asyncio.sleep(2 ** attempt)
+            except Exception:
+                await asyncio.sleep(2 ** attempt)
+        else:
+            prices[sym_lower] = {}
+            failed += 1
+        await asyncio.sleep(1.0)  # rate limit
+    return prices, ok, failed
 
 async def _cg_rate_limit_wait():
     global _CG_LAST_CALL
@@ -517,7 +660,10 @@ async def _rebuild_history(user_id: int, wallet_address: str):
     # 1. Fetch prices per token (ALL mapped tokens, returns price series)
     price_result = await _fetch_prices_per_token(user_id, wallet_address)
     unmapped = set(u.lower() for u in price_result.get("unmapped", []))
-    price_series = price_result.get("prices", {})  # {sym_lower: {ts_ms: price}}
+    degraded = set(d.lower() for d in price_result.get("degraded", []))
+    price_series = price_result.get("prices", {})
+    # Exclude both unmapped AND degraded tokens from value/cost computation
+    excluded = unmapped | degraded  # {sym_lower: {ts_ms: price}}
 
     # 2. Preload all transactions + sort price keys once
     async with aiosqlite.connect(DB_PATH) as db:
@@ -565,8 +711,8 @@ async def _rebuild_history(user_id: int, wallet_address: str):
         amount = tx["amount"] or 0
         price = tx["usd_price"] or 0
 
-        if sym in unmapped or (not SYMBOL_TO_CG.get(sym) and price == 0):
-            unmapped.add(sym)
+        if sym in excluded or (not SYMBOL_TO_CG.get(sym) and price == 0):
+            excluded.add(sym)
             continue
 
         if date not in daily_deltas:
@@ -615,7 +761,7 @@ async def _rebuild_history(user_id: int, wallet_address: str):
         # Compute daily value: sum(balance × price_at_date)
         value = 0.0
         for sym, bal in balances.items():
-            if bal <= 0 or sym in unmapped:
+            if bal <= 0 or sym in excluded:
                 continue
             if not SYMBOL_TO_CG.get(sym):
                 continue
@@ -645,7 +791,11 @@ async def _rebuild_history(user_id: int, wallet_address: str):
                 row)
         await db.commit()
 
-    return {"ok": True, "days": len(daily_rows), "unmapped_tokens": sorted(unmapped)}
+    return {"ok": True, "days": len(daily_rows), "unmapped_tokens": sorted(unmapped),
+            "degraded_tokens": sorted(degraded),
+            "price_calls_ok": price_result.get("price_calls_ok", 0),
+            "price_calls_failed": price_result.get("price_calls_failed", 0),
+            "tokens_with_series": len(price_series)}
 
 
 # ── Import pipeline ──────────────────────────────────────────────
@@ -783,9 +933,21 @@ async def backfill_snapshots(user=Depends(get_current_user), db=Depends(get_db))
     # Aggregate
     total_days = sum(r.get("days", 0) for r in results)
     all_unmapped = []
+    all_degraded = []
+    total_ok = 0
+    total_failed = 0
+    total_series = 0
     for r in results:
         all_unmapped.extend(r.get("unmapped_tokens", []))
-    return {"ok": True, "days": total_days, "unmapped_tokens": list(set(all_unmapped))}
+        all_degraded.extend(r.get("degraded_tokens", []))
+        total_ok += r.get("price_calls_ok", 0)
+        total_failed += r.get("price_calls_failed", 0)
+        total_series += r.get("tokens_with_series", 0)
+    return {"ok": True, "days": total_days,
+            "unmapped_tokens": sorted(set(all_unmapped)),
+            "degraded_tokens": sorted(set(all_degraded)),
+            "price_calls_ok": total_ok, "price_calls_failed": total_failed,
+            "tokens_with_series": total_series}
 
 
 # ── PNL endpoint ─────────────────────────────────────────────────

@@ -153,6 +153,7 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
     </div>
 
     <div id="pageStats" class="hidden">
+      <div id="tokenWarning" style="display:none;background:#332200;border:1px solid #f0c040;border-radius:8px;padding:10px 16px;margin-bottom:12px;font-size:.8rem;color:#f0c040"></div>
       <div class="card"><h2>📈 Évolution du portefeuille
         <span style="display:inline-flex;gap:6px;margin-left:12px;align-items:center">
           <select id="chartWallet" onchange="drawLineChart()" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:2px 6px;border-radius:4px;font-size:.65rem"><option value="">Tous wallets</option></select>
@@ -196,7 +197,7 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>📦 Version</h2>
-        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.5.1</strong></p>
+        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.6.0</strong></p>
         <p id="verStatus" style="font-size:.85rem"></p>
       </div>
       <div class="card" style="margin-bottom:16px">
@@ -401,7 +402,10 @@ async function addWallet(){var addr=document.getElementById("walletAddr").value.
         document.getElementById("importBar").style.width=(25+Math.min((p.in_done+p.out_done)/total*75,75))+"%";
       }
       else if(p.stage=="done"){clearInterval(poll);document.getElementById("importBar").style.width="100%";document.getElementById("importTitle").textContent="✅ Import terminé";document.getElementById("importText").textContent=p.done+" transactions";
-        setTimeout(function(){document.getElementById("importModal").classList.add("hidden");loadWallets()},1500)}
+        setTimeout(function(){document.getElementById("importModal").classList.add("hidden");loadWallets()},1500);
+        // Show token warning if any
+        if(p.unmapped&&p.unmapped.length)showTokenWarning(p.unmapped,"non mappés");
+        if(p.degraded&&p.degraded.length)showTokenWarning(p.degraded,"sans prix historique");}
     }catch(e){clearInterval(poll);document.getElementById("importModal").classList.add("hidden")}
   },800);
   await loadWallets();if(currentPage=="wallets")renderWalletPage()}
@@ -649,6 +653,15 @@ async function renderPnlCards(){
       '<div class="stat-card"><div class="label">PNL Total</div><div class="value" style="color:'+colorPnl+'">'+(pnlVal>=0?"+":"")+sym+pnlVal.toLocaleString()+'</div></div>'+
       '<div class="stat-card"><div class="label">PNL 24h</div><div class="value" style="color:'+colorDay+'">'+(pnlDay>=0?"+":"")+sym+pnlDay.toLocaleString()+'</div></div>';
   }catch(e){}
+}
+
+// ── Token warning banner ──────────────────────────────────
+function showTokenWarning(tokens, reason){
+  var el=document.getElementById("tokenWarning");
+  var list=tokens.slice(0,10).map(function(t){return t.length>30?t.slice(0,28)+"…":t}).join(", ");
+  if(tokens.length>10)list+=" +"+(tokens.length-10)+" autres";
+  el.innerHTML="⚠️ "+tokens.length+" token(s) "+reason+" exclus des courbes : "+list;
+  el.style.display="block";
 }
 
 (async function(){var r=await fetch("/api/auth/me");if(r.ok)showDash()})();
