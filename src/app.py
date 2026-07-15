@@ -102,6 +102,20 @@ async def lifespan(app: FastAPI):
             except: pass
         try: await db.execute("ALTER TABLE transactions ADD COLUMN direction TEXT DEFAULT 'in'")
         except: pass
+        try: await db.execute("ALTER TABLE transactions ADD COLUMN log_index INTEGER DEFAULT 0")
+        except: pass
+        try: await db.execute("CREATE INDEX IF NOT EXISTS idx_tx_dedup ON transactions(tx_hash, log_index, user_id)")
+        except: pass
+        # User API keys
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS user_api_keys (
+                user_id INTEGER NOT NULL,
+                provider TEXT NOT NULL,
+                api_key TEXT NOT NULL,
+                PRIMARY KEY(user_id, provider),
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            )
+        """)
         # Purge old polluted snapshot data
         await db.execute("DELETE FROM snapshots")
         await db.commit()
@@ -350,13 +364,15 @@ _last_tx_refresh = {}
 
 
 async def _fetch_transactions_for_wallet(user_id: int, address: str) -> int:
+    """Fetch token transfers with pagination. Dedup on (tx_hash, log_index, user_id)."""
     total_tx = 0
     for chain, host in CHAINS.items():
         try:
             async with httpx.AsyncClient(timeout=30, follow_redirects=True) as bc:
                 url = f"https://{host}/api/v2/addresses/{address}/token-transfers"
                 params: dict = {"type": "ERC-20,ERC-721,ERC-1155"}
-                for page in range(5):
+                page_count = 0
+                while page_count < 100:  # safety cap
                     resp = await bc.get(url, params=params)
                     if resp.status_code != 200: break
                     data = resp.json()
@@ -366,8 +382,12 @@ async def _fetch_transactions_for_wallet(user_id: int, address: str) -> int:
                         for item in items:
                             token = item.get("token") or {}
                             tx_hash = item.get("transaction_hash") or item.get("tx_hash", "")
+                            log_index = int(item.get("log_index") or 0)
+                            # Dedup on (tx_hash, log_index, user_id)
                             if tx_hash:
-                                cur2 = await db.execute("SELECT id FROM transactions WHERE tx_hash=? AND user_id=?", (tx_hash, user_id))
+                                cur2 = await db.execute(
+                                    "SELECT id FROM transactions WHERE tx_hash=? AND log_index=? AND user_id=?",
+                                    (tx_hash, log_index, user_id))
                                 if await cur2.fetchone(): continue
                             try:
                                 amount = int(item.get("total", {}).get("value", "0") or "0") / (10 ** (int(token.get("decimals") or 18)))
@@ -380,13 +400,14 @@ async def _fetch_transactions_for_wallet(user_id: int, address: str) -> int:
                             to_addr = (item.get("to") or {}).get("hash", "")
                             direction = "in" if to_addr.lower() == address.lower() else "out"
                             await db.execute(
-                                "INSERT INTO transactions (user_id, wallet_address, token_symbol, token_name, amount, chain, tx_hash, block_time, direction) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                                (user_id, address, symbol, name, amount, chain, tx_hash, ts[:19].replace("T", " ") if ts else "", direction))
+                                "INSERT INTO transactions (user_id, wallet_address, token_symbol, token_name, amount, chain, tx_hash, block_time, direction, log_index) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                (user_id, address, symbol, name, amount, chain, tx_hash, ts[:19].replace("T", " ") if ts else "", direction, log_index))
                             total_tx += 1
                         await db.commit()
                     nxt = data.get("next_page_params")
                     if not nxt: break
                     params = {**params, **nxt}
+                    page_count += 1
         except Exception:
             continue
     return total_tx
@@ -455,7 +476,7 @@ async def _fetch_prices_per_token(user_id: int, wallet_address: str) -> dict:
                     degraded.append(sym.upper())
             
             # Try CoinGecko as fallback if API key is set
-            cg_key = os.environ.get("COINGECKO_API_KEY", "")
+            cg_key = await _get_user_cg_key(user_id)
             still_missing = {s: c for s, c in mapped_syms.items() if not prices.get(s)}
             if cg_key and still_missing:
                 cg_prices, cg_ok, cg_failed = await _fetch_coingecko_batch(still_missing, from_ts, now, cg_key)
@@ -932,22 +953,47 @@ async def backfill_snapshots(user=Depends(get_current_user), db=Depends(get_db))
         results.append(result)
     # Aggregate
     total_days = sum(r.get("days", 0) for r in results)
-    all_unmapped = []
-    all_degraded = []
-    total_ok = 0
-    total_failed = 0
-    total_series = 0
+    all_unmapped, all_degraded = [], []
+    total_ok = total_failed = total_series = 0
     for r in results:
         all_unmapped.extend(r.get("unmapped_tokens", []))
         all_degraded.extend(r.get("degraded_tokens", []))
         total_ok += r.get("price_calls_ok", 0)
         total_failed += r.get("price_calls_failed", 0)
         total_series += r.get("tokens_with_series", 0)
-    return {"ok": True, "days": total_days,
+    
+    # Reconciliation: compare last history value with portfolio
+    reconciliation = None
+    try:
+        cur2 = await db.execute(
+            "SELECT value_usd FROM daily_history WHERE user_id=? AND token_symbol IS NULL ORDER BY date DESC LIMIT 1",
+            (user["id"],))
+        hist_row = await cur2.fetchone()
+        hist_value = hist_row["value_usd"] if hist_row else 0
+        # Portfolio value for mapped tokens only
+        address = wallet_rows[0]["address"]
+        data = await _compute_portfolio(address)
+        port_value = 0.0
+        excluded = set(u.lower() for u in all_unmapped) | set(d.lower() for d in all_degraded)
+        for t in data["tokens"]:
+            if t["symbol"].lower() not in excluded and SYMBOL_TO_CG.get(t["symbol"].lower()):
+                port_value += t["usd_value"]
+        if hist_value > 0:
+            delta_pct = round((hist_value - port_value) / port_value * 100, 1)
+            reconciliation = {"history_last_value": round(hist_value, 2),
+                            "portfolio_mapped_value": round(port_value, 2),
+                            "delta_pct": delta_pct}
+    except Exception:
+        pass
+    
+    resp = {"ok": True, "days": total_days,
             "unmapped_tokens": sorted(set(all_unmapped)),
             "degraded_tokens": sorted(set(all_degraded)),
             "price_calls_ok": total_ok, "price_calls_failed": total_failed,
             "tokens_with_series": total_series}
+    if reconciliation:
+        resp["reconciliation"] = reconciliation
+    return resp
 
 
 # ── PNL endpoint ─────────────────────────────────────────────────
@@ -1068,7 +1114,84 @@ async def latest_version():
     return {"tag": ""}
 
 
-# ── Frontend ─────────────────────────────────────────────────────
+# ── API Keys (per user) ─────────────────────────────────────────
+
+async def _get_user_cg_key(user_id: int) -> str:
+    """Get CoinGecko API key for user, fallback to env var."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT api_key FROM user_api_keys WHERE user_id=? AND provider='coingecko'", (user_id,))
+        row = await cur.fetchone()
+    if row:
+        return row["api_key"]
+    return os.environ.get("COINGECKO_API_KEY", "")
+
+
+@app.get("/api/settings/keys")
+async def list_api_keys(user=Depends(get_current_user), db=Depends(get_db)):
+    providers = ["coingecko", "alchemy"]
+    result = []
+    for p in providers:
+        cur = await db.execute("SELECT api_key FROM user_api_keys WHERE user_id=? AND provider=?", (user["id"], p))
+        row = await cur.fetchone()
+        if row:
+            masked = "..." + row["api_key"][-4:] if len(row["api_key"]) > 4 else "***"
+            result.append({"provider": p, "configured": True, "masked": masked})
+        else:
+            result.append({"provider": p, "configured": False, "masked": None})
+    return result
+
+
+@app.put("/api/settings/keys/{provider}")
+async def set_api_key(provider: str, request: Request, user=Depends(get_current_user), db=Depends(get_db)):
+    data = await request.json()
+    api_key = (data.get("api_key") or "").strip()
+    if not api_key:
+        raise HTTPException(400, "Clé API requise")
+    
+    # Validate
+    valid, msg = await _validate_api_key(provider, api_key)
+    if not valid:
+        raise HTTPException(400, msg)
+    
+    await db.execute(
+        "INSERT OR REPLACE INTO user_api_keys (user_id, provider, api_key) VALUES (?, ?, ?)",
+        (user["id"], provider, api_key))
+    await db.commit()
+    return {"ok": True, "provider": provider, "configured": True}
+
+
+@app.delete("/api/settings/keys/{provider}")
+async def delete_api_key(provider: str, user=Depends(get_current_user), db=Depends(get_db)):
+    await db.execute("DELETE FROM user_api_keys WHERE user_id=? AND provider=?", (user["id"], provider))
+    await db.commit()
+    return {"ok": True, "provider": provider, "configured": False}
+
+
+async def _validate_api_key(provider: str, api_key: str) -> tuple:
+    """Validate API key against provider. Returns (is_valid, message)."""
+    if provider == "coingecko":
+        try:
+            async with httpx.AsyncClient(timeout=10) as c:
+                r = await c.get("https://api.coingecko.com/api/v3/ping",
+                                headers={"x-cg-demo-api-key": api_key})
+                if r.status_code == 200:
+                    return True, "Clé CoinGecko valide"
+                return False, f"CoinGecko: HTTP {r.status_code}"
+        except Exception as e:
+            return False, f"CoinGecko: {str(e)[:80]}"
+    elif provider == "alchemy":
+        try:
+            async with httpx.AsyncClient(timeout=10) as c:
+                r = await c.post(f"https://eth-mainnet.g.alchemy.com/v2/{api_key}",
+                                json={"jsonrpc": "2.0", "id": 1, "method": "eth_blockNumber", "params": []})
+                data = r.json()
+                if "result" in data:
+                    return True, "Clé Alchemy valide"
+                return False, "Alchemy: réponse invalide"
+        except Exception as e:
+            return False, f"Alchemy: {str(e)[:80]}"
+    return False, "Provider inconnu"
 
 @app.get("/")
 async def index():

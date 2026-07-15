@@ -197,8 +197,12 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>📦 Version</h2>
-        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.6.0</strong></p>
+        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.7.0</strong></p>
         <p id="verStatus" style="font-size:.85rem"></p>
+      </div>
+      <div class="card" style="margin-bottom:16px">
+        <h2>🔑 Clés API</h2>
+        <div id="apiKeysSection"></div>
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>🔒 Mot de passe</h2>
@@ -564,8 +568,8 @@ function onChainFilter(){
 function renderSettingsPage(){
   document.getElementById("setLang").value = LANG;
   document.getElementById("setCurrency").value = currency;
-  // Don't overwrite verCurrent — it's set in HTML
   checkVersion();
+  renderApiKeys();
 }
 
 async function checkVersion(){
@@ -662,6 +666,69 @@ function showTokenWarning(tokens, reason){
   if(tokens.length>10)list+=" +"+(tokens.length-10)+" autres";
   el.innerHTML="⚠️ "+tokens.length+" token(s) "+reason+" exclus des courbes : "+list;
   el.style.display="block";
+}
+
+function showReconWarning(rec){
+  if (!rec || Math.abs(rec.delta_pct) < 15) return;
+  var el=document.getElementById("tokenWarning");
+  var dir=rec.delta_pct>0?"supérieure":"inférieure";
+  el.innerHTML=(el.innerHTML||"")+" ⚠️ L'historique ("+(rec.history_last_value||0)+"$) est "+dir+" de "+(Math.abs(rec.delta_pct))+"% aux soldes réels mappés ("+(rec.portfolio_mapped_value||0)+"$). Réimport conseillé.";
+  el.style.display="block";
+}
+
+// ── API Keys ──────────────────────────────────────────────
+async function renderApiKeys(){
+  try {
+    var r = await fetch("/api/settings/keys");
+    var keys = await r.json();
+    var html = "";
+    for (var i=0;i<keys.length;i++){
+      var k = keys[i];
+      var name = k.provider.charAt(0).toUpperCase()+k.provider.slice(1);
+      html += '<div style="margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--border)">';
+      html += '<strong>'+name+'</strong> ';
+      html += k.configured ? '<span style="color:#40c463;font-size:.8rem">✓ Configurée ('+k.masked+')</span>' : '<span style="color:#6e7681;font-size:.8rem">Non configurée</span>';
+      html += '<div style="display:flex;gap:8px;margin-top:6px">';
+      html += '<input type="password" id="key_'+k.provider+'" placeholder="Nouvelle clé API" style="flex:1;max-width:300px">';
+      html += '<button class="btn btn-blue" onclick="saveApiKey(\''+k.provider+'\')">Enregistrer</button>';
+      if (k.configured) html += '<button class="btn btn-red" onclick="deleteApiKey(\''+k.provider+'\')">Supprimer</button>';
+      html += '</div><div id="keyMsg_'+k.provider+'" style="font-size:.8rem;margin-top:4px"></div></div>';
+    }
+    document.getElementById("apiKeysSection").innerHTML = html;
+  } catch(e) {}
+}
+
+async function saveApiKey(provider){
+  var el = document.getElementById("key_"+provider);
+  var key = el.value.trim();
+  if (!key) return;
+  var msg = document.getElementById("keyMsg_"+provider);
+  msg.textContent = "Validation...";
+  msg.style.color = "#f0c040";
+  try {
+    var r = await fetch("/api/settings/keys/"+provider, {method:"PUT", headers:{"Content-Type":"application/json"}, body:JSON.stringify({api_key:key})});
+    var d = await r.json();
+    if (r.ok) {
+      msg.textContent = "✅ "+d.msg||"Clé enregistrée";
+      msg.style.color = "#40c463";
+      el.value = "";
+      renderApiKeys();
+    } else {
+      msg.textContent = "❌ "+(d.detail||"Erreur");
+      msg.style.color = "#f85149";
+    }
+  } catch(e) {
+    msg.textContent = "❌ Erreur réseau";
+    msg.style.color = "#f85149";
+  }
+}
+
+async function deleteApiKey(provider){
+  if (!confirm("Supprimer la clé "+provider+" ?")) return;
+  try {
+    await fetch("/api/settings/keys/"+provider, {method:"DELETE"});
+    renderApiKeys();
+  } catch(e) {}
 }
 
 (async function(){var r=await fetch("/api/auth/me");if(r.ok)showDash()})();
