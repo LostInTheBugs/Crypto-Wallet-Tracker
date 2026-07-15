@@ -389,6 +389,7 @@ async def _fetch_prices_per_token(user_id: int, wallet_address: str) -> dict:
     """Fetch historical prices for ALL mapped tokens in this wallet.
     Returns {token_symbol_lower: {timestamp_ms: price_usd}} and enriches transactions.
     Always called before _rebuild_history so price series are fresh."""
+    global _CG_BACKOFF_UNTIL
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         # Get ALL distinct token symbols for this wallet (not just unpriced ones)
@@ -434,7 +435,6 @@ async def _fetch_prices_per_token(user_id: int, wallet_address: str) -> dict:
                         prices[sym_lower] = {p[0]: p[1] for p in data.get("prices", [])}
                         await asyncio.sleep(3.0)
                     elif resp.status_code == 429:
-                        global _CG_BACKOFF_UNTIL
                         _CG_BACKOFF_UNTIL = _time.time() + 600  # 10 min backoff
                         await asyncio.sleep(5)
                         break
