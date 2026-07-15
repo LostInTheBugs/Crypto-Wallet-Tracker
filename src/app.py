@@ -843,6 +843,46 @@ async def import_progress(user=Depends(get_current_user)):
     return _import_progress.get(user["id"], {"stage": "idle", "done": 0, "total": 0})
 
 
+@app.get("/api/transactions")
+async def get_transactions(wallet: str = Query(None), chain: str = Query(None), token: str = Query(None),
+                           direction: str = Query(None), limit: int = Query(100), offset: int = Query(0),
+                           user=Depends(get_current_user), db=Depends(get_db)):
+    conditions = ["user_id=?", str(user["id"])]
+    params = [user["id"]]
+    if wallet:
+        conditions.append("wallet_address=?")
+        params.append(wallet)
+    if chain:
+        conditions.append("chain=?")
+        params.append(chain)
+    if token:
+        conditions.append("LOWER(token_symbol)=?")
+        params.append(token.lower())
+    if direction and direction in ("in", "out"):
+        conditions.append("direction=?")
+        params.append(direction)
+    where = " AND ".join(conditions)
+    # Count total
+    total_cur = await db.execute(f"SELECT COUNT(*) FROM transactions WHERE {where}", tuple(params))
+    total = (await total_cur.fetchone())[0]
+    # Fetch page
+    cur = await db.execute(
+        f"SELECT id, wallet_address, token_symbol, token_name, amount, usd_price, usd_value, chain, tx_hash, block_time, direction, log_index FROM transactions WHERE {where} ORDER BY block_time DESC LIMIT ? OFFSET ?",
+        tuple(params + [limit, offset]))
+    rows = await cur.fetchall()
+    items = [{
+        "id": r["id"], "wallet_address": r["wallet_address"], "token_symbol": r["token_symbol"],
+        "token_name": r["token_name"], "amount": r["amount"], "usd_price": r["usd_price"],
+        "usd_value": r["usd_value"], "chain": r["chain"], "tx_hash": r["tx_hash"],
+        "block_time": r["block_time"], "direction": r["direction"], "log_index": r["log_index"],
+        "wallet_label": _wallet_labels.get(r["wallet_address"], "")
+    } for r in rows]
+    return {"total": total, "items": items}
+
+
+_wallet_labels = {}
+
+
 # ── Portfolio endpoint ───────────────────────────────────────────
 
 @app.get("/api/portfolio")

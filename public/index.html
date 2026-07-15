@@ -101,6 +101,7 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
   <a href="#" class="active" onclick="switchPage('dashboard')" data-page="dashboard">📊 <span>Dashboard</span></a>
   <a href="#" onclick="switchPage('stats')" data-page="stats">📈 <span>Statistiques</span></a>
   <a href="#" onclick="switchPage('tokens')" data-page="tokens">📋 <span>Détail tokens</span></a>
+  <a href="#" onclick="switchPage('txns')" data-page="txns">📜 <span>Transactions</span></a>
   <a href="#" onclick="switchPage('wallets')" data-page="wallets">💼 <span>Wallets</span></a>
   <a href="#" onclick="switchPage('settings')" data-page="settings" style="margin-top:auto">⚙️ <span>Paramètres</span></a>
 </div>
@@ -179,6 +180,15 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
     </div>
 
     <div id="pageTokens" class="hidden"></div>
+    <div id="pageTxns" class="hidden">
+      <div class="card"><h2>📜 Transactions
+        <span style="display:inline-flex;gap:6px;margin-left:12px;align-items:center">
+          <select id="txnWallet" onchange="loadTransactions()" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:2px 6px;border-radius:4px;font-size:.65rem"><option value="">Tous wallets</option></select>
+          <select id="txnChain" onchange="loadTransactions()" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:2px 6px;border-radius:4px;font-size:.65rem"><option value="">Toutes chaînes</option></select>
+          <select id="txnDir" onchange="loadTransactions()" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:2px 6px;border-radius:4px;font-size:.65rem"><option value="">Tout</option><option value="in">Entrant</option><option value="out">Sortant</option></select>
+        </span>
+      </h2><div id="txnContent" style="overflow-x:auto"></div></div>
+    </div>
     <div id="pageWallets" class="hidden"></div>
     <div id="pageSettings" class="hidden">
       <div class="card" style="margin-bottom:16px">
@@ -197,7 +207,7 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>📦 Version</h2>
-        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.7.1</strong></p>
+        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.7.2</strong></p>
         <p id="verStatus" style="font-size:.85rem"></p>
       </div>
       <div class="card" style="margin-bottom:16px">
@@ -223,6 +233,7 @@ var T = {
   fr: {
     dashboard: "Dashboard", stats: "Statistiques", tokens: "Détail tokens",
     wallets: "Wallets", settings: "Paramètres", logout: "Déconnexion",
+    txns: "Transactions",
     login: "Connexion", register: "Créer un compte", loginBtn: "Se connecter",
     registerBtn: "Créer le compte", username: "Nom d'utilisateur", password: "Mot de passe",
     addWallet: "Ajouter", invalidAddr: "Adresse invalide", noWallet: "Aucun wallet",
@@ -242,6 +253,7 @@ var T = {
   en: {
     dashboard: "Dashboard", stats: "Statistics", tokens: "Token Details",
     wallets: "Wallets", settings: "Settings", logout: "Logout",
+    txns: "Transactions",
     login: "Login", register: "Register", loginBtn: "Login",
     registerBtn: "Create Account", username: "Username", password: "Password",
     addWallet: "Add", invalidAddr: "Invalid address", noWallet: "No wallets",
@@ -459,6 +471,7 @@ function renderResult(d){
 
   if(currentPage=="tokens") renderTokenTable(d);
   if(currentPage=="stats"){ drawLineChart(); drawPnlChart(); }
+  if(currentPage=="txns") loadTransactions();
 }
 
 function renderTokenTable(d){
@@ -499,6 +512,7 @@ async function drawMiniChart(){
 
 async function populateFilters(){
   var sel=document.getElementById("chartWallet");sel.innerHTML='<option value="">Tous wallets</option>';for(var i=0;i<wallets.length;i++)sel.innerHTML+='<option value="'+wallets[i].address+'">'+(wallets[i].label||wallets[i].address.slice(0,10)+"...")+'</option>';
+  var tsel=document.getElementById("txnWallet");if(tsel){tsel.innerHTML='<option value="">Tous wallets</option>';for(var j=0;j<wallets.length;j++)tsel.innerHTML+='<option value="'+wallets[j].address+'">'+(wallets[j].label||wallets[j].address.slice(0,10)+"...")+'</option>'}
 
   // Load favorites
   var favChains=JSON.parse(localStorage.getItem("favChains")||"[]");
@@ -731,6 +745,47 @@ async function deleteApiKey(provider){
     await fetch("/api/settings/keys/"+provider, {method:"DELETE"});
     renderApiKeys();
   } catch(e) {}
+}
+
+async function loadTransactions(page){
+  if(!page)page=0;
+  var wallet=document.getElementById("txnWallet").value;
+  var chain=document.getElementById("txnChain").value;
+  var dir=document.getElementById("txnDir").value;
+  var params=["limit=100","offset="+(page*100)];
+  if(wallet)params.push("wallet="+wallet);
+  if(chain)params.push("chain="+chain);
+  if(dir)params.push("direction="+dir);
+  try{
+    var r=await fetch("/api/transactions?"+params.join("&"));
+    var d=await r.json();var sym=currSymbol();
+    var html='<table><thead><tr><th>Date</th><th>Wallet</th><th>Token</th><th>Chaîne</th><th>Qté</th><th>Prix</th><th>'+sym+' Valeur</th><th>Dir</th></tr></thead><tbody>';
+    for(var i=0;i<d.items.length;i++){
+      var t=d.items[i];var date=t.block_time?t.block_time.slice(0,16).replace("T"," "):"-";
+      var short=t.wallet_address.slice(0,6)+"..."+t.wallet_address.slice(-4);
+      var dirIcon=t.direction=="in"?"📥":"📤";var dirColor=t.direction=="in"?"#40c463":"#f85149";
+      var val=sym+(Math.abs(t.usd_value||0)).toFixed(2);
+      html+='<tr><td style="font-size:.75rem;white-space:nowrap">'+date+'</td>'+
+        '<td style="font-size:.75rem;color:#6e7681">'+short+'</td>'+
+        '<td><b>'+t.token_symbol+'</b> <span style="color:#6e7681;font-size:.7rem">'+t.token_name+'</span></td>'+
+        '<td class="chain">'+t.chain+'</td>'+
+        '<td>'+t.amount.toLocaleString(undefined,{maximumFractionDigits:6})+'</td>'+
+        '<td style="font-size:.8rem">'+(t.usd_price?sym+t.usd_price.toFixed(4):"-")+'</td>'+
+        '<td class="usd">'+val+'</td>'+
+        '<td style="color:'+dirColor+'">'+dirIcon+'</td></tr>';
+    }
+    html+='</tbody></table>';
+    var totalPages=Math.ceil(d.total/100);
+    html+='<div style="margin-top:12px;display:flex;gap:8px;justify-content:center">';
+    for(var p=0;p<Math.min(totalPages,20);p++){html+='<button class="btn'+(p==page?' btn-blue':'')+'" onclick="loadTransactions('+p+')" style="font-size:.7rem;padding:2px 8px">'+(p+1)+'</button>'}
+    if(totalPages>20)html+='<span style="color:#6e7681;font-size:.7rem">...'+totalPages+' pages</span>';
+    html+='</div>';
+    document.getElementById("txnContent").innerHTML=html;
+    if(!chain){
+      var chains=[];for(var j=0;j<d.items.length;j++){if(chains.indexOf(d.items[j].chain)===-1)chains.push(d.items[j].chain)}
+      var csel=document.getElementById("txnChain");if(csel.options.length<=1){chains.forEach(function(c){csel.innerHTML+='<option value="'+c+'">'+c+'</option>'})}
+    }
+  }catch(e){document.getElementById("txnContent").innerHTML='<div class="error">Erreur</div>'}
 }
 
 (async function(){var r=await fetch("/api/auth/me");if(r.ok)showDash()})();
