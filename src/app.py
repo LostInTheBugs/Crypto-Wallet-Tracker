@@ -460,6 +460,21 @@ async def _fetch_prices_per_token(user_id: int, wallet_address: str) -> dict:
                 enriched += 1
         await db.commit()
 
+    # Fallback: if no CoinGecko prices at all, use current portfolio prices (Blockscout)
+    if not prices:
+        try:
+            async with httpx.AsyncClient(follow_redirects=True) as client:
+                results = await asyncio.gather(*[fetch_chain(client, c, h, wallet_address) for c, h in CHAINS.items()])
+            for r in results:
+                for t in r["tokens"]:
+                    sym = t["symbol"].lower()
+                    if SYMBOL_TO_CG.get(sym) and t["usd_price"] > 0:
+                        # Create a minimal price series with just one data point (now)
+                        now_ms = int(_time.time() * 1000)
+                        prices[sym] = {now_ms: t["usd_price"]}
+        except Exception:
+            pass
+
     return {"enriched": enriched, "unmapped": unmapped, "prices": prices}
 
 
@@ -516,17 +531,22 @@ async def _rebuild_history(user_id: int, wallet_address: str):
         if p_dict:
             sorted_prices[sym] = sorted(p_dict.items())  # [(ts_ms, price), ...]
 
+    # Build fallback prices from transactions (last known usd_price per token)
+    fallback_prices = {}
+    for tx in txs:
+        sym = tx["token_symbol"].lower()
+        if tx["usd_price"] > 0:
+            fallback_prices[sym] = tx["usd_price"]  # last wins
+
     def _price_at(sym_lower: str, ts_ms: int) -> float:
-        """Get price for sym_lower at or before ts_ms from series. Fallback: 0."""
+        """Get price for sym_lower at or before ts_ms. Fallback: fallback_prices, then 0."""
         sp = sorted_prices.get(sym_lower)
-        if not sp:
-            return 0.0
-        # Binary search
-        idx = bisect.bisect_right([p[0] for p in sp], ts_ms) - 1
-        if idx >= 0:
-            return sp[idx][1]
-        # Before first point: use first available
-        return sp[0][1]
+        if sp:
+            idx = bisect.bisect_right([p[0] for p in sp], ts_ms) - 1
+            if idx >= 0:
+                return sp[idx][1]
+            return sp[0][1]  # before first point
+        return fallback_prices.get(sym_lower, 0.0)
 
     # 3. Determine date range
     first_date = txs[0]["block_time"][:10]
@@ -578,12 +598,6 @@ async def _rebuild_history(user_id: int, wallet_address: str):
             if delta > 0 and old_bal >= 0:
                 # Incoming: add cost at day's price
                 tx_price = _price_at(sym, day_ts_ms)
-                if tx_price <= 0:
-                    # Fallback: use last known usd_price from any tx of this token
-                    for tx in txs:
-                        if tx["token_symbol"].lower() == sym and tx["usd_price"] > 0:
-                            tx_price = tx["usd_price"]
-                            break
                 costs[sym] += delta * tx_price
             elif delta < 0 and old_bal > 0:
                 # Outgoing: remove at average cost
@@ -602,23 +616,13 @@ async def _rebuild_history(user_id: int, wallet_address: str):
             if not SYMBOL_TO_CG.get(sym):
                 continue
             p = _price_at(sym, day_ts_ms)
-            if p <= 0:
-                # Fallback
-                for tx in txs:
-                    if tx["token_symbol"].lower() == sym and tx["usd_price"] > 0:
-                        p = tx["usd_price"]
-                        break
-            value += bal * p
+            if p > 0:
+                value += bal * p
 
         # Net flows: sum(delta × price_at_date)
         net_flows = 0.0
         for sym, delta in day_deltas.items():
             p = _price_at(sym, day_ts_ms)
-            if p <= 0:
-                for tx in txs:
-                    if tx["token_symbol"].lower() == sym and tx["usd_price"] > 0:
-                        p = tx["usd_price"]
-                        break
             net_flows += delta * p
 
         cost_basis = sum(costs.values())
