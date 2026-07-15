@@ -464,20 +464,19 @@ async def _fetch_prices_per_token(user_id: int, wallet_address: str) -> dict:
                 enriched += 1
         await db.commit()
 
-    # Fallback: if no CoinGecko prices at all, use current portfolio prices (Blockscout)
-    if not prices:
-        try:
-            async with httpx.AsyncClient(follow_redirects=True) as client:
-                results = await asyncio.gather(*[fetch_chain(client, c, h, wallet_address) for c, h in CHAINS.items()])
-            for r in results:
-                for t in r["tokens"]:
-                    sym = t["symbol"].lower()
-                    if SYMBOL_TO_CG.get(sym) and t["usd_price"] > 0:
-                        # Create a minimal price series with just one data point (now)
-                        now_ms = int(_time.time() * 1000)
+    # Always supplement with current portfolio prices for any mapped tokens missing from CG
+    try:
+        async with httpx.AsyncClient(follow_redirects=True) as client:
+            results = await asyncio.gather(*[fetch_chain(client, c, h, wallet_address) for c, h in CHAINS.items()])
+        now_ms = int(_time.time() * 1000)
+        for r in results:
+            for t in r["tokens"]:
+                sym = t["symbol"].lower()
+                if SYMBOL_TO_CG.get(sym) and t["usd_price"] > 0:
+                    if sym not in prices:
                         prices[sym] = {now_ms: t["usd_price"]}
-        except Exception:
-            pass
+    except Exception:
+        pass
 
     return {"enriched": enriched, "unmapped": unmapped, "prices": prices}
 
