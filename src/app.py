@@ -401,41 +401,45 @@ async def _fetch_prices_per_token(user_id: int, wallet_address: str) -> dict:
     unmapped = []
     now = int(_time.time())
 
-    for sym_lower in symbols:
-        cg_id = SYMBOL_TO_CG.get(sym_lower)
-        if not cg_id:
-            unmapped.append(sym_lower.upper())
-            continue
+    # If CoinGecko is in backoff, skip all CG calls and use fallback
+    if _time.time() >= _CG_BACKOFF_UNTIL:
+        for sym_lower in symbols:
+            cg_id = SYMBOL_TO_CG.get(sym_lower)
+            if not cg_id:
+                unmapped.append(sym_lower.upper())
+                continue
 
-        # Get earliest tx for this token
-        async with aiosqlite.connect(DB_PATH) as db:
-            db.row_factory = aiosqlite.Row
-            cur = await db.execute(
-                "SELECT MIN(block_time) as earliest FROM transactions WHERE user_id=? AND wallet_address=? AND LOWER(token_symbol)=?",
-                (user_id, wallet_address, sym_lower))
-            row = await cur.fetchone()
-        if not row or not row["earliest"]:
-            # No transactions yet — try to get last 90 days of prices anyway
-            from_ts = now - 90 * 86400
-        else:
+            # Get earliest tx for this token
+            async with aiosqlite.connect(DB_PATH) as db:
+                db.row_factory = aiosqlite.Row
+                cur = await db.execute(
+                    "SELECT MIN(block_time) as earliest FROM transactions WHERE user_id=? AND wallet_address=? AND LOWER(token_symbol)=?",
+                    (user_id, wallet_address, sym_lower))
+                row = await cur.fetchone()
+            if not row or not row["earliest"]:
+                from_ts = now - 90 * 86400
+            else:
+                try:
+                    from_ts = int(_time.mktime(_time.strptime(row["earliest"][:19], "%Y-%m-%d %H:%M:%S"))) - 86400
+                except:
+                    from_ts = now - 365 * 86400
+
+            await _cg_rate_limit_wait()
             try:
-                from_ts = int(_time.mktime(_time.strptime(row["earliest"][:19], "%Y-%m-%d %H:%M:%S"))) - 86400
-            except:
-                from_ts = now - 365 * 86400
-
-        await _cg_rate_limit_wait()
-        try:
-            async with httpx.AsyncClient(timeout=45) as cg:
-                url = f"https://api.coingecko.com/api/v3/coins/{cg_id}/market_chart/range"
-                resp = await cg.get(url, params={"vs_currency": "usd", "from": from_ts, "to": now})
-                if resp.status_code == 200:
-                    data = resp.json()
-                    prices[sym_lower] = {p[0]: p[1] for p in data.get("prices", [])}
-                    await asyncio.sleep(3.0)
-                elif resp.status_code == 429:
-                    await asyncio.sleep(65)
-        except Exception:
-            continue
+                async with httpx.AsyncClient(timeout=45) as cg:
+                    url = f"https://api.coingecko.com/api/v3/coins/{cg_id}/market_chart/range"
+                    resp = await cg.get(url, params={"vs_currency": "usd", "from": from_ts, "to": now})
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        prices[sym_lower] = {p[0]: p[1] for p in data.get("prices", [])}
+                        await asyncio.sleep(3.0)
+                    elif resp.status_code == 429:
+                        global _CG_BACKOFF_UNTIL
+                        _CG_BACKOFF_UNTIL = _time.time() + 600  # 10 min backoff
+                        await asyncio.sleep(5)
+                        break
+            except Exception:
+                continue
 
     # Enrich transactions using the fetched price series
     enriched = 0
@@ -479,6 +483,7 @@ async def _fetch_prices_per_token(user_id: int, wallet_address: str) -> dict:
 
 
 _CG_LAST_CALL = 0.0
+_CG_BACKOFF_UNTIL = 0.0  # global: skip CG calls until this timestamp
 
 async def _cg_rate_limit_wait():
     global _CG_LAST_CALL
