@@ -7,7 +7,7 @@ from fastapi import FastAPI, Query, HTTPException, Request, Depends
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from contextlib import asynccontextmanager
-import httpx, asyncio, jwt, bcrypt, aiosqlite, os, datetime, time as _time
+import httpx, asyncio, jwt, bcrypt, aiosqlite, os, datetime, time as _time, bisect
 
 DB_PATH = os.environ.get("DB_PATH", "/data/wallets.db")
 SESSION_SECRET = os.environ.get("SESSION_SECRET", "change-me")
@@ -386,12 +386,14 @@ async def _fetch_transactions_for_wallet(user_id: int, address: str) -> int:
 # ── Price enrichment: 1 call per token ───────────────────────────
 
 async def _fetch_prices_per_token(user_id: int, wallet_address: str) -> dict:
-    """Fetch historical prices for all mapped tokens in this wallet.
-    Returns {token_symbol_lower: {timestamp_ms: price_usd}}"""
+    """Fetch historical prices for ALL mapped tokens in this wallet.
+    Returns {token_symbol_lower: {timestamp_ms: price_usd}} and enriches transactions.
+    Always called before _rebuild_history so price series are fresh."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
+        # Get ALL distinct token symbols for this wallet (not just unpriced ones)
         cur = await db.execute(
-            "SELECT DISTINCT LOWER(token_symbol) as sym FROM transactions WHERE user_id=? AND wallet_address=? AND usd_price=0",
+            "SELECT DISTINCT LOWER(token_symbol) as sym FROM transactions WHERE user_id=? AND wallet_address=?",
             (user_id, wallet_address))
         symbols = [r["sym"] for r in await cur.fetchall()]
 
@@ -413,11 +415,13 @@ async def _fetch_prices_per_token(user_id: int, wallet_address: str) -> dict:
                 (user_id, wallet_address, sym_lower))
             row = await cur.fetchone()
         if not row or not row["earliest"]:
-            continue
-        try:
-            from_ts = int(_time.mktime(_time.strptime(row["earliest"][:19], "%Y-%m-%d %H:%M:%S"))) - 86400
-        except:
-            from_ts = now - 365 * 86400
+            # No transactions yet — try to get last 90 days of prices anyway
+            from_ts = now - 90 * 86400
+        else:
+            try:
+                from_ts = int(_time.mktime(_time.strptime(row["earliest"][:19], "%Y-%m-%d %H:%M:%S"))) - 86400
+            except:
+                from_ts = now - 365 * 86400
 
         await _cg_rate_limit_wait()
         try:
@@ -433,7 +437,7 @@ async def _fetch_prices_per_token(user_id: int, wallet_address: str) -> dict:
         except Exception:
             continue
 
-    # Apply prices to transactions
+    # Enrich transactions using the fetched price series
     enriched = 0
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
@@ -449,7 +453,6 @@ async def _fetch_prices_per_token(user_id: int, wallet_address: str) -> dict:
                 ts_ms = int(_time.mktime(_time.strptime(r["block_time"][:19], "%Y-%m-%d %H:%M:%S"))) * 1000
             except:
                 continue
-            # Find closest price
             price = _interpolate_price(sym_prices, ts_ms)
             if price > 0:
                 usd_val = r["amount"] * price
@@ -457,7 +460,7 @@ async def _fetch_prices_per_token(user_id: int, wallet_address: str) -> dict:
                 enriched += 1
         await db.commit()
 
-    return {"enriched": enriched, "unmapped": unmapped}
+    return {"enriched": enriched, "unmapped": unmapped, "prices": prices}
 
 
 _CG_LAST_CALL = 0.0
@@ -490,120 +493,142 @@ def _interpolate_price(prices: dict, ts_ms: int) -> float:
 
 async def _rebuild_history(user_id: int, wallet_address: str):
     """Idempotent daily history rebuild: reconstruct balances from transactions,
-    value them with CoinGecko prices, compute cost basis."""
+    value them with CoinGecko prices, compute per-token cost basis."""
 
-    # 1. Fetch prices per token (only mapped ones)
+    # 1. Fetch prices per token (ALL mapped tokens, returns price series)
     price_result = await _fetch_prices_per_token(user_id, wallet_address)
-    unmapped = price_result.get("unmapped", [])
+    unmapped = set(u.lower() for u in price_result.get("unmapped", []))
+    price_series = price_result.get("prices", {})  # {sym_lower: {ts_ms: price}}
 
+    # 2. Preload all transactions + sort price keys once
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-
-        # 2. Get all transactions ordered by time
         cur = await db.execute(
             "SELECT token_symbol, amount, usd_price, direction, block_time, chain FROM transactions WHERE user_id=? AND wallet_address=? ORDER BY block_time ASC",
             (user_id, wallet_address))
         txs = await cur.fetchall()
-        if not txs:
-            return {"ok": True, "days": 0, "unmapped_tokens": unmapped}
+    if not txs:
+        return {"ok": True, "days": 0, "unmapped_tokens": list(unmapped)}
 
-        # 3. Determine date range
-        first_date = txs[0]["block_time"][:10]
-        last_date = datetime.datetime.utcnow().strftime("%Y-%m-%d")
+    # Pre-sort price keys for fast binary search
+    sorted_prices = {}
+    for sym, p_dict in price_series.items():
+        if p_dict:
+            sorted_prices[sym] = sorted(p_dict.items())  # [(ts_ms, price), ...]
 
-        # 4. Build daily balance deltas and cost basis from transactions
-        # Per day: {date: {token_symbol_lower: {"balance_delta": float, "cost_delta": float}}}
-        daily_deltas: dict = defaultdict(lambda: defaultdict(lambda: {"balance_delta": 0.0, "cost_delta": 0.0}))
+    def _price_at(sym_lower: str, ts_ms: int) -> float:
+        """Get price for sym_lower at or before ts_ms from series. Fallback: 0."""
+        sp = sorted_prices.get(sym_lower)
+        if not sp:
+            return 0.0
+        # Binary search
+        idx = bisect.bisect_right([p[0] for p in sp], ts_ms) - 1
+        if idx >= 0:
+            return sp[idx][1]
+        # Before first point: use first available
+        return sp[0][1]
 
-        for tx in txs:
-            sym = tx["token_symbol"].lower()
-            date = tx["block_time"][:10]
-            amount = tx["amount"] or 0
-            price = tx["usd_price"] or 0
+    # 3. Determine date range
+    first_date = txs[0]["block_time"][:10]
+    last_date = datetime.datetime.utcnow().strftime("%Y-%m-%d")
 
-            # Skip unmapped tokens for cost/value computation
-            if sym not in [u.lower() for u in unmapped] and price == 0 and not SYMBOL_TO_CG.get(sym):
-                unmapped.append(tx["token_symbol"])
+    # 4. Build daily balance deltas (in memory — no SQL in loop)
+    # Per day: {date: {sym: {"delta": float}}}
+    daily_deltas: dict = defaultdict(dict)
+    for tx in txs:
+        sym = tx["token_symbol"].lower()
+        date = tx["block_time"][:10]
+        amount = tx["amount"] or 0
+        price = tx["usd_price"] or 0
+
+        if sym in unmapped or (not SYMBOL_TO_CG.get(sym) and price == 0):
+            unmapped.add(sym)
+            continue
+
+        if date not in daily_deltas:
+            daily_deltas[date] = {}
+        if sym not in daily_deltas[date]:
+            daily_deltas[date][sym] = 0.0
+
+        if tx["direction"] == "in":
+            daily_deltas[date][sym] += amount
+        else:
+            daily_deltas[date][sym] -= amount
+
+    # 5. Generate daily history (pure computation, no I/O)
+    date_cursor = datetime.datetime.strptime(first_date, "%Y-%m-%d")
+    end_date = datetime.datetime.strptime(last_date, "%Y-%m-%d")
+
+    balances: dict = defaultdict(float)   # sym → cumulative balance
+    costs: dict = defaultdict(float)       # sym → cumulative cost basis
+    daily_rows = []
+
+    while date_cursor <= end_date:
+        date_str = date_cursor.strftime("%Y-%m-%d")
+        day_deltas = daily_deltas.get(date_str, {})
+
+        # Compute day timestamp (noon UTC) for price lookup
+        day_ts_ms = int(date_cursor.timestamp()) * 1000
+
+        # Apply balance deltas + update per-token cost
+        for sym, delta in day_deltas.items():
+            old_bal = balances[sym]
+            new_bal = max(0.0, old_bal + delta)
+
+            if delta > 0 and old_bal >= 0:
+                # Incoming: add cost at day's price
+                tx_price = _price_at(sym, day_ts_ms)
+                if tx_price <= 0:
+                    # Fallback: use last known usd_price from any tx of this token
+                    for tx in txs:
+                        if tx["token_symbol"].lower() == sym and tx["usd_price"] > 0:
+                            tx_price = tx["usd_price"]
+                            break
+                costs[sym] += delta * tx_price
+            elif delta < 0 and old_bal > 0:
+                # Outgoing: remove at average cost
+                avg_cost = costs[sym] / old_bal if old_bal > 0 else 0.0
+                costs[sym] = max(0.0, costs[sym] - abs(delta) * avg_cost)
+
+            balances[sym] = new_bal
+            if new_bal == 0:
+                costs[sym] = 0.0  # fully exited this token
+
+        # Compute daily value: sum(balance × price_at_date)
+        value = 0.0
+        for sym, bal in balances.items():
+            if bal <= 0 or sym in unmapped:
                 continue
+            if not SYMBOL_TO_CG.get(sym):
+                continue
+            p = _price_at(sym, day_ts_ms)
+            if p <= 0:
+                # Fallback
+                for tx in txs:
+                    if tx["token_symbol"].lower() == sym and tx["usd_price"] > 0:
+                        p = tx["usd_price"]
+                        break
+            value += bal * p
 
-            if tx["direction"] == "in":
-                daily_deltas[date][sym]["balance_delta"] += amount
-                daily_deltas[date][sym]["cost_delta"] += amount * price
-            else:
-                daily_deltas[date][sym]["balance_delta"] -= amount
-                # Cost basis: remove at average cost (computed later)
+        # Net flows: sum(delta × price_at_date)
+        net_flows = 0.0
+        for sym, delta in day_deltas.items():
+            p = _price_at(sym, day_ts_ms)
+            if p <= 0:
+                for tx in txs:
+                    if tx["token_symbol"].lower() == sym and tx["usd_price"] > 0:
+                        p = tx["usd_price"]
+                        break
+            net_flows += delta * p
 
-        # 5. Generate daily history
-        date_cursor = datetime.datetime.strptime(first_date, "%Y-%m-%d")
-        end_date = datetime.datetime.strptime(last_date, "%Y-%m-%d")
+        cost_basis = sum(costs.values())
 
-        balances: dict = defaultdict(float)  # token → cumulative balance
-        cumulative_cost = 0.0
-        daily_rows = []
+        daily_rows.append((user_id, wallet_address, date_str,
+                          round(value, 2), round(max(0, cost_basis), 2),
+                          round(net_flows, 2), None, None))
+        date_cursor += datetime.timedelta(days=1)
 
-        while date_cursor <= end_date:
-            date_str = date_cursor.strftime("%Y-%m-%d")
-            day_deltas = daily_deltas.get(date_str, {})
-
-            # Apply balance deltas
-            for sym, delta in day_deltas.items():
-                old_bal = balances[sym]
-                new_bal = old_bal + delta["balance_delta"]
-                if new_bal < 0:
-                    # Negative balance: clamp to 0 (likely native ETH transfers not captured)
-                    new_bal = 0
-                balances[sym] = new_bal
-
-                # Cost basis: on incoming, add cost; on outgoing, remove proportionally
-                if delta["balance_delta"] > 0 and old_bal >= 0:
-                    cumulative_cost += delta["cost_delta"]
-                elif delta["balance_delta"] < 0 and old_bal > 0:
-                    # Remove cost proportionally
-                    fraction = min(abs(delta["balance_delta"]) / old_bal, 1.0) if old_bal > 0 else 0
-                    # Average cost for this token = cumulative cost attributed to this token
-                    # Simplification: assume all cost is for tokens currently held
-                    if balances[sym] == 0:
-                        cumulative_cost = 0  # fully exited position
-                    elif old_bal > 0:
-                        # Rough proportional cost removal
-                        pass  # Full cost basis tracking requires per-token cost, simplified for now
-
-            # Compute current value: sum(balance * current_price)
-            value = 0.0
-            for sym, bal in balances.items():
-                if bal <= 0:
-                    continue
-                cg_id = SYMBOL_TO_CG.get(sym)
-                if not cg_id:
-                    continue
-                # Use latest price from transactions for this token
-                async with aiosqlite.connect(DB_PATH) as db2:
-                    db2.row_factory = aiosqlite.Row
-                    cur_p = await db2.execute(
-                        "SELECT usd_price FROM transactions WHERE user_id=? AND wallet_address=? AND LOWER(token_symbol)=? AND usd_price>0 ORDER BY block_time DESC LIMIT 1",
-                        (user_id, wallet_address, sym))
-                    row_p = await cur_p.fetchone()
-                price = row_p["usd_price"] if row_p else 0
-                value += bal * price
-
-            # Net flows: sum of (balance_delta * price) for the day
-            net_flows = 0.0
-            for sym, d in day_deltas.items():
-                if d["balance_delta"] == 0:
-                    continue
-                async with aiosqlite.connect(DB_PATH) as db3:
-                    db3.row_factory = aiosqlite.Row
-                    cur_p = await db3.execute(
-                        "SELECT usd_price FROM transactions WHERE user_id=? AND wallet_address=? AND LOWER(token_symbol)=? AND usd_price>0 ORDER BY block_time DESC LIMIT 1",
-                        (user_id, wallet_address, sym))
-                    row_p = await cur_p.fetchone()
-                price = row_p["usd_price"] if row_p else 0
-                net_flows += d["balance_delta"] * price
-
-            daily_rows.append((user_id, wallet_address, date_str, round(value, 2), round(max(0, cumulative_cost), 2), round(net_flows, 2), None, None))
-            date_cursor += datetime.timedelta(days=1)
-
-    # 6. Write to daily_history (idempotent: delete + re-insert)
+    # 6. Write to daily_history (idempotent)
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("DELETE FROM daily_history WHERE user_id=? AND wallet_address=?", (user_id, wallet_address))
         for row in daily_rows:
@@ -612,7 +637,7 @@ async def _rebuild_history(user_id: int, wallet_address: str):
                 row)
         await db.commit()
 
-    return {"ok": True, "days": len(daily_rows), "unmapped_tokens": list(set(unmapped))}
+    return {"ok": True, "days": len(daily_rows), "unmapped_tokens": sorted(unmapped)}
 
 
 # ── Import pipeline ──────────────────────────────────────────────
