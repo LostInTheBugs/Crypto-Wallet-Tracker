@@ -276,7 +276,7 @@ function applyLang() {
   document.getElementById("setLang").value = LANG;
   // Update sidebar
   var links = document.querySelectorAll(".sidebar a");
-  var keys = ["dashboard","stats","tokens","wallets","settings"];
+  var keys = ["dashboard","stats","tokens","txns","wallets","settings"];
   for (var i=0;i<Math.min(links.length,keys.length);i++) {
     var span = links[i].querySelector("span");
     if (span) span.textContent = t(keys[i]);
@@ -304,11 +304,12 @@ function switchPage(page) {
   currentPage = page;
   document.querySelectorAll(".sidebar a").forEach(function(a){ a.classList.remove("active"); });
   document.querySelector('[data-page="'+page+'"]').classList.add("active");
-  var titles = {dashboard:"📊 "+t("dashboard"),stats:"📈 "+t("stats"),tokens:"📋 "+t("tokens"),wallets:"💼 "+t("wallets"),settings:"⚙️ "+t("settings")};
+  var titles = {dashboard:"📊 "+t("dashboard"),stats:"📈 "+t("stats"),tokens:"📋 "+t("tokens"),txns:"📜 "+t("txns"),wallets:"💼 "+t("wallets"),settings:"⚙️ "+t("settings")};
   document.getElementById("pageTitle").innerHTML = titles[page] || t(page);
   document.getElementById("pageDashboard").classList.toggle("hidden", page!="dashboard");
   document.getElementById("pageStats").classList.toggle("hidden", page!="stats");
   document.getElementById("pageTokens").classList.toggle("hidden", page!="tokens");
+  document.getElementById("pageTxns").classList.toggle("hidden", page!="txns");
   document.getElementById("pageWallets").classList.toggle("hidden", page!="wallets");
   document.getElementById("pageSettings").classList.toggle("hidden", page!="settings");
   if (page=="dashboard" && lastResult) { renderResult(lastResult); drawMiniChart(); }
