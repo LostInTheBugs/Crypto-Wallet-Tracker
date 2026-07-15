@@ -2,12 +2,12 @@
 Crypto Wallet Tracker — EVM portfolio aggregator.
 Multi-chain via Blockscout API, multi-wallet, user accounts.
 """
-
+from collections import defaultdict
 from fastapi import FastAPI, Query, HTTPException, Request, Depends
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from contextlib import asynccontextmanager
-import httpx, asyncio, jwt, bcrypt, aiosqlite, os, datetime
+import httpx, asyncio, jwt, bcrypt, aiosqlite, os, datetime, time as _time
 
 DB_PATH = os.environ.get("DB_PATH", "/data/wallets.db")
 SESSION_SECRET = os.environ.get("SESSION_SECRET", "change-me")
@@ -67,25 +67,34 @@ async def lifespan(app: FastAPI):
                 FOREIGN KEY(user_id) REFERENCES users(id)
             )
         """)
-        try: await db.execute("ALTER TABLE snapshots ADD COLUMN token_quantity REAL DEFAULT 0")
+        # New: daily_history table for idempotent daily snapshots
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS daily_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                wallet_address TEXT NOT NULL,
+                date TEXT NOT NULL,
+                value_usd REAL NOT NULL DEFAULT 0,
+                cost_basis_usd REAL NOT NULL DEFAULT 0,
+                net_flows_usd REAL NOT NULL DEFAULT 0,
+                token_symbol TEXT DEFAULT NULL,
+                chain TEXT DEFAULT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            )
+        """)
+        try: await db.execute("CREATE INDEX IF NOT EXISTS idx_dh_user_date ON daily_history(user_id, date)")
         except: pass
-        # Migrate old snapshots table — add columns if missing
-        try:
-            await db.execute("ALTER TABLE snapshots ADD COLUMN token_symbol TEXT DEFAULT NULL")
-        except:
-            pass
-        try:
-            await db.execute("ALTER TABLE snapshots ADD COLUMN chain TEXT DEFAULT NULL")
-        except:
-            pass
-        try:
-            await db.execute("ALTER TABLE snapshots ADD COLUMN wallet_label TEXT DEFAULT NULL")
-        except:
-            pass
-        try:
-            await db.execute("ALTER TABLE transactions ADD COLUMN direction TEXT DEFAULT 'in'")
-        except:
-            pass
+        try: await db.execute("CREATE INDEX IF NOT EXISTS idx_dh_wallet ON daily_history(wallet_address, date)")
+        except: pass
+        # Migrations
+        for col, typ in [("token_quantity", "REAL DEFAULT 0"), ("token_symbol", "TEXT DEFAULT NULL"),
+                          ("chain", "TEXT DEFAULT NULL"), ("wallet_label", "TEXT DEFAULT NULL")]:
+            try: await db.execute(f"ALTER TABLE snapshots ADD COLUMN {col} {typ}")
+            except: pass
+        try: await db.execute("ALTER TABLE transactions ADD COLUMN direction TEXT DEFAULT 'in'")
+        except: pass
+        # Purge old polluted snapshot data
+        await db.execute("DELETE FROM snapshots")
         await db.commit()
     yield
 
@@ -196,21 +205,19 @@ async def add_wallet(request: Request, user=Depends(get_current_user), db=Depend
         raise HTTPException(400, "Adresse EVM invalide")
     await db.execute("INSERT INTO wallets (user_id, address, label) VALUES (?, ?, ?)", (user["id"], address, label))
     await db.commit()
-    # Fetch transactions first, then backfill (needs tx data for wallet creation date)
-    asyncio.create_task(_fetch_then_backfill(user["id"], address))
+    asyncio.create_task(_fetch_then_rebuild(user["id"], address))
     return {"ok": True}
 
 
 @app.delete("/api/wallets/{wallet_id}")
 async def del_wallet(wallet_id: int, user=Depends(get_current_user), db=Depends(get_db)):
-    # Get wallet address before deleting
     cur = await db.execute("SELECT address FROM wallets WHERE id=? AND user_id=?", (wallet_id, user["id"]))
     row = await cur.fetchone()
     if not row:
         raise HTTPException(404, "Wallet introuvable")
     address = row["address"]
-    # Delete associated data + clear cache
     await db.execute("DELETE FROM transactions WHERE wallet_address=? AND user_id=?", (address, user["id"]))
+    await db.execute("DELETE FROM daily_history WHERE wallet_address=? AND user_id=?", (address, user["id"]))
     await db.execute("DELETE FROM snapshots WHERE user_id=?", (user["id"],))
     _portfolio_cache.pop(address, None)
     await db.execute("DELETE FROM wallets WHERE id=? AND user_id=?", (wallet_id, user["id"]))
@@ -241,7 +248,7 @@ CHAINS = {
     "scroll":   "scroll.blockscout.com",
 }
 
-_portfolio_cache = {}  # {address: {"data": ..., "ts": timestamp}}
+_portfolio_cache = {}
 
 
 async def fetch_chain(client, chain, host, address):
@@ -303,412 +310,8 @@ async def _compute_portfolio(address: str) -> dict:
     }
 
 
-async def _auto_fetch_and_enrich(user_id: int, address: str):
-    """Fetch transactions then enrich with historical prices."""
-    try:
-        _import_progress[user_id] = {"stage": "fetch", "done": 0, "total": len(CHAINS)}
-        count = await _fetch_transactions_for_wallet(user_id, address)
-        _import_progress[user_id] = {"stage": "enrich", "done": 0, "total": count}
-        if count > 0:
-            await _enrich_transactions_for_user(user_id)
-        _import_progress[user_id] = {"stage": "done", "done": count, "total": count}
-    except Exception:
-        _import_progress[user_id] = {"stage": "done", "done": 0, "total": 0, "error": True}
+# ── CoinGecko mapping ────────────────────────────────────────────
 
-
-async def _fetch_then_backfill(user_id: int, address: str):
-    """Fetch transactions first, then backfill snapshots using earliest tx date."""
-    try:
-        _import_progress[user_id] = {"stage": "fetch", "done": 0, "total": len(CHAINS), "in_done": 0, "in_total": 0, "out_done": 0, "out_total": 0}
-        count = await _fetch_transactions_for_wallet(user_id, address)
-        # Query per-direction totals for progress tracking
-        async with aiosqlite.connect(DB_PATH) as db:
-            db.row_factory = aiosqlite.Row
-            cur = await db.execute("SELECT direction, COUNT(*) as c FROM transactions WHERE user_id=? AND usd_price=0 GROUP BY direction", (user_id,))
-            dirs = {r["direction"]: r["c"] for r in await cur.fetchall()}
-        in_total = dirs.get("in", 0)
-        out_total = dirs.get("out", 0)
-        _import_progress[user_id] = {"stage": "enrich", "done": 0, "total": count, "in_done": 0, "in_total": in_total, "out_done": 0, "out_total": out_total}
-        if count > 0:
-            await _enrich_transactions_for_user(user_id)
-        # Now backfill — uses MIN(block_time) from fetched transactions
-        await _backfill_wallet(user_id, address)
-        _import_progress[user_id] = {"stage": "done", "done": count, "total": count}
-    except Exception:
-        _import_progress[user_id] = {"stage": "done", "done": 0, "total": 0, "error": True}
-
-
-_import_progress = {}  # {user_id: {stage, done, total}}
-
-
-_last_tx_refresh = {}  # {user_id: timestamp}
-
-@app.get("/api/portfolio")
-async def portfolio(address: str = Query(...), force: bool = Query(False), user=Depends(get_current_user)):
-    if not address.startswith("0x"):
-        raise HTTPException(400, "Adresse invalide")
-
-    # Daily auto-refresh transactions (once per 24h)
-    now = _time.time()
-    if now - _last_tx_refresh.get(user["id"], 0) > 86400:
-        _last_tx_refresh[user["id"]] = now
-        asyncio.create_task(_daily_tx_refresh(user["id"]))
-
-    now = _time.time()
-    entry = _portfolio_cache.get(address)
-    if not force and entry and (now - entry["ts"]) < 3600:  # 1 hour cache
-        data = dict(entry["data"])
-        data["cached"] = True
-        return data
-
-    data = await _compute_portfolio(address)
-    _portfolio_cache[address] = {"data": data, "ts": now}
-
-    # Save snapshot (max one per 10 min per user)
-    try:
-        async with aiosqlite.connect(DB_PATH) as db:
-            cur = await db.execute(
-                "SELECT created_at FROM snapshots WHERE user_id=? AND token_symbol IS NULL ORDER BY created_at DESC LIMIT 1",
-                (user["id"],))
-            last = await cur.fetchone()
-            if not last or (_time.time() - _time.mktime(_time.strptime(last["created_at"], "%Y-%m-%d %H:%M:%S"))) > 600:
-                await db.execute(
-                    "INSERT INTO snapshots (user_id, total_usd, token_count) VALUES (?, ?, ?)",
-                    (user["id"], data["total_usd"], data["token_count"]))
-                await db.commit()
-    except Exception:
-        pass
-
-    return data
-
-
-@app.get("/api/snapshots")
-async def get_snapshots(token: str = Query(None), user=Depends(get_current_user), db=Depends(get_db)):
-    if token:
-        cur = await db.execute(
-            "SELECT total_usd, token_quantity, token_count, created_at FROM snapshots WHERE user_id=? AND token_symbol=? ORDER BY created_at ASC",
-            (user["id"], token.upper()))
-    else:
-        cur = await db.execute(
-            "SELECT total_usd, token_quantity, token_count, created_at FROM snapshots WHERE user_id=? AND token_symbol IS NULL ORDER BY created_at ASC",
-            (user["id"],))
-    rows = await cur.fetchall()
-    # Compute cumulative cost basis per snapshot date, using direction
-    if token:
-        cost_cur = await db.execute(
-            "SELECT block_time, usd_value, direction FROM transactions WHERE user_id=? AND token_symbol=? ORDER BY block_time ASC",
-            (user["id"], token.upper()))
-    else:
-        cost_cur = await db.execute(
-            "SELECT block_time, usd_value, direction FROM transactions WHERE user_id=? ORDER BY block_time ASC",
-            (user["id"],))
-    txns = await cost_cur.fetchall()
-    # Build cumulative cost basis per snapshot date
-    result = []
-    txn_idx = 0
-    cum_cost = 0.0
-    for r in rows:
-        date_str = r["created_at"]
-        # Normalize date for comparison (snapshot created_at uses space, block_time now also uses space)
-        while txn_idx < len(txns) and txns[txn_idx]["block_time"] <= date_str:
-            val = txns[txn_idx]["usd_value"] or 0
-            if txns[txn_idx]["direction"] == "in":
-                cum_cost += val
-            else:
-                cum_cost -= val
-            txn_idx += 1
-        result.append({
-            "total_usd": r["total_usd"],
-            "quantity": r["token_quantity"] or 0,
-            "token_count": r["token_count"],
-            "date": date_str,
-            "cost_basis": round(cum_cost, 2),
-        })
-    return result
-
-
-@app.get("/api/snapshots/tokens")
-async def get_snapshot_tokens(user=Depends(get_current_user), db=Depends(get_db)):
-    """List distinct tokens that have snapshot data."""
-    cur = await db.execute(
-        "SELECT DISTINCT token_symbol FROM snapshots WHERE user_id=? AND token_symbol IS NOT NULL ORDER BY token_symbol",
-        (user["id"],))
-    rows = await cur.fetchall()
-    return [r["token_symbol"] for r in rows]
-
-
-@app.post("/api/snapshots/backfill")
-async def backfill_snapshots(user=Depends(get_current_user), db=Depends(get_db)):
-    """Manual trigger for backfill (also runs automatically on wallet add)."""
-    cur = await db.execute("SELECT address FROM wallets WHERE user_id=?", (user["id"],))
-    wallet_rows = await cur.fetchall()
-    if not wallet_rows:
-        raise HTTPException(400, "Aucun wallet")
-    result = await _backfill_wallet(user["id"], wallet_rows[0]["address"])
-    return result
-
-
-# ── Transactions & Real History ─────────────────────────────────
-
-@app.get("/api/import/progress")
-async def import_progress(user=Depends(get_current_user)):
-    return _import_progress.get(user["id"], {"stage": "idle", "done": 0, "total": 0})
-
-
-@app.post("/api/transactions/fetch")
-async def fetch_transactions(user=Depends(get_current_user), db=Depends(get_db)):
-    """Fetch all token transfers for all user wallets from Blockscout."""
-    cur = await db.execute("SELECT address, label FROM wallets WHERE user_id=?", (user["id"],))
-    wallets_list = await cur.fetchall()
-    if not wallets_list:
-        raise HTTPException(400, "Aucun wallet")
-
-    total_tx = 0
-    for w in wallets_list:
-        total_tx += await _fetch_transactions_for_wallet(user["id"], w["address"])
-    await db.commit()
-    return {"ok": True, "transactions_fetched": total_tx}
-
-
-async def _fetch_transactions_for_wallet(user_id: int, address: str) -> int:
-    """Fetch token transfers for one wallet, return count of new transactions."""
-    total_tx = 0
-    for chain, host in CHAINS.items():
-        try:
-            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as bc:
-                url = f"https://{host}/api/v2/addresses/{address}/token-transfers"
-                params: dict = {"type": "ERC-20,ERC-721,ERC-1155"}
-                # Paginate up to 5 pages (max ~250 transfers per chain)
-                for page in range(5):
-                    resp = await bc.get(url, params=params)
-                    if resp.status_code != 200: break
-                    data = resp.json()
-                    items = data.get("items", [])
-                    if not items: break
-                    async with aiosqlite.connect(DB_PATH) as db:
-                        for item in items:
-                            token = item.get("token") or {}
-                            tx_hash = item.get("transaction_hash") or item.get("tx_hash", "")
-                            # Skip dedup only if we have a real hash
-                            if tx_hash:
-                                cur2 = await db.execute("SELECT id FROM transactions WHERE tx_hash=? AND user_id=?", (tx_hash, user_id))
-                                if await cur2.fetchone(): continue
-                            try:
-                                amount = int(item.get("total", {}).get("value", "0") or "0") / (10 ** (int(token.get("decimals") or 18)))
-                            except:
-                                amount = 0
-                            if amount == 0: continue
-                            symbol = token.get("symbol", "?")
-                            name = token.get("name", "Unknown")
-                            ts = item.get("timestamp", "")
-                            to_addr = (item.get("to") or {}).get("hash", "")
-                            direction = "in" if to_addr.lower() == address.lower() else "out"
-                            await db.execute(
-                                "INSERT INTO transactions (user_id, wallet_address, token_symbol, token_name, amount, chain, tx_hash, block_time, direction) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                                (user_id, address, symbol, name, amount, chain, tx_hash, ts[:19].replace("T", " ") if ts else "", direction))
-                            total_tx += 1
-                        await db.commit()
-                    # Follow next_page_params for next iteration
-                    nxt = data.get("next_page_params")
-                    if not nxt: break
-                    params = {**params, **nxt}
-        except Exception:
-            continue
-    return total_tx
-
-
-async def _enrich_transactions_for_user(user_id: int):
-    """Add CoinGecko prices to all unpriced transactions for a user."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute("SELECT id, token_symbol, block_time, direction FROM transactions WHERE user_id=? AND usd_price=0 ORDER BY block_time", (user_id,))
-        rows = await cur.fetchall()
-        count = 0
-        in_done = 0
-        out_done = 0
-        async with httpx.AsyncClient(timeout=30) as cg:
-            for r in rows:
-                cg_id = SYMBOL_TO_CG.get(r["token_symbol"].lower())
-                if not cg_id: continue
-                try:
-                    date_str = r["block_time"][:10]
-                    url = f"https://api.coingecko.com/api/v3/coins/{cg_id}/history"
-                    params = {"date": date_str, "localization": "false"}
-                    resp = await cg.get(url, params=params)
-                    if resp.status_code == 429:
-                        await asyncio.sleep(65)  # rate limit — wait full window
-                        continue
-                    if resp.status_code == 200:
-                        price = resp.json().get("market_data", {}).get("current_price", {}).get("usd", 0)
-                        if price:
-                            cur2 = await db.execute("SELECT amount FROM transactions WHERE id=?", (r["id"],))
-                            tx = await cur2.fetchone()
-                            usd_val = tx["amount"] * price if tx else 0
-                            await db.execute("UPDATE transactions SET usd_price=?, usd_value=? WHERE id=?", (price, round(usd_val, 2), r["id"]))
-                            count += 1
-                            if r["direction"] == "in": in_done += 1
-                            else: out_done += 1
-                            # Update detailed progress
-                            if user_id in _import_progress:
-                                p = _import_progress[user_id]
-                                p["in_done"] = in_done
-                                p["out_done"] = out_done
-                            await asyncio.sleep(3.0)  # CoinGecko free tier: ~20 calls/min
-                except Exception:
-                    continue
-        await db.commit()
-
-
-async def _daily_tx_refresh(user_id: int):
-    """Fetch new transactions for all wallets and enrich them."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute("SELECT address FROM wallets WHERE user_id=?", (user_id,))
-        wallets_list = await cur.fetchall()
-    for w in wallets_list:
-        count = await _fetch_transactions_for_wallet(user_id, w["address"])
-        if count > 0:
-            await _enrich_transactions_for_user(user_id)
-
-
-@app.post("/api/transactions/enrich")
-async def enrich_transactions(user=Depends(get_current_user), db=Depends(get_db)):
-    """Add CoinGecko historical prices to stored transactions."""
-    cur = await db.execute("SELECT id, token_symbol, block_time FROM transactions WHERE user_id=? AND usd_price=0 ORDER BY block_time", (user["id"],))
-    rows = await cur.fetchall()
-    if not rows:
-        return {"ok": True, "enriched": 0}
-
-    count = 0
-    async with httpx.AsyncClient(timeout=30) as cg:
-        for r in rows:
-            cg_id = SYMBOL_TO_CG.get(r["token_symbol"].lower())
-            if not cg_id: continue
-            try:
-                ts = _time.mktime(_time.strptime(r["block_time"][:10], "%Y-%m-%d"))
-                url = f"https://api.coingecko.com/api/v3/coins/{cg_id}/history"
-                params = {"date": r["block_time"][:10].replace("-", "-"), "localization": "false"}
-                resp = await cg.get(url, params=params)
-                if resp.status_code == 429:
-                    await asyncio.sleep(65)  # rate limit — wait full window
-                    continue
-                if resp.status_code == 200:
-                    price = resp.json().get("market_data", {}).get("current_price", {}).get("usd", 0)
-                    if price:
-                        cur2 = await db.execute("SELECT amount FROM transactions WHERE id=?", (r["id"],))
-                        tx = await cur2.fetchone()
-                        usd_val = tx["amount"] * price if tx else 0
-                        await db.execute("UPDATE transactions SET usd_price=?, usd_value=? WHERE id=?", (price, round(usd_val, 2), r["id"]))
-                        count += 1
-                        await asyncio.sleep(3.0)  # CoinGecko free tier: ~20 calls/min
-            except Exception:
-                continue
-    await db.commit()
-    return {"ok": True, "enriched": count}
-
-
-async def _backfill_wallet(user_id: int, address: str) -> dict:
-    """Generate historical snapshots using CoinGecko prices since wallet creation."""
-    
-    # Find wallet creation date from earliest stored transaction
-    created_at = _time.time() - 90 * 86400  # default 90 days
-    try:
-        async with aiosqlite.connect(DB_PATH) as db:
-            cur = await db.execute(
-                "SELECT MIN(block_time) FROM transactions WHERE user_id=? AND wallet_address=?",
-                (user_id, address))
-            row = await cur.fetchone()
-            if row and row[0]:
-                created_at = _time.mktime(_time.strptime(row[0][:19], "%Y-%m-%d %H:%M:%S")) - 86400
-    except Exception:
-        pass
-
-    # Get current tokens
-    async with httpx.AsyncClient(follow_redirects=True) as client:
-        results = await asyncio.gather(*[fetch_chain(client, c, h, address) for c, h in CHAINS.items()])
-
-    tokens_cg = []
-    for r in results:
-        for t in r["tokens"]:
-            try: bal = int(t["balance_raw"]) / (10 ** t["decimals"])
-            except: bal = 0
-            usd = bal * t["usd_price"]
-            if usd < 0.01: continue
-            cg_id = SYMBOL_TO_CG.get(t["symbol"].lower())
-            tokens_cg.append({
-                "id": cg_id or t["symbol"].lower(),
-                "balance": bal,
-                "symbol": t["symbol"],
-                "current_price": t["usd_price"],
-                "has_cg": bool(cg_id),
-            })
-
-    if not tokens_cg:
-        return {"ok": False, "msg": "Aucun token dans le portfolio"}
-
-    now = _time.time()
-
-    weekly_prices = {}
-    async with httpx.AsyncClient(timeout=45) as cg_client:
-        for tok in tokens_cg:
-            if not tok["has_cg"]:
-                continue  # use current_price as constant, skip CoinGecko
-            try:
-                url = f"https://api.coingecko.com/api/v3/coins/{tok['id']}/market_chart/range"
-                params = {"vs_currency": "usd", "from": int(created_at), "to": int(now)}
-                resp = await cg_client.get(url, params=params)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    weekly_prices[tok["id"]] = data.get("prices", [])
-            except Exception:
-                continue
-
-    # Generate weekly snapshots from creation to now — both total and per-token
-    new_snapshots = 0
-    week_ms = 7 * 86400 * 1000
-    start_ms = created_at * 1000
-    end_ms = now * 1000
-    
-    async with aiosqlite.connect(DB_PATH) as db:
-        for ts in range(int(start_ms), int(end_ms), int(week_ms)):
-            total = 0.0
-            date_str = datetime.datetime.utcfromtimestamp(ts / 1000).strftime("%Y-%m-%d %H:%M:%S")
-            
-            for tok in tokens_cg:
-                prices = weekly_prices.get(tok["id"], [])
-                price = tok["current_price"]  # default to current price
-                for p in prices:
-                    if p[0] <= ts:
-                        price = p[1]
-                tok_usd = tok["balance"] * price
-                total += tok_usd
-                
-                # Per-token snapshot
-                cur2 = await db.execute(
-                    "SELECT id FROM snapshots WHERE user_id=? AND created_at=? AND token_symbol=?",
-                    (user_id, date_str, tok["symbol"]))
-                if not await cur2.fetchone() and tok_usd > 0.01:
-                    await db.execute(
-                        "INSERT INTO snapshots (user_id, total_usd, token_count, token_quantity, token_symbol, chain, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                        (user_id, round(tok_usd, 2), 1, round(tok["balance"], 6), tok["symbol"], "ethereum", date_str))
-                    new_snapshots += 1
-            
-            # Total snapshot
-            if total > 0:
-                cur3 = await db.execute(
-                    "SELECT id FROM snapshots WHERE user_id=? AND created_at=? AND token_symbol IS NULL",
-                    (user_id, date_str))
-                if not await cur3.fetchone():
-                    await db.execute(
-                        "INSERT INTO snapshots (user_id, total_usd, token_count, created_at) VALUES (?, ?, ?, ?)",
-                        (user_id, round(total, 2), len(tokens_cg), date_str))
-                    new_snapshots += 1
-        
-        await db.commit()
-    return {"ok": True, "snapshots_added": new_snapshots, "from_date": datetime.datetime.utcfromtimestamp(created_at).strftime("%Y-%m-%d")}
-
-
-# CoinGecko symbol → id mapping (common tokens)
 SYMBOL_TO_CG = {
     "eth": "ethereum", "weth": "ethereum", "matic": "matic-network", "pol": "polygon-ecosystem-token",
     "usdt": "tether", "usdc": "usd-coin", "dai": "dai", "wbtc": "wrapped-bitcoin", "btc": "bitcoin",
@@ -731,9 +334,506 @@ SYMBOL_TO_CG = {
 }
 
 
-# ── Currency rates ──────────────────────────────────────────────
+# ── Transactions fetch ───────────────────────────────────────────
 
-import time as _time
+_import_progress = {}
+_last_tx_refresh = {}
+
+
+async def _fetch_transactions_for_wallet(user_id: int, address: str) -> int:
+    total_tx = 0
+    for chain, host in CHAINS.items():
+        try:
+            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as bc:
+                url = f"https://{host}/api/v2/addresses/{address}/token-transfers"
+                params: dict = {"type": "ERC-20,ERC-721,ERC-1155"}
+                for page in range(5):
+                    resp = await bc.get(url, params=params)
+                    if resp.status_code != 200: break
+                    data = resp.json()
+                    items = data.get("items", [])
+                    if not items: break
+                    async with aiosqlite.connect(DB_PATH) as db:
+                        for item in items:
+                            token = item.get("token") or {}
+                            tx_hash = item.get("transaction_hash") or item.get("tx_hash", "")
+                            if tx_hash:
+                                cur2 = await db.execute("SELECT id FROM transactions WHERE tx_hash=? AND user_id=?", (tx_hash, user_id))
+                                if await cur2.fetchone(): continue
+                            try:
+                                amount = int(item.get("total", {}).get("value", "0") or "0") / (10 ** (int(token.get("decimals") or 18)))
+                            except:
+                                amount = 0
+                            if amount == 0: continue
+                            symbol = token.get("symbol", "?")
+                            name = token.get("name", "Unknown")
+                            ts = item.get("timestamp", "")
+                            to_addr = (item.get("to") or {}).get("hash", "")
+                            direction = "in" if to_addr.lower() == address.lower() else "out"
+                            await db.execute(
+                                "INSERT INTO transactions (user_id, wallet_address, token_symbol, token_name, amount, chain, tx_hash, block_time, direction) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                (user_id, address, symbol, name, amount, chain, tx_hash, ts[:19].replace("T", " ") if ts else "", direction))
+                            total_tx += 1
+                        await db.commit()
+                    nxt = data.get("next_page_params")
+                    if not nxt: break
+                    params = {**params, **nxt}
+        except Exception:
+            continue
+    return total_tx
+
+
+# ── Price enrichment: 1 call per token ───────────────────────────
+
+async def _fetch_prices_per_token(user_id: int, wallet_address: str) -> dict:
+    """Fetch historical prices for all mapped tokens in this wallet.
+    Returns {token_symbol_lower: {timestamp_ms: price_usd}}"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT DISTINCT LOWER(token_symbol) as sym FROM transactions WHERE user_id=? AND wallet_address=? AND usd_price=0",
+            (user_id, wallet_address))
+        symbols = [r["sym"] for r in await cur.fetchall()]
+
+    prices = {}
+    unmapped = []
+    now = int(_time.time())
+
+    for sym_lower in symbols:
+        cg_id = SYMBOL_TO_CG.get(sym_lower)
+        if not cg_id:
+            unmapped.append(sym_lower.upper())
+            continue
+
+        # Get earliest tx for this token
+        async with aiosqlite.connect(DB_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT MIN(block_time) as earliest FROM transactions WHERE user_id=? AND wallet_address=? AND LOWER(token_symbol)=?",
+                (user_id, wallet_address, sym_lower))
+            row = await cur.fetchone()
+        if not row or not row["earliest"]:
+            continue
+        try:
+            from_ts = int(_time.mktime(_time.strptime(row["earliest"][:19], "%Y-%m-%d %H:%M:%S"))) - 86400
+        except:
+            from_ts = now - 365 * 86400
+
+        await _cg_rate_limit_wait()
+        try:
+            async with httpx.AsyncClient(timeout=45) as cg:
+                url = f"https://api.coingecko.com/api/v3/coins/{cg_id}/market_chart/range"
+                resp = await cg.get(url, params={"vs_currency": "usd", "from": from_ts, "to": now})
+                if resp.status_code == 200:
+                    data = resp.json()
+                    prices[sym_lower] = {p[0]: p[1] for p in data.get("prices", [])}
+                    await asyncio.sleep(3.0)
+                elif resp.status_code == 429:
+                    await asyncio.sleep(65)
+        except Exception:
+            continue
+
+    # Apply prices to transactions
+    enriched = 0
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT id, LOWER(token_symbol) as sym, amount, block_time FROM transactions WHERE user_id=? AND wallet_address=? AND usd_price=0",
+            (user_id, wallet_address))
+        rows = await cur.fetchall()
+        for r in rows:
+            sym_prices = prices.get(r["sym"], {})
+            if not sym_prices:
+                continue
+            try:
+                ts_ms = int(_time.mktime(_time.strptime(r["block_time"][:19], "%Y-%m-%d %H:%M:%S"))) * 1000
+            except:
+                continue
+            # Find closest price
+            price = _interpolate_price(sym_prices, ts_ms)
+            if price > 0:
+                usd_val = r["amount"] * price
+                await db.execute("UPDATE transactions SET usd_price=?, usd_value=? WHERE id=?", (price, round(usd_val, 2), r["id"]))
+                enriched += 1
+        await db.commit()
+
+    return {"enriched": enriched, "unmapped": unmapped}
+
+
+_CG_LAST_CALL = 0.0
+
+async def _cg_rate_limit_wait():
+    global _CG_LAST_CALL
+    elapsed = _time.time() - _CG_LAST_CALL
+    if elapsed < 3.0:
+        await asyncio.sleep(3.0 - elapsed)
+    _CG_LAST_CALL = _time.time()
+
+
+def _interpolate_price(prices: dict, ts_ms: int) -> float:
+    """Find closest price before or at ts_ms."""
+    keys = sorted(prices.keys())
+    if not keys:
+        return 0.0
+    best = None
+    for k in keys:
+        if k <= ts_ms:
+            best = k
+        else:
+            break
+    if best is None:
+        best = keys[0]  # earliest available
+    return prices.get(best, 0.0)
+
+
+# ── History rebuild ──────────────────────────────────────────────
+
+async def _rebuild_history(user_id: int, wallet_address: str):
+    """Idempotent daily history rebuild: reconstruct balances from transactions,
+    value them with CoinGecko prices, compute cost basis."""
+
+    # 1. Fetch prices per token (only mapped ones)
+    price_result = await _fetch_prices_per_token(user_id, wallet_address)
+    unmapped = price_result.get("unmapped", [])
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+
+        # 2. Get all transactions ordered by time
+        cur = await db.execute(
+            "SELECT token_symbol, amount, usd_price, direction, block_time, chain FROM transactions WHERE user_id=? AND wallet_address=? ORDER BY block_time ASC",
+            (user_id, wallet_address))
+        txs = await cur.fetchall()
+        if not txs:
+            return {"ok": True, "days": 0, "unmapped_tokens": unmapped}
+
+        # 3. Determine date range
+        first_date = txs[0]["block_time"][:10]
+        last_date = datetime.datetime.utcnow().strftime("%Y-%m-%d")
+
+        # 4. Build daily balance deltas and cost basis from transactions
+        # Per day: {date: {token_symbol_lower: {"balance_delta": float, "cost_delta": float}}}
+        daily_deltas: dict = defaultdict(lambda: defaultdict(lambda: {"balance_delta": 0.0, "cost_delta": 0.0}))
+
+        for tx in txs:
+            sym = tx["token_symbol"].lower()
+            date = tx["block_time"][:10]
+            amount = tx["amount"] or 0
+            price = tx["usd_price"] or 0
+
+            # Skip unmapped tokens for cost/value computation
+            if sym not in [u.lower() for u in unmapped] and price == 0 and not SYMBOL_TO_CG.get(sym):
+                unmapped.append(tx["token_symbol"])
+                continue
+
+            if tx["direction"] == "in":
+                daily_deltas[date][sym]["balance_delta"] += amount
+                daily_deltas[date][sym]["cost_delta"] += amount * price
+            else:
+                daily_deltas[date][sym]["balance_delta"] -= amount
+                # Cost basis: remove at average cost (computed later)
+
+        # 5. Generate daily history
+        date_cursor = datetime.datetime.strptime(first_date, "%Y-%m-%d")
+        end_date = datetime.datetime.strptime(last_date, "%Y-%m-%d")
+
+        balances: dict = defaultdict(float)  # token → cumulative balance
+        cumulative_cost = 0.0
+        daily_rows = []
+
+        while date_cursor <= end_date:
+            date_str = date_cursor.strftime("%Y-%m-%d")
+            day_deltas = daily_deltas.get(date_str, {})
+
+            # Apply balance deltas
+            for sym, delta in day_deltas.items():
+                old_bal = balances[sym]
+                new_bal = old_bal + delta["balance_delta"]
+                if new_bal < 0:
+                    # Negative balance: clamp to 0 (likely native ETH transfers not captured)
+                    new_bal = 0
+                balances[sym] = new_bal
+
+                # Cost basis: on incoming, add cost; on outgoing, remove proportionally
+                if delta["balance_delta"] > 0 and old_bal >= 0:
+                    cumulative_cost += delta["cost_delta"]
+                elif delta["balance_delta"] < 0 and old_bal > 0:
+                    # Remove cost proportionally
+                    fraction = min(abs(delta["balance_delta"]) / old_bal, 1.0) if old_bal > 0 else 0
+                    # Average cost for this token = cumulative cost attributed to this token
+                    # Simplification: assume all cost is for tokens currently held
+                    if balances[sym] == 0:
+                        cumulative_cost = 0  # fully exited position
+                    elif old_bal > 0:
+                        # Rough proportional cost removal
+                        pass  # Full cost basis tracking requires per-token cost, simplified for now
+
+            # Compute current value: sum(balance * current_price)
+            value = 0.0
+            for sym, bal in balances.items():
+                if bal <= 0:
+                    continue
+                cg_id = SYMBOL_TO_CG.get(sym)
+                if not cg_id:
+                    continue
+                # Use latest price from transactions for this token
+                async with aiosqlite.connect(DB_PATH) as db2:
+                    db2.row_factory = aiosqlite.Row
+                    cur_p = await db2.execute(
+                        "SELECT usd_price FROM transactions WHERE user_id=? AND wallet_address=? AND LOWER(token_symbol)=? AND usd_price>0 ORDER BY block_time DESC LIMIT 1",
+                        (user_id, wallet_address, sym))
+                    row_p = await cur_p.fetchone()
+                price = row_p["usd_price"] if row_p else 0
+                value += bal * price
+
+            # Net flows: sum of (balance_delta * price) for the day
+            net_flows = 0.0
+            for sym, d in day_deltas.items():
+                if d["balance_delta"] == 0:
+                    continue
+                async with aiosqlite.connect(DB_PATH) as db3:
+                    db3.row_factory = aiosqlite.Row
+                    cur_p = await db3.execute(
+                        "SELECT usd_price FROM transactions WHERE user_id=? AND wallet_address=? AND LOWER(token_symbol)=? AND usd_price>0 ORDER BY block_time DESC LIMIT 1",
+                        (user_id, wallet_address, sym))
+                    row_p = await cur_p.fetchone()
+                price = row_p["usd_price"] if row_p else 0
+                net_flows += d["balance_delta"] * price
+
+            daily_rows.append((user_id, wallet_address, date_str, round(value, 2), round(max(0, cumulative_cost), 2), round(net_flows, 2), None, None))
+            date_cursor += datetime.timedelta(days=1)
+
+    # 6. Write to daily_history (idempotent: delete + re-insert)
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM daily_history WHERE user_id=? AND wallet_address=?", (user_id, wallet_address))
+        for row in daily_rows:
+            await db.execute(
+                "INSERT INTO daily_history (user_id, wallet_address, date, value_usd, cost_basis_usd, net_flows_usd, token_symbol, chain) VALUES (?,?,?,?,?,?,?,?)",
+                row)
+        await db.commit()
+
+    return {"ok": True, "days": len(daily_rows), "unmapped_tokens": list(set(unmapped))}
+
+
+# ── Import pipeline ──────────────────────────────────────────────
+
+async def _fetch_then_rebuild(user_id: int, address: str):
+    try:
+        _import_progress[user_id] = {"stage": "fetch", "done": 0, "total": len(CHAINS), "in_done": 0, "in_total": 0, "out_done": 0, "out_total": 0}
+        count = await _fetch_transactions_for_wallet(user_id, address)
+        async with aiosqlite.connect(DB_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute("SELECT direction, COUNT(*) as c FROM transactions WHERE user_id=? AND usd_price=0 GROUP BY direction", (user_id,))
+            dirs = {r["direction"]: r["c"] for r in await cur.fetchall()}
+        in_total = dirs.get("in", 0)
+        out_total = dirs.get("out", 0)
+        _import_progress[user_id] = {"stage": "enrich", "done": 0, "total": count, "in_done": in_total, "in_total": in_total, "out_done": out_total, "out_total": out_total}
+        result = await _rebuild_history(user_id, address)
+        _import_progress[user_id] = {"stage": "done", "done": count, "total": count, "unmapped": result.get("unmapped_tokens", [])}
+    except Exception:
+        _import_progress[user_id] = {"stage": "done", "done": 0, "total": 0, "error": True}
+
+
+@app.get("/api/import/progress")
+async def import_progress(user=Depends(get_current_user)):
+    return _import_progress.get(user["id"], {"stage": "idle", "done": 0, "total": 0})
+
+
+# ── Portfolio endpoint ───────────────────────────────────────────
+
+@app.get("/api/portfolio")
+async def portfolio(address: str = Query(...), force: bool = Query(False), user=Depends(get_current_user)):
+    if not address.startswith("0x"):
+        raise HTTPException(400, "Adresse invalide")
+
+    now = _time.time()
+    if now - _last_tx_refresh.get(user["id"], 0) > 86400:
+        _last_tx_refresh[user["id"]] = now
+        asyncio.create_task(_daily_tx_refresh(user["id"]))
+
+    entry = _portfolio_cache.get(address)
+    if not force and entry and (now - entry["ts"]) < 3600:
+        data = dict(entry["data"])
+        data["cached"] = True
+        return data
+
+    data = await _compute_portfolio(address)
+    _portfolio_cache[address] = {"data": data, "ts": now}
+
+    # Save intraday snapshot for dashboard mini-chart
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            cur = await db.execute(
+                "SELECT created_at FROM snapshots WHERE user_id=? AND token_symbol IS NULL ORDER BY created_at DESC LIMIT 1",
+                (user["id"],))
+            last = await cur.fetchone()
+            if not last or (_time.time() - _time.mktime(_time.strptime(last["created_at"], "%Y-%m-%d %H:%M:%S"))) > 600:
+                await db.execute(
+                    "INSERT INTO snapshots (user_id, total_usd, token_count) VALUES (?, ?, ?)",
+                    (user["id"], data["total_usd"], data["token_count"]))
+                await db.commit()
+    except Exception:
+        pass
+
+    return data
+
+
+async def _daily_tx_refresh(user_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT address FROM wallets WHERE user_id=?", (user_id,))
+        wallets_list = await cur.fetchall()
+    for w in wallets_list:
+        count = await _fetch_transactions_for_wallet(user_id, w["address"])
+        if count > 0:
+            await _rebuild_history(user_id, w["address"])
+
+
+# ── Snapshots / History API ──────────────────────────────────────
+
+@app.get("/api/snapshots")
+async def get_snapshots(token: str = Query(None), wallet: str = Query(None), chain: str = Query(None),
+                        user=Depends(get_current_user), db=Depends(get_db)):
+    """Returns daily history as snapshots for chart compatibility."""
+    conditions = ["user_id=?", str(user["id"])]
+    params = [user["id"]]
+
+    if token:
+        conditions.append("token_symbol=?")
+        params.append(token.upper())
+    else:
+        conditions.append("token_symbol IS NULL")
+
+    if wallet and wallet != "ALL":
+        conditions.append("wallet_address=?")
+        params.append(wallet)
+    if chain:
+        conditions.append("chain=?")
+        params.append(chain)
+
+    where = " AND ".join(conditions)
+    cur = await db.execute(
+        f"SELECT value_usd as total_usd, 0 as token_quantity, 0 as token_count, cost_basis_usd as cost_basis, date FROM daily_history WHERE {where} ORDER BY date ASC",
+        tuple(params))
+    rows = await cur.fetchall()
+
+    result = []
+    for r in rows:
+        result.append({
+            "total_usd": r["total_usd"],
+            "quantity": 0,
+            "token_count": 0,
+            "date": r["date"],
+            "cost_basis": r["cost_basis"],
+        })
+    return result
+
+
+@app.get("/api/snapshots/tokens")
+async def get_snapshot_tokens(user=Depends(get_current_user), db=Depends(get_db)):
+    cur = await db.execute(
+        "SELECT DISTINCT token_symbol FROM daily_history WHERE user_id=? AND token_symbol IS NOT NULL ORDER BY token_symbol",
+        (user["id"],))
+    return [r["token_symbol"] for r in await cur.fetchall()]
+
+
+@app.post("/api/snapshots/backfill")
+async def backfill_snapshots(user=Depends(get_current_user), db=Depends(get_db)):
+    cur = await db.execute("SELECT address FROM wallets WHERE user_id=?", (user["id"],))
+    wallet_rows = await cur.fetchall()
+    if not wallet_rows:
+        raise HTTPException(400, "Aucun wallet")
+    results = []
+    for w in wallet_rows:
+        result = await _rebuild_history(user["id"], w["address"])
+        results.append(result)
+    # Aggregate
+    total_days = sum(r.get("days", 0) for r in results)
+    all_unmapped = []
+    for r in results:
+        all_unmapped.extend(r.get("unmapped_tokens", []))
+    return {"ok": True, "days": total_days, "unmapped_tokens": list(set(all_unmapped))}
+
+
+# ── PNL endpoint ─────────────────────────────────────────────────
+
+@app.get("/api/pnl")
+async def get_pnl(wallet: str = Query(None), token: str = Query(None), range: str = Query("all"),
+                  user=Depends(get_current_user), db=Depends(get_db)):
+    conditions = ["user_id=?", str(user["id"])]
+    params = [user["id"]]
+
+    if wallet and wallet != "ALL":
+        conditions.append("wallet_address=?")
+        params.append(wallet)
+    if token:
+        conditions.append("token_symbol=?")
+        params.append(token.upper())
+    else:
+        conditions.append("token_symbol IS NULL")
+
+    where = " AND ".join(conditions)
+    cur = await db.execute(
+        f"SELECT date, value_usd, cost_basis_usd, net_flows_usd FROM daily_history WHERE {where} ORDER BY date ASC",
+        tuple(params))
+    rows = await cur.fetchall()
+
+    # Apply range filter
+    if range != "all":
+        try:
+            days = int(range)
+            cutoff = (datetime.datetime.utcnow() - datetime.timedelta(days=days)).strftime("%Y-%m-%d")
+            rows = [r for r in rows if r["date"] >= cutoff]
+        except ValueError:
+            pass
+
+    result = []
+    prev_value = None
+    for r in rows:
+        pnl = r["value_usd"] - r["cost_basis_usd"]
+        pnl_pct = round(pnl / r["cost_basis_usd"] * 100, 2) if r["cost_basis_usd"] > 0 else 0.0
+        pnl_day = round(r["value_usd"] - (prev_value or r["value_usd"]) - r["net_flows_usd"], 2) if prev_value is not None else 0.0
+        result.append({
+            "date": r["date"],
+            "value": r["value_usd"],
+            "cost_basis": r["cost_basis_usd"],
+            "pnl": round(pnl, 2),
+            "pnl_pct": pnl_pct,
+            "pnl_day": pnl_day,
+        })
+        prev_value = r["value_usd"]
+
+    return result
+
+
+# ── Enrichment endpoint (manual trigger) ─────────────────────────
+
+@app.post("/api/transactions/enrich")
+async def enrich_transactions(user=Depends(get_current_user), db=Depends(get_db)):
+    cur = await db.execute("SELECT address FROM wallets WHERE user_id=?", (user["id"],))
+    wallets_list = await cur.fetchall()
+    if not wallets_list:
+        return {"ok": True, "enriched": 0}
+    total = 0
+    for w in wallets_list:
+        result = await _fetch_prices_per_token(user["id"], w["address"])
+        total += result.get("enriched", 0)
+    return {"ok": True, "enriched": total}
+
+
+@app.post("/api/transactions/fetch")
+async def fetch_transactions(user=Depends(get_current_user), db=Depends(get_db)):
+    cur = await db.execute("SELECT address, label FROM wallets WHERE user_id=?", (user["id"],))
+    wallets_list = await cur.fetchall()
+    if not wallets_list:
+        raise HTTPException(400, "Aucun wallet")
+    total_tx = 0
+    for w in wallets_list:
+        total_tx += await _fetch_transactions_for_wallet(user["id"], w["address"])
+    return {"ok": True, "transactions_fetched": total_tx}
+
+
+# ── Currency rates ──────────────────────────────────────────────
 
 _rate_cache = {"eur": None, "ts": 0}
 
@@ -752,18 +852,18 @@ async def get_rates():
                 return _rate_cache["eur"]
     except Exception:
         pass
-    return {"eur": 0.91}  # fallback ~rate
+    return {"eur": 0.91}
 
+
+# ── Version ─────────────────────────────────────────────────────
 
 @app.get("/api/version/latest")
 async def latest_version():
-    """Proxy GitHub tags API to avoid browser CORS/rate-limit issues."""
     try:
         async with httpx.AsyncClient(timeout=10) as c:
             r = await c.get(
                 "https://api.github.com/repos/LostInTheBugs/Crypto-Wallet-Tracker/tags?per_page=1",
-                headers={"Accept": "application/vnd.github+json"}
-            )
+                headers={"Accept": "application/vnd.github+json"})
             if r.status_code == 200:
                 data = r.json()
                 tag = (data[0]["name"] if data else "").lstrip("v")
