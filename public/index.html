@@ -207,7 +207,7 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>📦 Version</h2>
-        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.7.2</strong></p>
+        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.7.3</strong></p>
         <p id="verStatus" style="font-size:.85rem"></p>
       </div>
       <div class="card" style="margin-bottom:16px">
@@ -456,6 +456,14 @@ function renderResult(d){
     '<div class="stat-card"><div class="label">Tokens</div><div class="value">'+d.token_count+'</div></div>'+
     '<div class="stat-card"><div class="label">Chaînes actives</div><div class="value">'+d.chain_count+'</div></div>'+
     '<div class="stat-card"><div class="label">Wallets</div><div class="value">'+(activeWallet=="ALL"?wallets.length:1)+'</div></div>';
+  // Also add gas fees card
+  fetch("/api/transactions?limit=1").then(function(r){return r.json()}).then(function(d){
+    var gas=0;/* computed below */;
+    fetch("/api/transactions/gas-total").then(function(r2){return r2.json()}).then(function(gd){
+      document.getElementById("pnlCards").insertAdjacentHTML("beforeend",
+        '<div class="stat-card"><div class="label">⛽ Gaz total</div><div class="value">'+fmtCurr(gd.total_gas_usd||0)+'</div></div>');
+    });
+  });
 
   if(currentPage=="dashboard"){
     if(pieChart)pieChart.destroy();
@@ -761,12 +769,13 @@ async function loadTransactions(page){
   try{
     var r=await fetch("/api/transactions?"+params.join("&"));
     var d=await r.json();var sym=currSymbol();
-    var html='<table><thead><tr><th>Date</th><th>Wallet</th><th>Token</th><th>Chaîne</th><th>Qté</th><th>Prix</th><th>'+sym+' Valeur</th><th>Dir</th></tr></thead><tbody>';
+    var html='<table><thead><tr><th>Date</th><th>Wallet</th><th>Token</th><th>Chaîne</th><th>Qté</th><th>Prix</th><th>'+sym+' Valeur</th><th>⛽</th><th>Dir</th></tr></thead><tbody>';
     for(var i=0;i<d.items.length;i++){
       var t=d.items[i];var date=t.block_time?t.block_time.slice(0,16).replace("T"," "):"-";
       var short=t.wallet_address.slice(0,6)+"..."+t.wallet_address.slice(-4);
       var dirIcon=t.direction=="in"?"📥":"📤";var dirColor=t.direction=="in"?"#40c463":"#f85149";
       var val=sym+(Math.abs(t.usd_value||0)).toFixed(2);
+      var gas=t.gas_fee_usd?sym+t.gas_fee_usd.toFixed(2):"-";
       html+='<tr><td style="font-size:.75rem;white-space:nowrap">'+date+'</td>'+
         '<td style="font-size:.75rem;color:#6e7681">'+short+'</td>'+
         '<td><b>'+t.token_symbol+'</b> <span style="color:#6e7681;font-size:.7rem">'+t.token_name+'</span></td>'+
@@ -774,6 +783,7 @@ async function loadTransactions(page){
         '<td>'+t.amount.toLocaleString(undefined,{maximumFractionDigits:6})+'</td>'+
         '<td style="font-size:.8rem">'+(t.usd_price?sym+t.usd_price.toFixed(4):"-")+'</td>'+
         '<td class="usd">'+val+'</td>'+
+        '<td style="font-size:.8rem;color:#6e7681">'+gas+'</td>'+
         '<td style="color:'+dirColor+'">'+dirIcon+'</td></tr>';
     }
     html+='</tbody></table>';

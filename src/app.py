@@ -104,6 +104,10 @@ async def lifespan(app: FastAPI):
         except: pass
         try: await db.execute("ALTER TABLE transactions ADD COLUMN log_index INTEGER DEFAULT 0")
         except: pass
+        try: await db.execute("ALTER TABLE transactions ADD COLUMN gas_fee_eth REAL DEFAULT 0")
+        except: pass
+        try: await db.execute("ALTER TABLE transactions ADD COLUMN gas_fee_usd REAL DEFAULT 0")
+        except: pass
         try: await db.execute("CREATE INDEX IF NOT EXISTS idx_tx_dedup ON transactions(tx_hash, log_index, user_id)")
         except: pass
         # User API keys
@@ -875,9 +879,88 @@ async def get_transactions(wallet: str = Query(None), chain: str = Query(None), 
         "token_name": r["token_name"], "amount": r["amount"], "usd_price": r["usd_price"],
         "usd_value": r["usd_value"], "chain": r["chain"], "tx_hash": r["tx_hash"],
         "block_time": r["block_time"], "direction": r["direction"], "log_index": r["log_index"],
+        "gas_fee_usd": r["gas_fee_usd"],
         "wallet_label": _wallet_labels.get(r["wallet_address"], "")
     } for r in rows]
     return {"total": total, "items": items}
+
+
+@app.post("/api/transactions/fetch-gas")
+async def fetch_gas_fees(user=Depends(get_current_user), db=Depends(get_db)):
+    """Fetch gas fees for transactions that don't have them yet."""
+    cur = await db.execute(
+        "SELECT DISTINCT tx_hash, chain FROM transactions WHERE user_id=? AND tx_hash!='' AND gas_fee_eth=0 LIMIT 500",
+        (user["id"],))
+    txns = await cur.fetchall()
+    if not txns:
+        return {"ok": True, "updated": 0}
+    
+    updated = 0
+    # Batch by chain
+    by_chain = {}
+    for t in txns:
+        by_chain.setdefault(t["chain"], []).append(t["tx_hash"])
+    
+    for chain, hashes in by_chain.items():
+        host = CHAINS.get(chain)
+        if not host: continue
+        # Process in batches of 20
+        for i in range(0, len(hashes), 20):
+            batch = hashes[i:i+20]
+            # Fetch each tx individually (Blockscout doesn't batch)
+            for tx_hash in batch:
+                try:
+                    async with httpx.AsyncClient(timeout=15) as bc:
+                        r = await bc.get(f"https://{host}/api/v2/transactions/{tx_hash}")
+                        if r.status_code == 200:
+                            data = r.json()
+                            gas_used = float(data.get("gas_used") or 0)
+                            gas_price = float(data.get("gas_price") or 0)
+                            eth_fee = (gas_used * gas_price) / 1e18
+                            if eth_fee > 0:
+                                # Get ETH price from our price_history
+                                eth_usd = await _get_eth_price_at(data.get("timestamp", ""))
+                                usd_fee = eth_fee * eth_usd
+                                await db.execute(
+                                    "UPDATE transactions SET gas_fee_eth=?, gas_fee_usd=? WHERE tx_hash=? AND user_id=?",
+                                    (round(eth_fee, 8), round(usd_fee, 2), tx_hash, user["id"]))
+                                updated += 1
+                    await asyncio.sleep(0.3)  # rate limit
+                except Exception:
+                    continue
+        await db.commit()
+    
+    return {"ok": True, "updated": updated}
+
+
+@app.get("/api/transactions/gas-total")
+async def gas_total(user=Depends(get_current_user), db=Depends(get_db)):
+    cur = await db.execute("SELECT COALESCE(SUM(gas_fee_usd),0) as total FROM transactions WHERE user_id=?", (user["id"],))
+    row = await cur.fetchone()
+    return {"total_gas_usd": round(row["total"] if row else 0, 2)}
+
+
+async def _get_eth_price_at(timestamp_str: str) -> float:
+    """Get ETH price at a given timestamp. Returns USD price."""
+    if not timestamp_str:
+        return 2000.0  # fallback
+    try:
+        # Load from price_history cache
+        date = timestamp_str[:10]
+        async with aiosqlite.connect(DB_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute("SELECT price_usd FROM price_history WHERE token_symbol='eth' AND date=? LIMIT 1", (date,))
+            row = await cur.fetchone()
+            if row and row["price_usd"] > 0:
+                return row["price_usd"]
+            # Try weth
+            cur = await db.execute("SELECT price_usd FROM price_history WHERE token_symbol='weth' AND date=? LIMIT 1", (date,))
+            row = await cur.fetchone()
+            if row and row["price_usd"] > 0:
+                return row["price_usd"]
+    except:
+        pass
+    return 2000.0  # fallback
 
 
 _wallet_labels = {}
