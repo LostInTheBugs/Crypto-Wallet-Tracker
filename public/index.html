@@ -138,6 +138,7 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
 
     <div id="pageDashboard">
       <div class="grid" id="walletStats"></div>
+      <div class="grid" id="pnlCards" style="margin-bottom:8px"></div>
       <div class="row">
         <div class="card"><h2>📊 Répartition par chaîne</h2><div class="chart-wrap"><canvas id="pieChart"></canvas></div><div class="chains" id="walletChains" style="margin-top:12px"></div></div>
         <div class="card"><h2>📈 Évolution
@@ -166,6 +167,14 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
           <span class="range-pill" onclick="setRange('30',this)">1 mois</span>
         </span>
       </h2><div class="chart-wrap" style="height:350px"><canvas id="lineChart"></canvas></div></div>
+      <div class="card" style="margin-top:16px"><h2>📊 PNL Journalier
+        <span style="display:inline-flex;gap:4px;margin-left:8px">
+          <span class="range-pill active" onclick="setPnlRange('30',this)">30j</span>
+          <span class="range-pill" onclick="setPnlRange('90',this)">90j</span>
+          <span class="range-pill" onclick="setPnlRange('365',this)">1 an</span>
+          <span class="range-pill" onclick="setPnlRange('all',this)">Tout</span>
+        </span>
+      </h2><div class="chart-wrap" style="height:200px"><canvas id="pnlChart"></canvas></div></div>
     </div>
 
     <div id="pageTokens" class="hidden"></div>
@@ -272,7 +281,7 @@ function changeLang() {
 
 var currentPage = "dashboard";
 var authMode="login", wallets=[], activeWallet="ALL", eurRate=null, currency=localStorage.getItem("currency")||"usd";
-var pieChart=null, lineChart=null, miniChart=null, lastResult=null, loadingAddr=null, chartRange="all", quickRange="day";
+var pieChart=null, lineChart=null, miniChart=null, pnlChart=null, lastResult=null, loadingAddr=null, chartRange="all", quickRange="day", pnlRange="30";
 
 function switchPage(page) {
   currentPage = page;
@@ -437,9 +446,11 @@ function renderResult(d){
     document.getElementById("walletChains").innerHTML=chainsHtml||'<span style="color:#6e7681">Aucune</span>';
     var errHtml="";if(d.errors&&d.errors.length)errHtml=d.errors.map(function(e){return'<div class="error">⚠ '+(e.wallet?e.wallet+": ":"")+e.chain+': '+e.error+'</div>'}).join("");
     document.getElementById("walletError").innerHTML=errHtml;
+    renderPnlCards();
   }
 
   if(currentPage=="tokens") renderTokenTable(d);
+  if(currentPage=="stats"){ drawLineChart(); drawPnlChart(); }
 }
 
 function renderTokenTable(d){
@@ -451,7 +462,9 @@ function renderTokenTable(d){
 }
 
 async function drawLineChart(){
-  try{var token=document.getElementById("chartToken").value;var r=await fetch("/api/snapshots"+(token?"?token="+token:""));var snaps=await r.json();if(snaps.length<1){if(lineChart)lineChart.destroy();return}
+  try{var token=document.getElementById("chartToken").value;var wallet=document.getElementById("chartWallet").value;var chain=document.getElementById("chartChain").value;
+    var params=["token="+encodeURIComponent(token),"wallet="+encodeURIComponent(wallet),"chain="+encodeURIComponent(chain)].filter(function(p){return !p.endsWith("=")}).join("&");
+    var r=await fetch("/api/snapshots?"+params);var snaps=await r.json();if(snaps.length<1){if(lineChart)lineChart.destroy();return}
     if(chartRange!="all"){var cutoff=Date.now()-parseInt(chartRange)*86400*1000;snaps=snaps.filter(function(s){return new Date(s.date+"Z").getTime()>cutoff});if(snaps.length<1){if(lineChart)lineChart.destroy();return}}
     if(lineChart)lineChart.destroy();var ctx=document.getElementById("lineChart").getContext("2d");var sym=currSymbol();
     var datasets=[{label:t("valueLine")+" ("+sym+")",data:snaps.map(function(s){return Math.round(toCurr(s.total_usd)*100)/100}),borderColor:"#4dabf7",backgroundColor:"rgba(77,171,247,0.1)",fill:true,tension:0.3,pointRadius:1,pointHoverRadius:4,borderWidth:1.5}];
@@ -596,6 +609,46 @@ async function doChangePassword(){
   } catch(e) {
     msg.innerHTML = '<span style="color:#f85149">'+t("pwdError")+'</span>';
   }
+}
+
+// ── PNL chart ─────────────────────────────────────────────
+function setPnlRange(range, el){
+  pnlRange=range;
+  document.querySelectorAll("#pageStats .range-pill").forEach(function(p){p.classList.remove("active")});
+  if(el)el.classList.add("active");
+  drawPnlChart();
+}
+
+async function drawPnlChart(){
+  try{
+    var wallet=document.getElementById("chartWallet").value;
+    var params=["wallet="+encodeURIComponent(wallet),"range="+pnlRange].join("&");
+    var r=await fetch("/api/pnl?"+params);var data=await r.json();
+    if(!data.length){if(pnlChart)pnlChart.destroy();return}
+    if(pnlChart)pnlChart.destroy();
+    var ctx=document.getElementById("pnlChart").getContext("2d");
+    var sym=currSymbol();
+    pnlChart=new Chart(ctx,{type:"bar",data:{labels:data.map(function(d){return d.date.slice(5)}),datasets:[{data:data.map(function(d){return Math.round(toCurr(d.pnl_day)*100)/100}),backgroundColor:data.map(function(d){return d.pnl_day>=0?"rgba(64,196,99,0.7)":"rgba(248,81,73,0.7)"}),borderRadius:2}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{color:"#6e7681",font:{size:8},maxTicksLimit:10},grid:{display:false}},y:{ticks:{color:"#6e7681",font:{size:8},callback:function(v){return sym+v.toLocaleString()}},grid:{color:"#1e2530"}}}}});
+  }catch(e){}
+}
+
+// ── PNL cards ──────────────────────────────────────────────
+async function renderPnlCards(){
+  try{
+    var wallet=document.getElementById("chartWallet")?document.getElementById("chartWallet").value:"";
+    var r=await fetch("/api/pnl?range=1"+(wallet?"&wallet="+wallet:""));
+    var data=await r.json();
+    if(!data.length) return;
+    var last=data[data.length-1];
+    var sym=currSymbol();
+    var pnlVal=Math.round(toCurr(last.pnl)*100)/100;
+    var pnlDay=Math.round(toCurr(last.pnl_day)*100)/100;
+    var colorPnl=pnlVal>=0?"#40c463":"#f85149";
+    var colorDay=pnlDay>=0?"#40c463":"#f85149";
+    document.getElementById("pnlCards").innerHTML=
+      '<div class="stat-card"><div class="label">PNL Total</div><div class="value" style="color:'+colorPnl+'">'+(pnlVal>=0?"+":"")+sym+pnlVal.toLocaleString()+'</div></div>'+
+      '<div class="stat-card"><div class="label">PNL 24h</div><div class="value" style="color:'+colorDay+'">'+(pnlDay>=0?"+":"")+sym+pnlDay.toLocaleString()+'</div></div>';
+  }catch(e){}
 }
 
 (async function(){var r=await fetch("/api/auth/me");if(r.ok)showDash()})();
