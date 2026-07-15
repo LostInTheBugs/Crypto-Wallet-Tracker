@@ -313,7 +313,8 @@ function switchPage(page) {
   document.getElementById("pageWallets").classList.toggle("hidden", page!="wallets");
   document.getElementById("pageSettings").classList.toggle("hidden", page!="settings");
   if (page=="dashboard" && lastResult) { renderResult(lastResult); drawMiniChart(); }
-  if (page=="stats" && lastResult) { drawLineChart(); populateFilters(); }
+  if (page=="stats") drawLineChart();
+  if (page=="txns") loadTransactions();
   if (page=="tokens" && lastResult) renderTokenTable(lastResult);
   if (page=="wallets") renderWalletPage();
   if (page=="settings") renderSettingsPage();
