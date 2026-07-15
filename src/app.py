@@ -864,6 +864,42 @@ async def portfolio(address: str = Query(...), force: bool = Query(False), user=
     data = await _compute_portfolio(address)
     _portfolio_cache[address] = {"data": data, "ts": now}
 
+    # Add per-token cost basis from daily_history
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT date, value_usd, cost_basis_usd FROM daily_history WHERE user_id=? AND wallet_address=? AND token_symbol IS NULL ORDER BY date DESC LIMIT 1",
+                (user["id"], address))
+            row = await cur.fetchone()
+        if row:
+            data["total_cost_basis"] = round(row["cost_basis_usd"], 2)
+            data["total_pnl"] = round(data["total_usd"] - row["cost_basis_usd"], 2)
+            # Per-token: compute from daily_history if available, else from transactions
+            async with aiosqlite.connect(DB_PATH) as db:
+                db.row_factory = aiosqlite.Row
+                for t in data["tokens"]:
+                    sym = t["symbol"].lower()
+                    # Check if this token has a mapped CG ID and daily history
+                    cur2 = await db.execute(
+                        "SELECT cost_basis_usd FROM daily_history WHERE user_id=? AND wallet_address=? AND token_symbol=? ORDER BY date DESC LIMIT 1",
+                        (user["id"], address, sym.upper()))
+                    token_row = await cur2.fetchone()
+                    if token_row:
+                        t["cost_basis"] = round(token_row["cost_basis_usd"], 2)
+                        t["pnl"] = round(t["usd_value"] - token_row["cost_basis_usd"], 2)
+                    else:
+                        # Compute from transactions
+                        cur3 = await db.execute(
+                            "SELECT SUM(CASE WHEN direction='in' THEN amount*usd_price ELSE -amount*usd_price END) FROM transactions WHERE user_id=? AND wallet_address=? AND LOWER(token_symbol)=?",
+                            (user["id"], address, sym))
+                        cost_row = await cur3.fetchone()
+                        cost = (cost_row[0] or 0) if cost_row else 0
+                        t["cost_basis"] = round(cost, 2)
+                        t["pnl"] = round(t["usd_value"] - cost, 2)
+    except Exception:
+        pass
+
     # Save intraday snapshot for dashboard mini-chart
     try:
         async with aiosqlite.connect(DB_PATH) as db:
