@@ -1190,6 +1190,21 @@ async def get_snapshots(token: str = Query(None), wallet: str = Query(None), cha
             "date": r["date"],
             "cost_basis": r["cost_basis"],
         })
+    
+    # Patch last value with current portfolio if this is the aggregate (no token filter)
+    if not token and result and wallet:
+        try:
+            pf = await _compute_portfolio(wallet)
+            pf_mapped = 0.0
+            for t in pf.get("tokens", []):
+                sym = t["symbol"].lower()
+                if SYMBOL_TO_CG.get(sym) or sym in ("usdc", "usdt", "dai", "eth", "weth", "wbtc"):
+                    pf_mapped += t.get("usd_value", 0)
+            if pf_mapped > 0:
+                result[-1]["total_usd"] = round(pf_mapped, 2)
+        except Exception:
+            pass
+    
     return result
 
 
