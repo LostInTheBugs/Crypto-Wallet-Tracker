@@ -735,13 +735,18 @@ async def _rebuild_history(user_id: int, wallet_address: str):
             fallback_prices[sym] = tx["usd_price"]  # last wins
 
     # Fetch current portfolio prices as ultimate fallback for mapped tokens
-    current_prices = {}
+    current_prices = {}  # sym → price_usd
+    current_values = {}  # sym → total_usd_value
     try:
         from_portfolio = await _compute_portfolio(wallet_address)
         for t in from_portfolio.get("tokens", []):
             sym = t["symbol"].lower()
-            if t.get("price_usd", 0) > 0:
-                current_prices[sym] = t["price_usd"]
+            price = t.get("price_usd", 0)
+            total_val = t.get("usd_value", 0)
+            if price > 0:
+                current_prices[sym] = price
+            if total_val > 0:
+                current_values[sym] = total_val
     except Exception:
         pass
 
@@ -842,6 +847,7 @@ async def _rebuild_history(user_id: int, wallet_address: str):
 
         # Compute daily value: sum(balance × price_at_date)
         value = 0.0
+        accounted_syms = set()
         for sym, bal in balances.items():
             if bal <= 0 or sym in excluded:
                 continue
@@ -851,6 +857,16 @@ async def _rebuild_history(user_id: int, wallet_address: str):
             p = _price_at(sym, day_ts_ms)
             if p > 0:
                 value += bal * p
+                accounted_syms.add(sym)
+        
+        # Add tokens that have current portfolio value but no transactions
+        # (these tokens exist on-chain but weren't captured by token-transfers)
+        for sym, cur_val in current_values.items():
+            if sym not in accounted_syms and sym not in excluded:
+                if not SYMBOL_TO_CG.get(sym) and sym not in fallback_prices:
+                    continue
+                value += cur_val
+
 
         # Net flows: sum(delta × price_at_date)
         net_flows = 0.0
