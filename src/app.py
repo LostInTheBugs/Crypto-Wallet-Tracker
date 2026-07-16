@@ -786,6 +786,25 @@ async def _rebuild_history(user_id: int, wallet_address: str):
     # 4. Build daily balance deltas (in memory — no SQL in loop)
     # Per day: {date: {sym: {"delta": float}}}
     daily_deltas: dict = defaultdict(dict)
+    
+    # Detect orphan tokens: have current portfolio value but no transactions
+    # Add synthetic initial-balance entries at first_date so they appear in charts
+    tx_syms = {tx["token_symbol"].lower() for tx in txs}
+    for sym in current_values:
+        if sym not in tx_syms and sym not in excluded:
+            if SYMBOL_TO_CG.get(sym) or sym in fallback_prices:
+                # Add as synthetic "in" transaction at first_date with the current balance
+                # Price is from current_prices, value goes to the token's cost basis
+                price = current_prices.get(sym, 0)
+                if price > 0:
+                    # Derive approximate token quantity from value/price
+                    qty = current_values[sym] / price if price > 0 else 0
+                    if qty > 0:
+                        daily_deltas[first_date][sym] = qty
+                        # Also inject a fake tx for the price tracking
+                        if sym not in fallback_prices:
+                            fallback_prices[sym] = price
+    
     for tx in txs:
         sym = tx["token_symbol"].lower()
         date = tx["block_time"][:10]
