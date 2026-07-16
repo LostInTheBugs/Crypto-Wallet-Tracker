@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — v2.9.1
+# Crypto Wallet Tracker — v2.10.0
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -8,8 +8,11 @@ Dashboard agrégé, graphiques d'évolution, historique des prix via DefiLlama, 
 
 ## ✨ Fonctionnalités
 
-- 🔗 **9 chaînes EVM** — Ethereum, Base, Optimism, Arbitrum, Polygon, Gnosis, zkSync, Celo, Scroll
+- 🔗 **21 chaînes EVM** — Ethereum, Base, Optimism, Arbitrum, Polygon, Gnosis, zkSync, Celo, Scroll, Soneium, Ink, Mode, Unichain, Lisk, Linea, Etherlink, Metis, Manta, BOB, Zora, World Chain
+- 🪙 **Solde natif** — ETH/POL/xDAI/CELO/XTZ/METIS récupéré en parallèle des tokens (appel API natif)
 - 💰 **Valorisation USD/€** — temps réel via Blockscout, conversion EUR (Frankfurter)
+- 🦙 **Fallback prix DefiLlama** — si Blockscout ne donne pas de prix, appel batch à l'API gratuite `coins.llama.fi/prices/current`
+- 🔒 **Détection tokens stakés** — badge visuel + agrégat `staked_usd` (LST, aTokens, Beefy, Stargate, LP tokens)
 - 👥 **Comptes utilisateurs** — inscription, connexion, wallets privés (bcrypt + sessions)
 - 📊 **Dashboard** — valeur totale, répartition par chaîne (donut), cartes PNL Total / PNL 24h, mini-graphe, gaz cumulé
 - 📈 **Statistiques** — courbes valeur/coût d'achat, barres PNL journalier (7j/30j/90j/1a/All), filtrable par wallet/token/chaîne
@@ -48,7 +51,12 @@ docker compose up -d
 
 ```
 Crypto-Wallet-Tracker/
-├── src/app.py              # Backend FastAPI (~1400 lignes)
+├── src/
+│   ├── app.py               # Backend FastAPI — routes, auth, wallet CRUD (~900 lignes)
+│   └── services/            # Modules métier
+│       ├── price_service.py   # SYMBOL_TO_CG, DefiLlama/CoinGecko, cache prix
+│       ├── pnl_service.py     # Timeline unifié, reconstruction soldes, PNL
+│       └── portfolio_service.py  # 21 chaînes, natif, fallback prix, spam, staked
 ├── public/index.html        # Frontend SPA + Chart.js (~800 lignes)
 ├── Dockerfile
 ├── docker-compose.yml
