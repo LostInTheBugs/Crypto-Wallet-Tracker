@@ -741,7 +741,7 @@ async def _rebuild_history(user_id: int, wallet_address: str):
         from_portfolio = await _compute_portfolio(wallet_address)
         for t in from_portfolio.get("tokens", []):
             sym = t["symbol"].lower()
-            price = t.get("price_usd", 0)
+            price = t.get("usd_price", 0)
             total_val = t.get("usd_value", 0)
             if price > 0:
                 current_prices[sym] = price
