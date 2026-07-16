@@ -818,6 +818,8 @@ async def _rebuild_history(user_id: int, wallet_address: str):
 
     balances: dict = defaultdict(float)   # sym → cumulative balance
     costs: dict = defaultdict(float)       # sym → cumulative cost basis
+    # Map token symbol to chain (from first transaction seen)
+    token_chain: dict = {}
     daily_rows = []
 
     while date_cursor <= end_date:
@@ -847,26 +849,17 @@ async def _rebuild_history(user_id: int, wallet_address: str):
 
         # Compute daily value: sum(balance × price_at_date)
         value = 0.0
-        accounted_syms = set()
+        per_token_values = {}  # sym → value for per-token rows
         for sym, bal in balances.items():
             if bal <= 0 or sym in excluded:
                 continue
-            # Include mapped tokens + tokens that have a fallback price
             if not SYMBOL_TO_CG.get(sym) and sym not in fallback_prices and sym not in current_prices:
                 continue
             p = _price_at(sym, day_ts_ms)
             if p > 0:
-                value += bal * p
-                accounted_syms.add(sym)
-        
-        # Add tokens that have current portfolio value but no transactions
-        # (these tokens exist on-chain but weren't captured by token-transfers)
-        for sym, cur_val in current_values.items():
-            if sym not in accounted_syms and sym not in excluded:
-                if not SYMBOL_TO_CG.get(sym) and sym not in fallback_prices:
-                    continue
-                value += cur_val
-
+                token_val = round(bal * p, 2)
+                value += token_val
+                per_token_values[sym] = token_val
 
         # Net flows: sum(delta × price_at_date)
         net_flows = 0.0
@@ -876,9 +869,16 @@ async def _rebuild_history(user_id: int, wallet_address: str):
 
         cost_basis = sum(costs.values())
 
+        # Aggregate row (token_symbol=NULL)
         daily_rows.append((user_id, wallet_address, date_str,
                           round(value, 2), round(max(0, cost_basis), 2),
                           round(net_flows, 2), None, None))
+        
+        # Per-token rows (for token filter on stats page)
+        for sym, token_val in per_token_values.items():
+            daily_rows.append((user_id, wallet_address, date_str,
+                              token_val, 0, 0, sym, token_chain.get(sym)))
+        
         date_cursor += datetime.timedelta(days=1)
 
     # 6. Write to daily_history (idempotent)
@@ -1139,6 +1139,7 @@ async def get_snapshots(token: str = Query(None), wallet: str = Query(None), cha
         conditions.append("token_symbol=?")
         params.append(token.upper())
     else:
+        # No token filter: return aggregate rows only (token_symbol IS NULL)
         conditions.append("token_symbol IS NULL")
 
     if wallet and wallet != "ALL":
