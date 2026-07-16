@@ -1081,6 +1081,7 @@ async def portfolio(address: str = Query(...), force: bool = Query(False), user=
     _portfolio_cache[address] = {"data": data, "ts": now}
 
     # Add per-token cost basis from daily_history
+    total_cost = None
     try:
         async with aiosqlite.connect(DB_PATH) as db:
             db.row_factory = aiosqlite.Row
@@ -1089,17 +1090,23 @@ async def portfolio(address: str = Query(...), force: bool = Query(False), user=
                 (user["id"], address))
             row = await cur.fetchone()
         if row:
-            data["total_cost_basis"] = round(row["cost_basis_usd"], 2)
-            data["total_pnl"] = round(data["total_usd"] - row["cost_basis_usd"], 2)
-            # Per-token: compute from daily_history if available, else from transactions
+            total_cost = round(row["cost_basis_usd"], 2)
+    except Exception:
+        pass
+    
+    if total_cost is not None:
+        data["total_cost_basis"] = total_cost
+        data["total_pnl"] = round(data["total_usd"] - total_cost, 2)
+        
+        # Per-token: compute from daily_history if available, else from transactions
+        try:
             async with aiosqlite.connect(DB_PATH) as db:
                 db.row_factory = aiosqlite.Row
                 for t in data["tokens"]:
                     sym = t["symbol"].lower()
-                    # Check if this token has a mapped CG ID and daily history
                     cur2 = await db.execute(
                         "SELECT cost_basis_usd FROM daily_history WHERE user_id=? AND wallet_address=? AND token_symbol=? ORDER BY date DESC LIMIT 1",
-                        (user["id"], address, sym.upper()))
+                        (user["id"], address, sym))
                     token_row = await cur2.fetchone()
                     if token_row:
                         t["cost_basis"] = round(token_row["cost_basis_usd"], 2)
@@ -1113,8 +1120,8 @@ async def portfolio(address: str = Query(...), force: bool = Query(False), user=
                         cost = (cost_row[0] or 0) if cost_row else 0
                         t["cost_basis"] = round(cost, 2)
                         t["pnl"] = round(t["usd_value"] - cost, 2)
-    except Exception:
-        pass
+        except Exception:
+            pass
 
     # Save intraday snapshot for dashboard mini-chart
     try:
