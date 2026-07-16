@@ -446,7 +446,7 @@ async def _fetch_prices_per_token(user_id: int, wallet_address: str) -> dict:
     api_calls_ok = 0
     api_calls_failed = 0
 
-    # Separate mapped vs unmapped
+    # Separate mapped vs unmapped, prioritize by value
     mapped_syms = {}  # sym_lower → cg_id
     for s in symbols:
         cg_id = SYMBOL_TO_CG.get(s)
@@ -478,6 +478,19 @@ async def _fetch_prices_per_token(user_id: int, wallet_address: str) -> dict:
             if cached:
                 prices[sym] = cached
                 del mapped_syms[sym]  # no need to fetch
+
+        # Sort remaining tokens by total USD value (descending) to prioritize important ones
+        if mapped_syms:
+            async with aiosqlite.connect(DB_PATH) as db:
+                db.row_factory = aiosqlite.Row
+                cur = await db.execute(
+                    f"SELECT LOWER(token_symbol) as sym, SUM(usd_value) as total_val FROM transactions WHERE user_id=? AND usd_value>0 GROUP BY sym ORDER BY total_val DESC",
+                    (user_id,))
+                val_rows = await cur.fetchall()
+            sym_values = {r["sym"]: r["total_val"] for r in val_rows}
+            # Sort: highest value first
+            sorted_mapped = sorted(mapped_syms.items(), key=lambda x: sym_values.get(x[0], 0), reverse=True)
+            mapped_syms = dict(sorted_mapped)
 
         # Fetch remaining tokens from DefiLlama in batches
         if mapped_syms:
@@ -572,24 +585,24 @@ async def _save_prices_to_cache(sym_lower: str, prices: dict):
 
 
 async def _fetch_defillama_batch(mapped_syms: dict, from_ts: int, to_ts: int) -> tuple:
-    """Fetch prices from DefiLlama in batches. Returns (prices_dict, calls_ok, calls_failed)."""
+    """Fetch prices from DefiLlama. Fetches tokens individually for reliability.
+    Returns (prices_dict, calls_ok, calls_failed)."""
     prices = {}
     ok = 0
     failed = 0
     syms_list = list(mapped_syms.items())  # [(sym, cg_id), ...]
+    window_days = 200  # Fetch up to 200 days per call (safe margin below 500-point limit)
     
-    # Build batches of up to 10 tokens per call
-    for i in range(0, len(syms_list), 5):
-        batch = syms_list[i:i+5]
-        ids = ",".join(f"coingecko:{cg_id}" for _, cg_id in batch)
-        max_span = max(10, 500 // len(batch))  # DefiLlama limit: 500 points total
+    for sym_lower, cg_id in syms_list:
+        token_ok = False
+        token_points = {}  # {ts_ms: price}
         
-        # Split into windows respecting the 500-point limit
-        all_points = {}  # {sym: {ts_sec: price}}
+        # Split into time windows
         window_start = from_ts
         while window_start < to_ts:
-            window_span = min(max_span, (to_ts - window_start) // 86400 + 1)
-            url = f"https://coins.llama.fi/chart/{ids}?start={window_start}&span={window_span}&period=1d"
+            window_end = min(to_ts, window_start + window_days * 86400)
+            span_days = max(1, (window_end - window_start) // 86400)
+            url = f"https://coins.llama.fi/chart/coingecko:{cg_id}?start={window_start}&span={span_days}&period=1d"
             
             for attempt in range(3):
                 try:
@@ -597,38 +610,34 @@ async def _fetch_defillama_batch(mapped_syms: dict, from_ts: int, to_ts: int) ->
                         resp = await c.get(url)
                     if resp.status_code == 200:
                         data = resp.json()
-                        coins = data.get("coins", {})
-                        for coin_id, coin_data in coins.items():
-                            sym = None
-                            for s, cg in batch:
-                                if f"coingecko:{cg}" == coin_id:
-                                    sym = s
-                                    break
-                            if sym:
-                                if sym not in all_points:
-                                    all_points[sym] = {}
-                                for pt in coin_data.get("prices", []):
-                                    # DefiLlama returns timestamps in seconds
-                                    all_points[sym][pt["timestamp"] * 1000] = pt["price"]
+                        coin_data = data.get("coins", {}).get(f"coingecko:{cg_id}", {})
+                        for pt in coin_data.get("prices", []):
+                            # DefiLlama returns timestamps in seconds → convert to ms
+                            token_points[pt["timestamp"] * 1000] = pt["price"]
                         ok += 1
+                        token_ok = True
                         break
                     elif resp.status_code == 429:
-                        await asyncio.sleep(2 ** attempt * 2)
+                        await asyncio.sleep(2 ** attempt * 3)  # Longer backoff for rate limits
                     else:
                         await asyncio.sleep(2 ** attempt)
                 except Exception:
                     await asyncio.sleep(2 ** attempt)
             else:
                 failed += 1
+                token_ok = False
+                break  # Stop trying more windows for this token
             
-            window_start += max_span * 86400
+            window_start = window_end
             if window_start < to_ts:
-                await asyncio.sleep(0.5)  # rate limit
+                await asyncio.sleep(1.0)  # Rate limit between windows
         
-        # Save to cache
-        for sym, pts in all_points.items():
-            await _save_prices_to_cache(sym, pts)
-            prices[sym] = pts
+        if token_ok and token_points:
+            await _save_prices_to_cache(sym_lower, token_points)
+            prices[sym_lower] = token_points
+        
+        # Rate limit between tokens
+        await asyncio.sleep(2.0)
     
     return prices, ok, failed
 
