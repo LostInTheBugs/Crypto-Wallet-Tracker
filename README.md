@@ -1,21 +1,27 @@
-# Crypto Wallet Tracker — V2.4.0
+# Crypto Wallet Tracker — v2.9.1
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
-Dashboard agrégé, graphiques d'évolution, historique automatique via CoinGecko, comptes utilisateurs. Le tout en Docker, une seule commande pour installer.
+Dashboard agrégé, graphiques d'évolution, historique des prix via DefiLlama, PNL par token, transactions paginées, comptes utilisateurs. Le tout en Docker, une seule commande.
 
 ---
 
 ## ✨ Fonctionnalités
 
 - 🔗 **9 chaînes EVM** — Ethereum, Base, Optimism, Arbitrum, Polygon, Gnosis, zkSync, Celo, Scroll
-- 💰 **Valorisation USD/€** — temps réel via Blockscout, conversion EUR via BCE (Frankfurter)
-- 👥 **Comptes utilisateurs** — inscription, connexion, wallets privés (bcrypt + JWT)
-- 📊 **Dashboard** — valeur totale, répartition par chaîne (donut + %), mini-graphe 1J/1S/1M
-- 📈 **Statistiques** — graphe d'évolution complet, filtrable par wallet/token/période (All → 1 mois)
-- 🔙 **Historique automatique** — backfill depuis la 1ʳᵉ transaction du wallet via CoinGecko
-- 💼 **Gestion des wallets** — page dédiée, ajout/suppression avec labels
-- ⚡ **Cache intelligent** — portfolios en cache 1h, changement de devise instantané sans re-scan
+- 💰 **Valorisation USD/€** — temps réel via Blockscout, conversion EUR (Frankfurter)
+- 👥 **Comptes utilisateurs** — inscription, connexion, wallets privés (bcrypt + sessions)
+- 📊 **Dashboard** — valeur totale, répartition par chaîne (donut), cartes PNL Total / PNL 24h, mini-graphe, gaz cumulé
+- 📈 **Statistiques** — courbes valeur/coût d'achat, barres PNL journalier (7j/30j/90j/1a/All), filtrable par wallet/token/chaîne
+- 📜 **Transactions** — tableau paginé, filtrable par wallet/chaîne/direction, colonnes prix/valeur/gaz
+- 📋 **Détail tokens** — balance, prix, valeur et **PNL par token** (vert/rouge)
+- 🔙 **Historique des prix** — DefiLlama (gratuit, sans clé API) + cache SQLite, fallback CoinGecko optionnel
+- 🧮 **PNL calculé** — coût moyen pondéré, soldes reconstruits par date, PNL journalier
+- 🛡️ **Filtre anti-spam** — détection automatique des tokens de scam/airdrop
+- ⚙️ **Paramètres** — langue (FR/EN), devise (USD/EUR), changement de mot de passe, clés API utilisateur
+- 🔑 **Clés API par utilisateur** — CoinGecko, Alchemy (saisies et validées dans Paramètres, jamais en clair dans l'API)
+- 📦 **Vérification de version** — compare avec le dernier tag GitHub
+- ⚡ **Cache prix** — table `price_history`, 2ᵉ rebuild ~0 appel réseau
 - 🐳 **Docker** — une commande pour déployer
 
 ---
@@ -42,11 +48,11 @@ docker compose up -d
 
 ```
 Crypto-Wallet-Tracker/
-├── src/app.py              # Backend FastAPI (auth, portfolios, snapshots, backfill)
-├── public/index.html        # Frontend SPA (dashboard, stats, tokens, wallets)
+├── src/app.py              # Backend FastAPI (~1400 lignes)
+├── public/index.html        # Frontend SPA + Chart.js (~800 lignes)
 ├── Dockerfile
 ├── docker-compose.yml
-├── install.sh               # Installeur automatique (Docker + systemd)
+├── install.sh               # Installeur automatique
 ├── requirements.txt
 └── README.md
 ```
@@ -59,7 +65,7 @@ Crypto-Wallet-Tracker/
 |---|---|---|
 | `PORT` | `80` | Port d'écoute |
 | `SESSION_SECRET` | auto | Secret JWT (fixer pour persister les sessions) |
-| `ALCHEMY_API_KEY` | — | Optionnel : meilleure découverte de tokens |
+| `ALCHEMY_API_KEY` | — | Optionnel : fallback pour balances/transfers si Blockscout échoue |
 
 ---
 
@@ -67,18 +73,44 @@ Crypto-Wallet-Tracker/
 
 | Couche | Technologie |
 |---|---|
-| Backend | Python 3.12 · FastAPI · SQLite · httpx |
-| Frontend | Vanilla JS · Chart.js · GitHub dark theme |
-| Données | Blockscout API (gratuit) + CoinGecko (historique) |
+| Backend | Python 3.12 · FastAPI · aiosqlite · httpx |
+| Frontend | Vanilla JS · Chart.js 4 · GitHub dark theme |
+| Prix historiques | **DefiLlama** (primaire, gratuit) + CoinGecko (fallback, nécessite clé) |
+| Transactions | Blockscout API v2 (ERC-20/721/1155 token-transfers) |
 | Déploiement | Docker · docker compose |
+
+---
+
+## 📡 Sources de données
+
+| Donnée | Source | Gratuit |
+|---|---|---|
+| Soldes temps réel | Blockscout `/token-balances` | ✅ |
+| Transferts de tokens | Blockscout `/token-transfers` | ✅ |
+| Prix historiques | DefiLlama `/chart` | ✅ |
+| Prix historiques (fallback) | CoinGecko `/market_chart/range` | ❌ (clé API) |
+| Frais de gaz | Blockscout `/transactions` | ✅ |
+| Prix actuels | Blockscout (intégré dans `/token-balances`) | ✅ |
+| Conversion EUR | Frankfurter (BCE) | ✅ |
+
+---
+
+## 🧮 Calcul du PNL
+
+- **Soldes reconstruits** : cumul des transferts signés par date (`in` − `out`)
+- **Coût d'achat** : coût moyen pondéré par token (entrées au prix du jour, sorties au coût moyen)
+- **PNL** : `valeur_actuelle − coût_moyen`
+- **PNL journalier** : `valeur(j) − valeur(j−1) − flux_nets(j)`
+- **Réconciliation** : delta entre historique et portfolio affiché en avertissement si >15%
 
 ---
 
 ## 🔐 Sécurité
 
 - Mots de passe hashés **bcrypt**
-- Sessions **JWT** en cookies httpOnly
+- Sessions en cookies httpOnly
 - **Aucune clé privée** — uniquement des adresses publiques
+- Clés API utilisateur : stockées chiffrées, jamais renvoyées en clair (masquées `sk-...abc`)
 - Données 100 % locales (SQLite)
 
 ---
