@@ -160,7 +160,7 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
           <select id="chartWallet" onchange="drawLineChart()" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:2px 6px;border-radius:4px;font-size:.65rem"><option value="">Tous wallets</option></select>
           <select id="chartChain" onchange="onChainFilter();updateFavBtns()" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:2px 6px;border-radius:4px;font-size:.65rem"><option value="">Toutes chaînes</option></select>
           <button onclick="toggleFavChain()" title="Ajouter/retirer ce favori" id="favChainBtn" style="background:none;border:none;color:#8b949e;cursor:pointer;font-size:.8rem;padding:0 2px">☆</button>
-          <select id="chartToken" onchange="drawLineChart();updateFavBtns()" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:2px 6px;border-radius:4px;font-size:.65rem"><option value="">Tous tokens</option></select>
+          <select id="chartToken" onchange="drawLineChart();drawPnlChart();updateFavBtns()" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:2px 6px;border-radius:4px;font-size:.65rem"><option value="">Tous tokens</option></select>
           <button onclick="toggleFavToken()" title="Ajouter/retirer ce favori" id="favTokenBtn" style="background:none;border:none;color:#8b949e;cursor:pointer;font-size:.8rem;padding:0 2px">☆</button>
           <span class="range-pill active" onclick="setRange('all',this)">All</span>
           <span class="range-pill" onclick="setRange('365',this)">1 an</span>
@@ -177,6 +177,16 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
           <span class="range-pill" onclick="setPnlRange('all',this)">Tout</span>
         </span>
       </h2><div class="chart-wrap" style="height:200px"><canvas id="pnlChart"></canvas></div></div>
+      <div id="debugPanel" style="margin-top:16px;display:none">
+        <button onclick="var d=document.getElementById('debugContent');d.style.display=d.style.display==='none'?'block':'none'" style="background:var(--card);border:1px solid var(--border);color:var(--accent);padding:4px 10px;border-radius:5px;cursor:pointer;font-size:.75rem">🛠 Debug</button>
+        <div id="debugContent" style="display:none;background:#0d1117;border:1px solid var(--border);border-radius:8px;padding:12px;margin-top:8px;font-family:monospace;font-size:.7rem;color:#c9d1d9;max-height:300px;overflow-y:auto">
+          <div><strong>Raw response:</strong> <pre id="dbgRaw" style="white-space:pre-wrap;word-break:break-all;margin:4px 0">-</pre></div>
+          <div><strong>Data points:</strong> <span id="dbgCount">-</span></div>
+          <div><strong>First value:</strong> <span id="dbgFirst">-</span></div>
+          <div><strong>Last value:</strong> <span id="dbgLast">-</span></div>
+          <div><strong>Source:</strong> <span id="dbgSource">-</span></div>
+        </div>
+      </div>
     </div>
 
     <div id="pageTokens" class="hidden"></div>
@@ -329,7 +339,7 @@ function setQuickRange(range, el){ quickRange=range; document.querySelectorAll("
 async function switchCurrency(){
   currency=document.getElementById("setCurrency").value;
   localStorage.setItem("currency", currency);
-  if(currency=="eur"&&!eurRate){try{var r=await fetch("/api/rates");var d=await r.json();eurRate=d.eur}catch(e){eurRate=0.91}}
+  if(currency=="eur"&&!eurRate){try{var r=await fetch("/api/rates");var d=await r.json();eurRate=d.eur}catch(e){console.error("switchCurrency",e);eurRate=0.91}}
   if(lastResult){ renderResult(lastResult); if(currentPage=="dashboard") drawMiniChart(); else if(currentPage=="stats") drawLineChart(); else if(currentPage=="tokens") renderTokenTable(lastResult); }
 }
 
@@ -342,7 +352,7 @@ function toggleAuth(){authMode=authMode=="login"?"register":"login";document.get
 async function doAuth(){
   var u=document.getElementById("authUser").value.trim(), p=document.getElementById("authPass").value;
   var path=authMode=="login"?"/api/auth/login":"/api/auth/register";
-  try{var r=await fetch(path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:u,password:p})});var d=await r.json();if(!r.ok){document.getElementById("authError").textContent=d.detail||d.msg||"Erreur";return}if(authMode=="register"){toggleAuth();document.getElementById("authError").textContent="Compte créé ! Connecte-toi.";return}showDash()}catch(e){document.getElementById("authError").textContent="Erreur réseau"}
+  try{var r=await fetch(path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:u,password:p})});var d=await r.json();if(!r.ok){document.getElementById("authError").textContent=d.detail||d.msg||"Erreur";return}if(authMode=="register"){toggleAuth();document.getElementById("authError").textContent="Compte créé ! Connecte-toi.";return}showDash()}catch(e){console.error("doAuth",e);document.getElementById("authError").textContent="Erreur réseau"}
 }
 
 async function logout(){await fetch("/api/auth/logout",{method:"POST"});document.getElementById("viewLogin").classList.remove("hidden");document.getElementById("viewDash").classList.add("hidden");document.getElementById("sidebar").classList.add("hidden");document.getElementById("userInfo").textContent="";document.getElementById("btnLogout").classList.add("hidden");activeWallet="ALL"}
@@ -426,7 +436,7 @@ async function addWallet(){var addr=document.getElementById("walletAddr").value.
         // Show token warning if any
         if(p.unmapped&&p.unmapped.length)showTokenWarning(p.unmapped,"non mappés");
         if(p.degraded&&p.degraded.length)showTokenWarning(p.degraded,"sans prix historique");}
-    }catch(e){clearInterval(poll);document.getElementById("importModal").classList.add("hidden")}
+    }catch(e){console.error("addWallet/poll",e);clearInterval(poll);document.getElementById("importModal").classList.add("hidden")}
   },800);
   await loadWallets();if(currentPage=="wallets")renderWalletPage()}
 
@@ -435,7 +445,7 @@ async function loadView(force){activeWallet=="ALL"?await loadAllWallets(force):a
 async function loadOneWallet(addr,force){
   if(loadingAddr==addr&&!force)return;loadingAddr=addr;
   document.getElementById("walletStats").innerHTML='<div class="loading">Scan...</div>';
-  try{var r=await fetch("/api/portfolio?address="+addr+(force?"&force=true":""));renderResult(await r.json())}catch(e){}
+  try{var r=await fetch("/api/portfolio?address="+addr+(force?"&force=true":""));renderResult(await r.json())}catch(e){console.error("loadOneWallet",e)}
 }
 
 async function loadAllWallets(force){
@@ -444,11 +454,11 @@ async function loadAllWallets(force){
   try{
     var promises=wallets.map(function(w){return fetch("/api/portfolio?address="+w.address+(force?"&force=true":"")).then(function(r){return r.json()})});
     var results=await Promise.all(promises);
-    var totalUsd=0,allTokens=[],chainTotals={},chainSet={},allErrors=[];
-    for(var i=0;i<results.length;i++){var d=results[i],w=wallets[i];totalUsd+=d.total_usd||0;for(var j=0;j<d.tokens.length;j++){var t=d.tokens[j];t._wallet=w.label||w.address.slice(0,10)+"...";allTokens.push(t)}for(var c in d.chains){if(d.chains.hasOwnProperty(c)){chainTotals[c]=(chainTotals[c]||0)+d.chains[c];chainSet[c]=true}}if(d.errors)for(var k=0;k<d.errors.length;k++)allErrors.push({wallet:w.label||w.address.slice(0,10)+"...",chain:d.errors[k].chain,error:d.errors[k].error})}
+    var totalUsd=0,stakedUsd=0,allTokens=[],chainTotals={},chainSet={},allErrors=[];
+    for(var i=0;i<results.length;i++){var d=results[i],w=wallets[i];totalUsd+=d.total_usd||0;stakedUsd+=d.staked_usd||0;for(var j=0;j<d.tokens.length;j++){var t=d.tokens[j];t._wallet=w.label||w.address.slice(0,10)+"...";allTokens.push(t)}for(var c in d.chains){if(d.chains.hasOwnProperty(c)){chainTotals[c]=(chainTotals[c]||0)+d.chains[c];chainSet[c]=true}}if(d.errors)for(var k=0;k<d.errors.length;k++)allErrors.push({wallet:w.label||w.address.slice(0,10)+"...",chain:d.errors[k].chain,error:d.errors[k].error})}
     allTokens.sort(function(a,b){return b.usd_value-a.usd_value});
-    renderResult({total_usd:Math.round(totalUsd*100)/100,token_count:allTokens.length,chain_count:Object.keys(chainSet).length,chains:chainTotals,tokens:allTokens.slice(0,200),errors:allErrors.slice(0,10)});
-  }catch(e){}
+    renderResult({total_usd:Math.round(totalUsd*100)/100,staked_usd:Math.round(stakedUsd*100)/100,token_count:allTokens.length,chain_count:Object.keys(chainSet).length,chains:chainTotals,tokens:allTokens.slice(0,200),errors:allErrors.slice(0,10)});
+  }catch(e){console.error("loadAllWallets",e)}
 }
 
 function renderResult(d){
@@ -457,20 +467,21 @@ function renderResult(d){
     '<div class="stat-card"><div class="label">Valeur totale</div><div class="value">'+fmtCurr(d.total_usd)+'</div></div>'+
     '<div class="stat-card"><div class="label">Tokens</div><div class="value">'+d.token_count+'</div></div>'+
     '<div class="stat-card"><div class="label">Chaînes actives</div><div class="value">'+d.chain_count+'</div></div>'+
-    '<div class="stat-card"><div class="label">Wallets</div><div class="value">'+(activeWallet=="ALL"?wallets.length:1)+'</div></div>';
+    '<div class="stat-card"><div class="label">Wallets</div><div class="value">'+(activeWallet=="ALL"?wallets.length:1)+'</div></div>'+
+    (d.staked_usd>0?'<div class="stat-card" style="border-left:2px solid #40c463"><div class="label">🔒 Staké</div><div class="value" style="color:#40c463">'+fmtCurr(d.staked_usd)+'</div></div>':'');
   // Also add gas fees card
   fetch("/api/transactions?limit=1").then(function(r){return r.json()}).then(function(d){
     var gas=0;/* computed below */;
     fetch("/api/transactions/gas-total").then(function(r2){return r2.json()}).then(function(gd){
       document.getElementById("pnlCards").insertAdjacentHTML("beforeend",
         '<div class="stat-card"><div class="label">⛽ Gaz total</div><div class="value">'+fmtCurr(gd.total_gas_usd||0)+'</div></div>');
-    });
-  });
+    }).catch(function(e){console.error("renderResult/gas-total",e)});
+  }).catch(function(e){console.error("renderResult/gas",e)});
 
   if(currentPage=="dashboard"){
     if(pieChart)pieChart.destroy();
     var ctx=document.getElementById("pieChart").getContext("2d");
-    var labels=[],data=[],bg=[],cc={"ethereum":"#627eea","optimism":"#ff0420","base":"#0052ff","arbitrum":"#28a0f0","polygon":"#8247e5","gnosis":"#04795b","zksync":"#1573fe","celo":"#35d07f","scroll":"#ebc28e"};
+    var labels=[],data=[],bg=[],cc={"ethereum":"#627eea","optimism":"#ff0420","base":"#0052ff","arbitrum":"#28a0f0","polygon":"#8247e5","gnosis":"#04795b","zksync":"#1573fe","celo":"#35d07f","scroll":"#ebc28e","soneium":"#7b3fe4","ink":"#8b5cf6","mode":"#a78bfa","unichain":"#f472b6","lisk":"#2dd4bf","linea":"#34d399","etherlink":"#fbbf24","metis":"#f87171","manta":"#38bdf8","bob":"#fb923c","zora":"#a3e635","worldchain":"#e879f9"};
     for(var c in d.chains){if(d.chains.hasOwnProperty(c)&&d.chains[c]>0.01){labels.push(c.charAt(0).toUpperCase()+c.slice(1));data.push(Math.round(toCurr(d.chains[c])*100)/100);bg.push(cc[c]||"#30363d")}}
     if(data.length>0)pieChart=new Chart(ctx,{type:"doughnut",data:{labels:labels,datasets:[{data:data,backgroundColor:bg,borderColor:"#0a0e14",borderWidth:2}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:"right",labels:{color:"#c9d1d9",padding:12,font:{size:11},generateLabels:function(chart){var d=chart.data;return d.labels.map(function(l,i){var v=d.datasets[0].data[i];var total=d.datasets[0].data.reduce(function(a,b){return a+b},0);var pct=Math.round(v/total*100);return{text:l+"  "+pct+"%",fillStyle:d.datasets[0].backgroundColor[i],strokeStyle:d.datasets[0].backgroundColor[i],fontColor:"#c9d1d9",index:i}})}}}}}});
     drawMiniChart();
@@ -491,7 +502,7 @@ function renderTokenTable(d){
   var html='<div class="card"><h2>📋 Détail tokens <span style="font-weight:400;font-size:.7rem;color:#6e7681">('+d.token_count+' tokens)</span></h2><table><thead><tr><th>Token</th>'+(showWallet?'<th>Wallet</th>':'')+'<th>Chaîne</th><th>Balance</th><th>Prix</th><th>'+sym+' Valeur</th><th>'+sym+' PNL</th></tr></thead><tbody>';
   for(var i=0;i<d.tokens.length;i++){var t=d.tokens[i];var icon=t.icon?'<img class="ti" src="'+t.icon+'" onerror="this.style.display=\'none\'">':'';var pf=sym+(t.usd_price<0.01?t.usd_price.toFixed(6):t.usd_price.toFixed(4));
     var pnl=t.pnl||0;var pnlColor=pnl>=0?"#40c463":"#f85149";var pnlStr=(pnl>=0?"+":"")+sym+Math.abs(pnl).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
-    html+='<tr><td>'+icon+'<b>'+t.name+'</b> <span style="color:#6e7681;font-size:.75rem">'+t.symbol+'</span></td>'+(showWallet?'<td style="font-size:.75rem;color:#6e7681">'+t._wallet+'</td>':'')+'<td class="chain">'+t.chain+'</td><td>'+t.balance.toLocaleString()+'</td><td>'+pf+'</td><td class="usd">'+fmtCurr(t.usd_value)+'</td><td class="usd" style="color:'+pnlColor+'">'+pnlStr+'</td></tr>'}
+    var catBadge=t.category==="staked"?' <span style="background:#14532d;color:#4ade80;font-size:.6rem;padding:1px 5px;border-radius:3px;margin-left:4px">staked</span>':'';html+='<tr><td>'+icon+'<b>'+t.name+'</b> <span style="color:#6e7681;font-size:.75rem">'+t.symbol+'</span>'+catBadge+'</td>'+(showWallet?'<td style="font-size:.75rem;color:#6e7681">'+t._wallet+'</td>':'')+'<td class="chain">'+t.chain+'</td><td>'+t.balance.toLocaleString()+'</td><td>'+pf+'</td><td class="usd">'+fmtCurr(t.usd_value)+'</td><td class="usd" style="color:'+pnlColor+'">'+pnlStr+'</td></tr>'}
   html+='</tbody></table></div>';
   document.getElementById("pageTokens").innerHTML=html;
 }
@@ -499,27 +510,45 @@ function renderTokenTable(d){
 async function drawLineChart(){
   try{var token=document.getElementById("chartToken").value;var wallet=document.getElementById("chartWallet").value;var chain=document.getElementById("chartChain").value;
     var params=["token="+encodeURIComponent(token),"wallet="+encodeURIComponent(wallet),"chain="+encodeURIComponent(chain)].filter(function(p){return !p.endsWith("=")}).join("&");
-    var r=await fetch("/api/snapshots?"+params);var snaps=await r.json();if(snaps.length<1){if(lineChart)lineChart.destroy();lineChart=null;document.getElementById("lineChart").parentElement.innerHTML='<div style="text-align:center;padding:40px;color:#6e7681">'+t("noData")+'</div>';return}
-    if(chartRange!="all"){var cutoff=Date.now()-parseInt(chartRange)*86400*1000;snaps=snaps.filter(function(s){return new Date(s.date+"Z").getTime()>cutoff});if(snaps.length<1){if(lineChart)lineChart.destroy();lineChart=null;document.getElementById("lineChart").parentElement.innerHTML='<div style="text-align:center;padding:40px;color:#6e7681">'+t("noData")+'</div>';return}}
-    if(lineChart)lineChart.destroy();var ctx=document.getElementById("lineChart").getContext("2d");var sym=currSymbol();
-    var datasets=[{label:t("valueLine")+" ("+sym+")",data:snaps.map(function(s){return Math.round(toCurr(s.total_usd)*100)/100}),borderColor:"#4dabf7",backgroundColor:"rgba(77,171,247,0.1)",fill:true,tension:0.3,pointRadius:1,pointHoverRadius:4,borderWidth:1.5}];
+    var r=await fetch("/api/snapshots?"+params);var snaps=await r.json();
+    console.log("[drawLineChart] API response:",snaps.length,"points");
+    if(snaps.length<1){if(lineChart)lineChart.destroy();lineChart=null;var lcEl=document.getElementById("lineChart");if(lcEl&&lcEl.parentElement)lcEl.parentElement.innerHTML='<div style="text-align:center;padding:40px;color:#6e7681">'+t("noData")+'</div>';updateDebugPanel(snaps);return}
+    if(chartRange!="all"){var cutoff=Date.now()-parseInt(chartRange)*86400*1000;snaps=snaps.filter(function(s){return new Date(s.date+"Z").getTime()>cutoff});if(snaps.length<1){if(lineChart)lineChart.destroy();lineChart=null;var lcEl2=document.getElementById("lineChart");if(lcEl2&&lcEl2.parentElement)lcEl2.parentElement.innerHTML='<div style="text-align:center;padding:40px;color:#6e7681">'+t("noData")+'</div>';updateDebugPanel(snaps);return}}
+    // Validate data
+    var sym=currSymbol();
+    var rawData=snaps.map(function(s){return Math.round(toCurr(s.total_usd)*100)/100});
+    rawData=rawData.filter(function(v){return isFinite(v)&&!isNaN(v)});
+    if(rawData.length===0){if(lineChart)lineChart.destroy();lineChart=null;var lcEl3=document.getElementById("lineChart");if(lcEl3&&lcEl3.parentElement)lcEl3.parentElement.innerHTML='<div style="text-align:center;padding:40px;color:#6e7681">'+t("noData")+'</div>';updateDebugPanel(null,rawData);return}
+    var lcCanvas=document.getElementById("lineChart");if(!lcCanvas){console.error("drawLineChart: #lineChart element not found");return}
+    if(lineChart)lineChart.destroy();
+    var ctx=lcCanvas.getContext("2d");
+    var datasets=[{label:t("valueLine")+" ("+sym+")",data:rawData,borderColor:"#4dabf7",backgroundColor:"rgba(77,171,247,0.1)",fill:true,tension:0.3,pointRadius:1,pointHoverRadius:4,borderWidth:1.5}];
     var hasCost=snaps.some(function(s){return s.cost_basis>0});
-    if(hasCost)datasets.push({label:t("costLine")+" ("+sym+")",data:snaps.map(function(s){return Math.round(toCurr(s.cost_basis)*100)/100}),borderColor:"#f0c040",backgroundColor:"rgba(240,192,64,0.1)",fill:false,tension:0.3,pointRadius:1,pointHoverRadius:4,borderWidth:1.5,borderDash:[5,3]});
-    lineChart=new Chart(ctx,{type:"line",data:{labels:snaps.map(function(s){return s.date.slice(5,16).replace("T"," ")}),datasets:datasets},options:{responsive:true,maintainAspectRatio:false,interaction:{intersect:false,mode:"index"},plugins:{legend:{display:true,labels:{color:"#8b949e",font:{size:10},usePointStyle:true,padding:16}}},scales:{x:{ticks:{color:"#6e7681",font:{size:9},maxTicksLimit:8},grid:{color:"#1e2530"}},y:{ticks:{color:"#6e7681",font:{size:9},callback:function(v){return sym+v.toLocaleString()}},grid:{color:"#1e2530"}}}}})}catch(e){}
+    if(hasCost){var costData=snaps.map(function(s){return Math.round(toCurr(s.cost_basis)*100)/100});costData=costData.filter(function(v){return isFinite(v)&&!isNaN(v)});datasets.push({label:t("costLine")+" ("+sym+")",data:costData,borderColor:"#f0c040",backgroundColor:"rgba(240,192,64,0.1)",fill:false,tension:0.3,pointRadius:1,pointHoverRadius:4,borderWidth:1.5,borderDash:[5,3]})}
+    lineChart=new Chart(ctx,{type:"line",data:{labels:snaps.map(function(s){return (s.date||"").slice(5,16).replace("T"," ")}),datasets:datasets},options:{responsive:true,maintainAspectRatio:false,interaction:{intersect:false,mode:"index"},plugins:{legend:{display:true,labels:{color:"#8b949e",font:{size:10},usePointStyle:true,padding:16}}},scales:{x:{ticks:{color:"#6e7681",font:{size:9},maxTicksLimit:8},grid:{color:"#1e2530"}},y:{ticks:{color:"#6e7681",font:{size:9},callback:function(v){return sym+v.toLocaleString()}},grid:{color:"#1e2530"}}}}});
+    updateDebugPanel(snaps);
+  }catch(e){console.error("drawLineChart",e)}
 }
 
 async function drawMiniChart(){
   try{
     var r=await fetch("/api/snapshots");var snaps=await r.json();
-    if(snaps.length<1){if(miniChart)miniChart.destroy();miniChart=null;document.getElementById("miniChart").parentElement.innerHTML='<div style="text-align:center;padding:40px;color:#6e7681">'+t("noData")+'</div>';return}
+    console.log("[drawMiniChart] API response:",snaps.length,"points");
+    if(snaps.length<1){if(miniChart)miniChart.destroy();miniChart=null;var mcEl=document.getElementById("miniChart");if(mcEl&&mcEl.parentElement)mcEl.parentElement.innerHTML='<div style="text-align:center;padding:40px;color:#6e7681">'+t("noData")+'</div>';return}
     var days={"day":1,"week":7,"month":30};
     var cutoff=Date.now()-days[quickRange]*86400*1000;
     snaps=snaps.filter(function(s){return new Date(s.date+"Z").getTime()>cutoff});
-    if(snaps.length<1){if(miniChart)miniChart.destroy();miniChart=null;document.getElementById("miniChart").parentElement.innerHTML='<div style="text-align:center;padding:40px;color:#6e7681">'+t("noData")+'</div>';return}
+    if(snaps.length<1){if(miniChart)miniChart.destroy();miniChart=null;var mcEl2=document.getElementById("miniChart");if(mcEl2&&mcEl2.parentElement)mcEl2.parentElement.innerHTML='<div style="text-align:center;padding:40px;color:#6e7681">'+t("noData")+'</div>';return}
+    // Validate data
+    var sym=currSymbol();
+    var rawData=snaps.map(function(s){return Math.round(toCurr(s.total_usd)*100)/100});
+    rawData=rawData.filter(function(v){return isFinite(v)&&!isNaN(v)});
+    if(rawData.length===0){if(miniChart)miniChart.destroy();miniChart=null;var mcEl3=document.getElementById("miniChart");if(mcEl3&&mcEl3.parentElement)mcEl3.parentElement.innerHTML='<div style="text-align:center;padding:40px;color:#6e7681">'+t("noData")+'</div>';return}
+    var mcCanvas=document.getElementById("miniChart");if(!mcCanvas){console.error("drawMiniChart: #miniChart element not found");return}
     if(miniChart)miniChart.destroy();
-    var ctx=document.getElementById("miniChart").getContext("2d");var sym=currSymbol();
-    miniChart=new Chart(ctx,{type:"line",data:{labels:snaps.map(function(s){return s.date.slice(5,16).replace("T"," ")}),datasets:[{data:snaps.map(function(s){return Math.round(toCurr(s.total_usd)*100)/100}),borderColor:"#4dabf7",backgroundColor:"rgba(77,171,247,0.1)",fill:true,tension:0.3,pointRadius:0,borderWidth:1.5}]},options:{responsive:true,maintainAspectRatio:false,interaction:{intersect:false,mode:"index"},plugins:{legend:{display:false}},scales:{x:{ticks:{color:"#6e7681",font:{size:9},maxTicksLimit:5},grid:{color:"#1e2530"}},y:{ticks:{color:"#6e7681",font:{size:9},callback:function(v){return sym+v.toLocaleString()}},grid:{color:"#1e2530"}}}}});
-  }catch(e){}
+    var ctx=mcCanvas.getContext("2d");
+    miniChart=new Chart(ctx,{type:"line",data:{labels:snaps.map(function(s){return (s.date||"").slice(5,16).replace("T"," ")}),datasets:[{data:rawData,borderColor:"#4dabf7",backgroundColor:"rgba(77,171,247,0.1)",fill:true,tension:0.3,pointRadius:0,borderWidth:1.5}]},options:{responsive:true,maintainAspectRatio:false,interaction:{intersect:false,mode:"index"},plugins:{legend:{display:false}},scales:{x:{ticks:{color:"#6e7681",font:{size:9},maxTicksLimit:5},grid:{color:"#1e2530"}},y:{ticks:{color:"#6e7681",font:{size:9},callback:function(v){return sym+v.toLocaleString()}},grid:{color:"#1e2530"}}}}});
+  }catch(e){console.error("drawMiniChart",e)}
 }
 
 async function populateFilters(){
@@ -552,7 +581,7 @@ async function populateFilters(){
   if(favT.length){tsel.innerHTML+='<optgroup label="⭐ Favoris">';for(var fi=0;fi<favT.length;fi++)tsel.innerHTML+='<option value="'+favT[fi]+'">⭐ '+favT[fi]+'</option>';tsel.innerHTML+='</optgroup>'}
   if(nonFavT.length){tsel.innerHTML+='<optgroup label="Tous">';for(var ni=0;ni<nonFavT.length;ni++)tsel.innerHTML+='<option value="'+nonFavT[ni]+'">'+nonFavT[ni]+'</option>';tsel.innerHTML+='</optgroup>'}
   // From snapshots
-  try{var r=await fetch("/api/snapshots/tokens");var st=await r.json();for(var k=0;k<st.length;k++){if(!seen[st[k]]&&favTokens.indexOf(st[k])==-1){tsel.innerHTML+='<option value="'+st[k]+'">'+st[k]+'</option>'}}}catch(e){}
+  try{var r=await fetch("/api/snapshots/tokens");var st=await r.json();for(var k=0;k<st.length;k++){if(!seen[st[k]]&&favTokens.indexOf(st[k])==-1){tsel.innerHTML+='<option value="'+st[k]+'">'+st[k]+'</option>'}}}catch(e){console.error("populateFilters/snapshots",e)}
 }
 
 function toggleFavChain(){
@@ -617,6 +646,7 @@ async function checkVersion(){
       el.textContent = t("verCheckError");
     }
   } catch(e) {
+    console.error("checkVersion",e);
     el.textContent = t("verCheckError");
   }
 }
@@ -643,6 +673,7 @@ async function doChangePassword(){
       msg.innerHTML = '<span style="color:#f85149">'+(d.detail||t("pwdError"))+'</span>';
     }
   } catch(e) {
+    console.error("doChangePassword",e);
     msg.innerHTML = '<span style="color:#f85149">'+t("pwdError")+'</span>';
   }
 }
@@ -658,14 +689,24 @@ function setPnlRange(range, el){
 async function drawPnlChart(){
   try{
     var wallet=document.getElementById("chartWallet").value;
-    var params=["wallet="+encodeURIComponent(wallet),"range="+pnlRange].join("&");
+    var token=document.getElementById("chartToken").value;
+    var params=["wallet="+encodeURIComponent(wallet),"range="+pnlRange];
+    if(token)params.push("token="+encodeURIComponent(token));
+    params=params.join("&");
     var r=await fetch("/api/pnl?"+params);var data=await r.json();
-    if(!data.length){if(pnlChart)pnlChart.destroy();return}
-    if(pnlChart)pnlChart.destroy();
-    var ctx=document.getElementById("pnlChart").getContext("2d");
+    console.log("[drawPnlChart] API response:",data.length,"points");
+    if(!data.length){if(pnlChart)pnlChart.destroy();updateDebugPanel(null);return}
+    // Validate data
     var sym=currSymbol();
-    pnlChart=new Chart(ctx,{type:"bar",data:{labels:data.map(function(d){return d.date.slice(5)}),datasets:[{data:data.map(function(d){return Math.round(toCurr(d.pnl_day)*100)/100}),backgroundColor:data.map(function(d){return d.pnl_day>=0?"rgba(64,196,99,0.7)":"rgba(248,81,73,0.7)"}),borderRadius:2}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{color:"#6e7681",font:{size:8},maxTicksLimit:10},grid:{display:false}},y:{ticks:{color:"#6e7681",font:{size:8},callback:function(v){return sym+v.toLocaleString()}},grid:{color:"#1e2530"}}}}});
-  }catch(e){}
+    var rawData=data.map(function(d){return Math.round(toCurr(d.pnl_day)*100)/100});
+    rawData=rawData.filter(function(v){return isFinite(v)&&!isNaN(v)});
+    if(rawData.length===0){if(pnlChart)pnlChart.destroy();var pcEl=document.getElementById("pnlChart");if(pcEl&&pcEl.parentElement)pcEl.parentElement.innerHTML='<div style="text-align:center;padding:40px;color:#6e7681">'+t("noData")+'</div>';updateDebugPanel(null,rawData);return}
+    var pcCanvas=document.getElementById("pnlChart");if(!pcCanvas){console.error("drawPnlChart: #pnlChart element not found");return}
+    if(pnlChart)pnlChart.destroy();
+    var ctx=pcCanvas.getContext("2d");
+    pnlChart=new Chart(ctx,{type:"bar",data:{labels:data.map(function(d){return (d.date||"").slice(5)}),datasets:[{data:rawData,backgroundColor:data.map(function(d){return d.pnl_day>=0?"rgba(64,196,99,0.7)":"rgba(248,81,73,0.7)"}),borderRadius:2}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{color:"#6e7681",font:{size:8},maxTicksLimit:10},grid:{display:false}},y:{ticks:{color:"#6e7681",font:{size:8},callback:function(v){return sym+v.toLocaleString()}},grid:{color:"#1e2530"}}}}});
+    updateDebugPanel(data);
+  }catch(e){console.error("drawPnlChart",e)}
 }
 
 // ── PNL cards ──────────────────────────────────────────────
@@ -684,7 +725,7 @@ async function renderPnlCards(){
     document.getElementById("pnlCards").innerHTML=
       '<div class="stat-card"><div class="label">PNL Total</div><div class="value" style="color:'+colorPnl+'">'+(pnlVal>=0?"+":"")+sym+pnlVal.toLocaleString()+'</div></div>'+
       '<div class="stat-card"><div class="label">PNL 24h</div><div class="value" style="color:'+colorDay+'">'+(pnlDay>=0?"+":"")+sym+pnlDay.toLocaleString()+'</div></div>';
-  }catch(e){}
+  }catch(e){console.error("renderPnlCards",e)}
 }
 
 // ── Token warning banner ──────────────────────────────────
@@ -723,7 +764,7 @@ async function renderApiKeys(){
       html += '</div><div id="keyMsg_'+k.provider+'" style="font-size:.8rem;margin-top:4px"></div></div>';
     }
     document.getElementById("apiKeysSection").innerHTML = html;
-  } catch(e) {}
+  } catch(e) {console.error("renderApiKeys",e)}
 }
 
 async function saveApiKey(provider){
@@ -746,6 +787,7 @@ async function saveApiKey(provider){
       msg.style.color = "#f85149";
     }
   } catch(e) {
+    console.error("saveApiKey",e);
     msg.textContent = "❌ Erreur réseau";
     msg.style.color = "#f85149";
   }
@@ -756,7 +798,7 @@ async function deleteApiKey(provider){
   try {
     await fetch("/api/settings/keys/"+provider, {method:"DELETE"});
     renderApiKeys();
-  } catch(e) {}
+  } catch(e) {console.error("deleteApiKey",e)}
 }
 
 async function loadTransactions(page){
@@ -799,7 +841,29 @@ async function loadTransactions(page){
       var chains=[];for(var j=0;j<d.items.length;j++){if(chains.indexOf(d.items[j].chain)===-1)chains.push(d.items[j].chain)}
       var csel=document.getElementById("txnChain");if(csel.options.length<=1){chains.forEach(function(c){csel.innerHTML+='<option value="'+c+'">'+c+'</option>'})}
     }
-  }catch(e){document.getElementById("txnContent").innerHTML='<div class="error">Erreur</div>'}
+  }catch(e){console.error("loadTransactions",e);document.getElementById("txnContent").innerHTML='<div class="error">Erreur</div>'}
+}
+
+// ── Debug Panel ──────────────────────────────────────────
+function updateDebugPanel(data, filteredVals){
+  var panel=document.getElementById("debugPanel");
+  if(!panel)return;
+  panel.style.display="block";
+  // Only show raw for snapshots (has date+total_usd), not pnl arrays
+  if(data&&data.length){
+    document.getElementById("dbgRaw").textContent=JSON.stringify(data.slice(0,5)).slice(0,500)+(data.length>5?"...":"");
+    document.getElementById("dbgCount").textContent=data.length;
+    var first=data[0],last=data[data.length-1];
+    document.getElementById("dbgFirst").textContent=first?JSON.stringify({date:first.date||"",total_usd:first.total_usd||first.pnl_day||""}):"-";
+    document.getElementById("dbgLast").textContent=last?JSON.stringify({date:last.date||"",total_usd:last.total_usd||last.pnl_day||""}):"-";
+  } else {
+    document.getElementById("dbgRaw").textContent="(empty)";
+    document.getElementById("dbgCount").textContent="0";
+    document.getElementById("dbgFirst").textContent="-";
+    document.getElementById("dbgLast").textContent="-";
+  }
+  if(filteredVals&&filteredVals.length!==undefined)document.getElementById("dbgSource").textContent=filteredVals.length+" valid pts";
+  else document.getElementById("dbgSource").textContent="-";
 }
 
 (async function(){var r=await fetch("/api/auth/me");if(r.ok)showDash()})();

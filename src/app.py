@@ -7,7 +7,40 @@ from fastapi import FastAPI, Query, HTTPException, Request, Depends
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from contextlib import asynccontextmanager
-import httpx, asyncio, jwt, bcrypt, aiosqlite, os, datetime, time as _time, bisect
+import httpx, asyncio, jwt, bcrypt, aiosqlite, os, datetime, time as _time, bisect, math
+
+# Service imports
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from services.price_service import (
+    SYMBOL_TO_CG, _price_at, _fetch_prices_per_token,
+    _load_prices_from_cache, _save_prices_to_cache,
+    _interpolate_price, _cg_rate_limit_wait,
+    _fetch_defillama_batch, _fetch_coingecko_batch,
+)
+from services.portfolio_service import (
+    _compute_portfolio, CHAINS, fetch_chain,
+    format_snapshots_v2, format_snapshots_legacy,
+)
+from services.pnl_service import (
+    _rebuild_history, compute_pnl_from_rows, format_pnl_v2,
+)
+
+# ── Logging configuration ───────────────────────────────────────
+import logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(name)s] %(levelname)s: %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+    handlers=[
+        logging.StreamHandler(),  # stdout (captured by uvicorn)
+    ]
+)
+# Set noisy libs to WARNING
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("aiosqlite").setLevel(logging.WARNING)
 
 DB_PATH = os.environ.get("DB_PATH", "/data/wallets.db")
 SESSION_SECRET = os.environ.get("SESSION_SECRET", "change-me")
@@ -261,115 +294,7 @@ async def edit_wallet(wallet_id: int, request: Request, user=Depends(get_current
     return {"ok": True}
 
 
-# ── Portfolio engine ─────────────────────────────────────────────
-
-CHAINS = {
-    "ethereum": "eth.blockscout.com",
-    "base":     "base.blockscout.com",
-    "optimism": "explorer.optimism.io",
-    "arbitrum": "arbitrum.blockscout.com",
-    "polygon":  "polygon.blockscout.com",
-    "gnosis":   "gnosis.blockscout.com",
-    "zksync":   "zksync.blockscout.com",
-    "celo":     "celo.blockscout.com",
-    "scroll":   "scroll.blockscout.com",
-}
-
 _portfolio_cache = {}
-
-
-async def fetch_chain(client, chain, host, address):
-    try:
-        r = await client.get(f"https://{host}/api/v2/addresses/{address}/tokens", timeout=15)
-        if r.status_code != 200:
-            return {"chain": chain, "tokens": [], "error": f"HTTP {r.status_code}"}
-        data = r.json()
-        tokens = []
-        for item in data.get("items", []):
-            if item is None: continue
-            t = item.get("token") or {}
-            raw = item.get("value")
-            tokens.append({
-                "name": t.get("name", "Unknown"),
-                "symbol": t.get("symbol", "?"),
-                "decimals": int(t.get("decimals") or 18),
-                "balance_raw": str(raw) if raw else "0",
-                "usd_price": float(t.get("exchange_rate") or 0),
-                "icon": t.get("icon_url", ""),
-                "type": t.get("type", "ERC-20"),
-            })
-        return {"chain": chain, "tokens": tokens, "error": None}
-    except Exception as e:
-        return {"chain": chain, "tokens": [], "error": str(e)[:100]}
-
-
-async def _compute_portfolio(address: str) -> dict:
-    async with httpx.AsyncClient(follow_redirects=True) as client:
-        results = await asyncio.gather(*[fetch_chain(client, c, h, address) for c, h in CHAINS.items()])
-
-    items, total = [], 0.0
-    for r in results:
-        for t in r["tokens"]:
-            try: bal = int(t["balance_raw"]) / (10 ** t["decimals"])
-            except: bal = 0
-            usd = bal * t["usd_price"]; total += usd
-            items.append({
-                "chain": r["chain"], "name": t["name"], "symbol": t["symbol"],
-                "balance": round(bal, 6), "usd_value": round(usd, 2),
-                "usd_price": t["usd_price"], "icon": t["icon"], "type": t["type"],
-            })
-
-    items = [p for p in items if p["usd_value"] >= 0.01]
-    items.sort(key=lambda x: x["usd_value"], reverse=True)
-
-    chain_totals = {}
-    for p in items: chain_totals[p["chain"]] = chain_totals.get(p["chain"], 0) + p["usd_value"]
-
-    return {
-        "address": address,
-        "total_usd": round(total, 2),
-        "token_count": len(items),
-        "chain_count": len([r for r in results if r["tokens"]]),
-        "chains": {c: round(v, 2) for c, v in sorted(chain_totals.items(), key=lambda x: x[1], reverse=True)},
-        "tokens": items[:200],
-        "errors": [{"chain": r["chain"], "error": r["error"]} for r in results if r["error"]],
-        "cached": False,
-    }
-
-
-# ── CoinGecko mapping ────────────────────────────────────────────
-
-SYMBOL_TO_CG = {
-    "eth": "ethereum", "weth": "ethereum", "matic": "matic-network", "pol": "polygon-ecosystem-token",
-    "usdt": "tether", "usdc": "usd-coin", "dai": "dai", "wbtc": "wrapped-bitcoin", "btc": "bitcoin",
-    "link": "chainlink", "uni": "uniswap", "aave": "aave", "crv": "curve-dao-token",
-    "snx": "synthetix-network-token", "mkr": "maker", "comp": "compound-governance-token",
-    "grt": "the-graph", "sand": "the-sandbox", "mana": "decentraland", "enj": "enjincoin",
-    "bat": "basic-attention-token", "zrx": "0x", "1inch": "1inch", "ldo": "lido-dao",
-    "op": "optimism", "arb": "arbitrum", "ape": "apecoin", "shib": "shiba-inu",
-    "pepe": "pepe", "floki": "floki", "fet": "fetch-ai", "rndr": "render-token",
-    "imx": "immutable-x", "axs": "axie-infinity",
-    "gmx": "gmx", "dydx": "dydx", "stg": "stargate-finance", "woo": "woo-network",
-    "ens": "ethereum-name-service", "lrc": "loopring", "blur": "blur",
-    "strk": "starknet", "ena": "ethena", "eigen": "eigenlayer", "jup": "jupiter-exchange-solana",
-    "bonk": "bonk", "wif": "dogwifcoin", "pyth": "pyth-network",
-    "celo": "celo", "cusd": "celo-dollar", "creal": "celo-real",
-    "zro": "layerzero", "joe": "joe", "magic": "treasure",
-    "edu": "open-campus", "ube": "ubeswap", "gmx_dao": "gmx",
-    "usdc.e": "usd-coin", "usdt0": "tether", "orbeth": "ethereum",
-    "doge": "dogecoin", "wld": "worldcoin-wld",
-    # New mappings for common DeFi tokens
-    "wsteth": "wrapped-steth", "reth": "rocket-pool-eth", "morpho": "morpho",
-    "sena": "sena", "thales": "thales", "nexo": "nexo", "adai": "aave-dai",
-    "usde": "ethena-usde", "wormhole": "wormhole", "frax": "frax",
-    "rseth": "kelp-dao-restaked-eth", "ezeth": "renzo-restaked-eth",
-    "weeth": "wrapped-eeth", "susdc": "usd-coin", "ausdc": "usd-coin",
-    "ceur": "celo-euro", "ceth": "celo", "pendle": "pendle",
-    "mav": "maverick-protocol", "fluid": "fluid", "spectra": "spectra",
-    "seam": "seamless-protocol", "logx": "logx", "hyper": "hypercycle",
-    # Stables
-    "eura": "monerium-eur-money", "usdt.e": "tether",
-}
 
 
 # ── Transactions fetch ───────────────────────────────────────────
@@ -428,494 +353,6 @@ async def _fetch_transactions_for_wallet(user_id: int, address: str) -> int:
     return total_tx
 
 
-# ── Price enrichment: DefiLlama (primary) + CoinGecko (optional) ─
-
-async def _fetch_prices_per_token(user_id: int, wallet_address: str) -> dict:
-    """Fetch historical daily prices using DefiLlama API (free, no key).
-    Caches results in price_history table. Enriches transactions."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute(
-            "SELECT DISTINCT LOWER(token_symbol) as sym FROM transactions WHERE user_id=? AND wallet_address=?",
-            (user_id, wallet_address))
-        symbols = [r["sym"] for r in await cur.fetchall()]
-
-    prices = {}           # {sym_lower: {ts_ms: price_usd}}
-    unmapped = []         # tokens not in SYMBOL_TO_CG
-    degraded = []         # mapped tokens where API failed
-    api_calls_ok = 0
-    api_calls_failed = 0
-
-    # Separate mapped vs unmapped, prioritize by value
-    mapped_syms = {}  # sym_lower → cg_id
-    for s in symbols:
-        cg_id = SYMBOL_TO_CG.get(s)
-        if cg_id:
-            mapped_syms[s] = cg_id
-        else:
-            unmapped.append(s.upper())
-
-    if mapped_syms:
-        # Determine date range from earliest tx
-        now = int(_time.time())
-        async with aiosqlite.connect(DB_PATH) as db:
-            db.row_factory = aiosqlite.Row
-            cur = await db.execute(
-                "SELECT MIN(block_time) as earliest FROM transactions WHERE user_id=? AND wallet_address=?",
-                (user_id, wallet_address))
-            row = await cur.fetchone()
-        if row and row["earliest"]:
-            try:
-                from_ts = int(_time.mktime(_time.strptime(row["earliest"][:19], "%Y-%m-%d %H:%M:%S"))) - 86400
-            except:
-                from_ts = now - 365 * 86400
-        else:
-            from_ts = now - 365 * 86400
-
-        # Try loading from cache first
-        for sym in list(mapped_syms.keys()):
-            cached = await _load_prices_from_cache(sym)
-            if cached:
-                prices[sym] = cached
-                del mapped_syms[sym]  # no need to fetch
-
-        # Sort remaining tokens by total USD value (descending) to prioritize important ones
-        if mapped_syms:
-            async with aiosqlite.connect(DB_PATH) as db:
-                db.row_factory = aiosqlite.Row
-                cur = await db.execute(
-                    f"SELECT LOWER(token_symbol) as sym, SUM(usd_value) as total_val FROM transactions WHERE user_id=? AND usd_value>0 GROUP BY sym ORDER BY total_val DESC",
-                    (user_id,))
-                val_rows = await cur.fetchall()
-            sym_values = {r["sym"]: r["total_val"] for r in val_rows}
-            # Sort: highest value first
-            sorted_mapped = sorted(mapped_syms.items(), key=lambda x: sym_values.get(x[0], 0), reverse=True)
-            mapped_syms = dict(sorted_mapped)
-
-        # Fetch remaining tokens from DefiLlama in batches
-        if mapped_syms:
-            fetched_prices, ok, failed = await _fetch_defillama_batch(mapped_syms, from_ts, now)
-            api_calls_ok += ok
-            api_calls_failed += failed
-            for sym, p_dict in fetched_prices.items():
-                prices[sym] = p_dict
-                # Mark as degraded if API failed for this token
-                if not p_dict:
-                    degraded.append(sym.upper())
-            
-            # Try CoinGecko as fallback if API key is set
-            cg_key = await _get_user_cg_key(user_id)
-            still_missing = {s: c for s, c in mapped_syms.items() if not prices.get(s)}
-            if cg_key and still_missing:
-                cg_prices, cg_ok, cg_failed = await _fetch_coingecko_batch(still_missing, from_ts, now, cg_key)
-                api_calls_ok += cg_ok
-                api_calls_failed += cg_failed
-                for sym, p_dict in cg_prices.items():
-                    if p_dict:
-                        prices[sym] = p_dict
-                    else:
-                        degraded.append(sym.upper())
-
-        # Any mapped token still without prices → degraded
-        for sym in mapped_syms:
-            if not prices.get(sym):
-                degraded.append(sym.upper())
-
-    # Enrich transactions
-    enriched = 0
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute(
-            "SELECT id, LOWER(token_symbol) as sym, amount, block_time FROM transactions WHERE user_id=? AND wallet_address=? AND usd_price=0",
-            (user_id, wallet_address))
-        rows = await cur.fetchall()
-        for r in rows:
-            sym_prices = prices.get(r["sym"], {})
-            if not sym_prices:
-                continue
-            try:
-                ts_ms = int(_time.mktime(_time.strptime(r["block_time"][:19], "%Y-%m-%d %H:%M:%S"))) * 1000
-            except:
-                continue
-            price = _interpolate_price(sym_prices, ts_ms)
-            if price > 0:
-                usd_val = r["amount"] * price
-                await db.execute("UPDATE transactions SET usd_price=?, usd_value=? WHERE id=?", (price, round(usd_val, 2), r["id"]))
-                enriched += 1
-        await db.commit()
-
-    return {
-        "enriched": enriched, "unmapped": unmapped, "prices": prices,
-        "degraded": degraded,
-        "price_calls_ok": api_calls_ok, "price_calls_failed": api_calls_failed,
-    }
-
-
-async def _load_prices_from_cache(sym_lower: str) -> dict:
-    """Load cached daily prices from price_history. Returns {ts_ms: price} or {}."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute(
-            "SELECT date, price_usd FROM price_history WHERE token_symbol=? ORDER BY date ASC",
-            (sym_lower,))
-        rows = await cur.fetchall()
-    if not rows:
-        return {}
-    result = {}
-    for r in rows:
-        try:
-            ts = int(_time.mktime(_time.strptime(r["date"], "%Y-%m-%d"))) * 1000
-            result[ts] = r["price_usd"]
-        except:
-            pass
-    return result
-
-
-async def _save_prices_to_cache(sym_lower: str, prices: dict):
-    """Save daily prices to price_history (idempotent: INSERT OR REPLACE)."""
-    if not prices:
-        return
-    async with aiosqlite.connect(DB_PATH) as db:
-        for ts_ms, price in prices.items():
-            date_str = datetime.datetime.utcfromtimestamp(ts_ms / 1000).strftime("%Y-%m-%d")
-            await db.execute(
-                "INSERT OR REPLACE INTO price_history (token_symbol, date, price_usd) VALUES (?, ?, ?)",
-                (sym_lower, date_str, price))
-        await db.commit()
-
-
-async def _fetch_defillama_batch(mapped_syms: dict, from_ts: int, to_ts: int) -> tuple:
-    """Fetch prices from DefiLlama. Fetches tokens individually for reliability.
-    Returns (prices_dict, calls_ok, calls_failed)."""
-    prices = {}
-    ok = 0
-    failed = 0
-    syms_list = list(mapped_syms.items())  # [(sym, cg_id), ...]
-    window_days = 200  # Fetch up to 200 days per call (safe margin below 500-point limit)
-    
-    for sym_lower, cg_id in syms_list:
-        token_ok = False
-        token_points = {}  # {ts_ms: price}
-        
-        # Split into time windows
-        window_start = from_ts
-        while window_start < to_ts:
-            window_end = min(to_ts, window_start + window_days * 86400)
-            span_days = max(1, (window_end - window_start) // 86400)
-            url = f"https://coins.llama.fi/chart/coingecko:{cg_id}?start={window_start}&span={span_days}&period=1d"
-            
-            for attempt in range(3):
-                try:
-                    async with httpx.AsyncClient(timeout=30) as c:
-                        resp = await c.get(url)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        coin_data = data.get("coins", {}).get(f"coingecko:{cg_id}", {})
-                        for pt in coin_data.get("prices", []):
-                            # DefiLlama returns timestamps in seconds → convert to ms
-                            token_points[pt["timestamp"] * 1000] = pt["price"]
-                        ok += 1
-                        token_ok = True
-                        break
-                    elif resp.status_code == 429:
-                        await asyncio.sleep(2 ** attempt * 3)  # Longer backoff for rate limits
-                    else:
-                        await asyncio.sleep(2 ** attempt)
-                except Exception:
-                    await asyncio.sleep(2 ** attempt)
-            else:
-                failed += 1
-                token_ok = False
-                break  # Stop trying more windows for this token
-            
-            window_start = window_end
-            if window_start < to_ts:
-                await asyncio.sleep(1.0)  # Rate limit between windows
-        
-        if token_ok and token_points:
-            await _save_prices_to_cache(sym_lower, token_points)
-            prices[sym_lower] = token_points
-        
-        # Rate limit between tokens
-        await asyncio.sleep(2.0)
-    
-    return prices, ok, failed
-
-
-async def _fetch_coingecko_batch(mapped_syms: dict, from_ts: int, to_ts: int, api_key: str) -> tuple:
-    """Fallback: CoinGecko if API key is available."""
-    prices = {}
-    ok = 0
-    failed = 0
-    for sym_lower, cg_id in mapped_syms.items():
-        for attempt in range(3):
-            try:
-                async with httpx.AsyncClient(timeout=45) as cg:
-                    url = f"https://api.coingecko.com/api/v3/coins/{cg_id}/market_chart/range"
-                    resp = await cg.get(url, params={"vs_currency": "usd", "from": from_ts, "to": to_ts},
-                                        headers={"x-cg-demo-api-key": api_key})
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        prices[sym_lower] = {p[0]: p[1] for p in data.get("prices", [])}
-                        await _save_prices_to_cache(sym_lower, prices[sym_lower])
-                        ok += 1
-                        break
-                    elif resp.status_code == 429:
-                        await asyncio.sleep(2 ** attempt * 5)
-                    else:
-                        await asyncio.sleep(2 ** attempt)
-            except Exception:
-                await asyncio.sleep(2 ** attempt)
-        else:
-            prices[sym_lower] = {}
-            failed += 1
-        await asyncio.sleep(1.0)  # rate limit
-    return prices, ok, failed
-
-async def _cg_rate_limit_wait():
-    global _CG_LAST_CALL
-    elapsed = _time.time() - _CG_LAST_CALL
-    if elapsed < 3.0:
-        await asyncio.sleep(3.0 - elapsed)
-    _CG_LAST_CALL = _time.time()
-
-
-def _interpolate_price(prices: dict, ts_ms: int) -> float:
-    """Find closest price before or at ts_ms."""
-    keys = sorted(prices.keys())
-    if not keys:
-        return 0.0
-    best = None
-    for k in keys:
-        if k <= ts_ms:
-            best = k
-        else:
-            break
-    if best is None:
-        best = keys[0]  # earliest available
-    return prices.get(best, 0.0)
-
-
-# ── History rebuild ──────────────────────────────────────────────
-
-async def _rebuild_history(user_id: int, wallet_address: str):
-    """Idempotent daily history rebuild: reconstruct balances from transactions,
-    value them with CoinGecko prices, compute per-token cost basis."""
-
-    # 1. Fetch prices per token (ALL mapped tokens, returns price series)
-    price_result = await _fetch_prices_per_token(user_id, wallet_address)
-    unmapped = set(u.lower() for u in price_result.get("unmapped", []))
-    degraded = set(d.lower() for d in price_result.get("degraded", []))
-    price_series = price_result.get("prices", {})
-    # Only unmapped tokens are fully excluded. Degraded (mapped but API-failed) tokens 
-    # still get cost tracking + current-price valuation.
-    excluded = unmapped  # degraded tokens are NOT excluded from value/cost
-
-    # 2. Preload all transactions + sort price keys once
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute(
-            "SELECT token_symbol, amount, usd_price, direction, block_time, chain FROM transactions WHERE user_id=? AND wallet_address=? ORDER BY block_time ASC",
-            (user_id, wallet_address))
-        txs = await cur.fetchall()
-    if not txs:
-        return {"ok": True, "days": 0, "unmapped_tokens": list(unmapped)}
-
-    # Pre-sort price keys for fast binary search
-    sorted_prices = {}
-    for sym, p_dict in price_series.items():
-        if p_dict:
-            sorted_prices[sym] = sorted(p_dict.items())  # [(ts_ms, price), ...]
-
-    # Build fallback prices from transactions (last known usd_price per token)
-    fallback_prices = {}
-    for tx in txs:
-        sym = tx["token_symbol"].lower()
-        if tx["usd_price"] > 0:
-            fallback_prices[sym] = tx["usd_price"]  # last wins
-
-    # Fetch current portfolio prices as ultimate fallback for mapped tokens
-    current_prices = {}  # sym → price_usd
-    current_values = {}  # sym → total_usd_value
-    try:
-        from_portfolio = await _compute_portfolio(wallet_address)
-        for t in from_portfolio.get("tokens", []):
-            sym = t["symbol"].lower()
-            price = t.get("usd_price", 0)
-            total_val = t.get("usd_value", 0)
-            if price > 0:
-                current_prices[sym] = price
-            if total_val > 0:
-                current_values[sym] = total_val
-    except Exception:
-        pass
-
-    # Spam token patterns to filter out
-    SPAM_PATTERNS = [
-        "visit ", "claim ", "reward", "airdrop", "http", "t.me", ".cfd", ".cc",
-        ".lat", ".lol", ".top", ".xyz", ".win", ".vip", ".club", "random",
-        "you are eligible", "you received", "you won", "coupon", "giveaway",
-        "visit website", "mint airdrop", "gift", "voucher", "bonus", "! ", "? ",
-        "$ claim", "www.", "@", "token", "web3", "web4", "nft", "u5dc", "usdtclaim",
-        "official website", "verify", "us_pool", "us_circle", "tronvanity",
-    ]
-    def _is_spam(sym: str) -> bool:
-        sym_lower = sym.lower()
-        for p in SPAM_PATTERNS:
-            if p in sym_lower:
-                return True
-        return False
-
-    def _price_at(sym_lower: str, ts_ms: int) -> float:
-        """Get price for sym_lower at or before ts_ms.
-        Priority: DefiLlama series > transaction usd_price > current portfolio price > 0."""
-        sp = sorted_prices.get(sym_lower)
-        if sp:
-            idx = bisect.bisect_right([p[0] for p in sp], ts_ms) - 1
-            if idx >= 0:
-                return sp[idx][1]
-            return sp[0][1]  # before first point
-        if sym_lower in fallback_prices:
-            return fallback_prices[sym_lower]
-        return current_prices.get(sym_lower, 0.0)
-
-    # 3. Determine date range
-    first_date = txs[0]["block_time"][:10]
-    last_date = datetime.datetime.utcnow().strftime("%Y-%m-%d")
-
-    # 4. Build daily balance deltas (in memory — no SQL in loop)
-    # Per day: {date: {sym: {"delta": float}}}
-    daily_deltas: dict = defaultdict(dict)
-    
-    # Detect orphan tokens: have current portfolio value but no transactions
-    # Add synthetic initial-balance entries at first_date so they appear in charts
-    tx_syms = {tx["token_symbol"].lower() for tx in txs}
-    for sym in current_values:
-        if sym not in tx_syms and sym not in excluded:
-            if SYMBOL_TO_CG.get(sym) or sym in fallback_prices:
-                # Add as synthetic "in" transaction at first_date with the current balance
-                # Price is from current_prices, value goes to the token's cost basis
-                price = current_prices.get(sym, 0)
-                if price > 0:
-                    # Derive approximate token quantity from value/price
-                    qty = current_values[sym] / price if price > 0 else 0
-                    if qty > 0:
-                        daily_deltas[first_date][sym] = qty
-                        # Also inject a fake tx for the price tracking
-                        if sym not in fallback_prices:
-                            fallback_prices[sym] = price
-    
-    for tx in txs:
-        sym = tx["token_symbol"].lower()
-        date = tx["block_time"][:10]
-        amount = tx["amount"] or 0
-        price = tx["usd_price"] or 0
-
-        # Skip unmapped tokens AND obvious spam
-        if sym in excluded:
-            continue
-        if not SYMBOL_TO_CG.get(sym):
-            # Still not mapped but has usd_price from enrichment → include it
-            if price == 0 or _is_spam(sym):
-                excluded.add(sym)
-                continue
-            # Has price, allow it even without mapping
-
-        if date not in daily_deltas:
-            daily_deltas[date] = {}
-        if sym not in daily_deltas[date]:
-            daily_deltas[date][sym] = 0.0
-
-        if tx["direction"] == "in":
-            daily_deltas[date][sym] += amount
-        else:
-            daily_deltas[date][sym] -= amount
-
-    # 5. Generate daily history (pure computation, no I/O)
-    date_cursor = datetime.datetime.strptime(first_date, "%Y-%m-%d")
-    end_date = datetime.datetime.strptime(last_date, "%Y-%m-%d")
-
-    balances: dict = defaultdict(float)   # sym → cumulative balance
-    costs: dict = defaultdict(float)       # sym → cumulative cost basis
-    # Map token symbol to chain (from first transaction seen)
-    token_chain: dict = {}
-    daily_rows = []
-
-    while date_cursor <= end_date:
-        date_str = date_cursor.strftime("%Y-%m-%d")
-        day_deltas = daily_deltas.get(date_str, {})
-
-        # Compute day timestamp (noon UTC) for price lookup
-        day_ts_ms = int(date_cursor.timestamp()) * 1000
-
-        # Apply balance deltas + update per-token cost
-        for sym, delta in day_deltas.items():
-            old_bal = balances[sym]
-            new_bal = max(0.0, old_bal + delta)
-
-            if delta > 0 and old_bal >= 0:
-                # Incoming: add cost at day's price
-                tx_price = _price_at(sym, day_ts_ms)
-                costs[sym] += delta * tx_price
-            elif delta < 0 and old_bal > 0:
-                # Outgoing: remove at average cost
-                avg_cost = costs[sym] / old_bal if old_bal > 0 else 0.0
-                costs[sym] = max(0.0, costs[sym] - abs(delta) * avg_cost)
-
-            balances[sym] = new_bal
-            if new_bal == 0:
-                costs[sym] = 0.0  # fully exited this token
-
-        # Compute daily value: sum(balance × price_at_date)
-        value = 0.0
-        per_token_values = {}  # sym → value for per-token rows
-        for sym, bal in balances.items():
-            if bal <= 0 or sym in excluded:
-                continue
-            if not SYMBOL_TO_CG.get(sym) and sym not in fallback_prices and sym not in current_prices:
-                continue
-            p = _price_at(sym, day_ts_ms)
-            if p > 0:
-                token_val = round(bal * p, 2)
-                value += token_val
-                per_token_values[sym] = token_val
-
-        # Net flows: sum(delta × price_at_date)
-        net_flows = 0.0
-        for sym, delta in day_deltas.items():
-            p = _price_at(sym, day_ts_ms)
-            net_flows += delta * p
-
-        cost_basis = sum(costs.values())
-
-        # Aggregate row (token_symbol=NULL)
-        daily_rows.append((user_id, wallet_address, date_str,
-                          round(value, 2), round(max(0, cost_basis), 2),
-                          round(net_flows, 2), None, None))
-        
-        # Per-token rows (for token filter on stats page)
-        for sym, token_val in per_token_values.items():
-            daily_rows.append((user_id, wallet_address, date_str,
-                              token_val, 0, 0, sym, token_chain.get(sym)))
-        
-        date_cursor += datetime.timedelta(days=1)
-
-    # 6. Write to daily_history (idempotent)
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("DELETE FROM daily_history WHERE user_id=? AND wallet_address=?", (user_id, wallet_address))
-        for row in daily_rows:
-            await db.execute(
-                "INSERT INTO daily_history (user_id, wallet_address, date, value_usd, cost_basis_usd, net_flows_usd, token_symbol, chain) VALUES (?,?,?,?,?,?,?,?)",
-                row)
-        await db.commit()
-
-    return {"ok": True, "days": len(daily_rows), "unmapped_tokens": sorted(unmapped),
-            "degraded_tokens": sorted(degraded),
-            "price_calls_ok": price_result.get("price_calls_ok", 0),
-            "price_calls_failed": price_result.get("price_calls_failed", 0),
-            "tokens_with_series": len(price_series)}
-
-
 # ── Import pipeline ──────────────────────────────────────────────
 
 async def _fetch_then_rebuild(user_id: int, address: str):
@@ -929,7 +366,7 @@ async def _fetch_then_rebuild(user_id: int, address: str):
         in_total = dirs.get("in", 0)
         out_total = dirs.get("out", 0)
         _import_progress[user_id] = {"stage": "enrich", "done": 0, "total": count, "in_done": in_total, "in_total": in_total, "out_done": out_total, "out_total": out_total}
-        result = await _rebuild_history(user_id, address)
+        result = await _rebuild_history(user_id, address, _compute_portfolio)
         _import_progress[user_id] = {"stage": "done", "done": count, "total": count, "unmapped": result.get("unmapped_tokens", [])}
     except Exception:
         _import_progress[user_id] = {"stage": "done", "done": 0, "total": 0, "error": True}
@@ -1063,6 +500,10 @@ _wallet_labels = {}
 
 @app.get("/api/portfolio")
 async def portfolio(address: str = Query(...), force: bool = Query(False), user=Depends(get_current_user)):
+    import logging
+    _log = logging.getLogger("crypto.portfolio")
+    _log.info(f"[TRACE] /api/portfolio ENTER address={address[:12]}... force={force}")
+
     if not address.startswith("0x"):
         raise HTTPException(400, "Adresse invalide")
 
@@ -1079,6 +520,9 @@ async def portfolio(address: str = Query(...), force: bool = Query(False), user=
 
     data = await _compute_portfolio(address)
     _portfolio_cache[address] = {"data": data, "ts": now}
+    _log.info(
+        f"[TRACE] /api/portfolio AFTER compute: tokens={len(data.get('tokens',[]))} "        f"total_usd={data.get('total_usd',0)}"
+    )
 
     # Add per-token cost basis from daily_history
     total_cost = None
@@ -1098,30 +542,47 @@ async def portfolio(address: str = Query(...), force: bool = Query(False), user=
         data["total_cost_basis"] = total_cost
         data["total_pnl"] = round(data["total_usd"] - total_cost, 2)
         
-        # Per-token: compute from daily_history if available, else from transactions
-        try:
-            async with aiosqlite.connect(DB_PATH) as db:
-                db.row_factory = aiosqlite.Row
-                for t in data["tokens"]:
-                    sym = t["symbol"].lower()
+        # Per-token PNL enrichment (NON-BLOCKING: one bad token never breaks all)
+        enriched = 0
+        missing_history = 0
+        async with aiosqlite.connect(DB_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            for t in data["tokens"]:
+                try:
+                    sym = (t.get("symbol") or "").lower()
+                    if not sym:
+                        continue
+                    usd_val = t.get("usd_value", 0) or 0
+                    # Try daily_history first
                     cur2 = await db.execute(
                         "SELECT cost_basis_usd FROM daily_history WHERE user_id=? AND wallet_address=? AND token_symbol=? ORDER BY date DESC LIMIT 1",
                         (user["id"], address, sym))
                     token_row = await cur2.fetchone()
-                    if token_row:
-                        t["cost_basis"] = round(token_row["cost_basis_usd"], 2)
-                        t["pnl"] = round(t["usd_value"] - token_row["cost_basis_usd"], 2)
+                    if token_row and token_row["cost_basis_usd"] > 0:
+                        cost = round(token_row["cost_basis_usd"], 2)
+                        t["cost_basis"] = cost
+                        t["pnl"] = round(usd_val - cost, 2)
+                        enriched += 1
                     else:
-                        # Compute from transactions
+                        missing_history += 1
+                        # Fallback: compute from transactions
                         cur3 = await db.execute(
                             "SELECT SUM(CASE WHEN direction='in' THEN amount*usd_price ELSE -amount*usd_price END) FROM transactions WHERE user_id=? AND wallet_address=? AND LOWER(token_symbol)=?",
                             (user["id"], address, sym))
                         cost_row = await cur3.fetchone()
                         cost = (cost_row[0] or 0) if cost_row else 0
                         t["cost_basis"] = round(cost, 2)
-                        t["pnl"] = round(t["usd_value"] - cost, 2)
-        except Exception:
-            pass
+                        t["pnl"] = round(usd_val - cost, 2)
+                except Exception:
+                    # Single token failure must not affect others
+                    t.setdefault("cost_basis", 0)
+                    t.setdefault("pnl", 0)
+
+        import logging
+        logger = logging.getLogger("crypto.portfolio")
+        _log.info(
+            f"[TRACE] /api/portfolio AFTER enrich: enriched={enriched} "            f"missing_history={missing_history} tokens={len(data.get('tokens',[]))}"
+        )
 
     # Save intraday snapshot for dashboard mini-chart
     try:
@@ -1138,6 +599,9 @@ async def portfolio(address: str = Query(...), force: bool = Query(False), user=
     except Exception:
         pass
 
+    _log.info(
+        f"[TRACE] /api/portfolio EXIT: tokens={len(data.get('tokens',[]))} "        f"total={data.get('total_usd',0)} cached={data.get('cached',False)}"
+    )
     return data
 
 
@@ -1149,15 +613,20 @@ async def _daily_tx_refresh(user_id: int):
     for w in wallets_list:
         count = await _fetch_transactions_for_wallet(user_id, w["address"])
         if count > 0:
-            await _rebuild_history(user_id, w["address"])
+            await _rebuild_history(user_id, w["address"], _compute_portfolio)
 
 
 # ── Snapshots / History API ──────────────────────────────────────
 
 @app.get("/api/snapshots")
 async def get_snapshots(token: str = Query(None), wallet: str = Query(None), chain: str = Query(None),
+                        format: str = Query("v1"),
                         user=Depends(get_current_user), db=Depends(get_db)):
-    """Returns daily history as snapshots for chart compatibility."""
+    """Returns daily history as snapshots for chart compatibility.
+
+    Query params:
+        format: 'v1' (default, legacy array of objects) or 'v2' ({labels, values, meta}).
+    """
     conditions = ["user_id=?", str(user["id"])]
     params = [user["id"]]
 
@@ -1165,7 +634,6 @@ async def get_snapshots(token: str = Query(None), wallet: str = Query(None), cha
         conditions.append("LOWER(token_symbol)=?")
         params.append(token.lower())
     else:
-        # No token filter: return aggregate rows only (token_symbol IS NULL)
         conditions.append("token_symbol IS NULL")
 
     if wallet and wallet != "ALL":
@@ -1177,35 +645,34 @@ async def get_snapshots(token: str = Query(None), wallet: str = Query(None), cha
 
     where = " AND ".join(conditions)
     cur = await db.execute(
-        f"SELECT value_usd as total_usd, 0 as token_quantity, 0 as token_count, cost_basis_usd as cost_basis, date FROM daily_history WHERE {where} ORDER BY date ASC",
+        f"SELECT value_usd as total_usd, cost_basis_usd as cost_basis, date FROM daily_history WHERE {where} ORDER BY date ASC",
         tuple(params))
     rows = await cur.fetchall()
 
-    result = []
-    for r in rows:
-        result.append({
-            "total_usd": r["total_usd"],
-            "quantity": 0,
-            "token_count": 0,
-            "date": r["date"],
-            "cost_basis": r["cost_basis"],
-        })
-    
+    if not rows:
+        if format == "v2":
+            return {"labels": [], "values": [], "meta": {"points": 0, "min": 0, "max": 0}}
+        return []
+
     # Patch last value with current portfolio if this is the aggregate (no token filter)
-    if not token and result and wallet:
+    if not token and rows and wallet:
         try:
             pf = await _compute_portfolio(wallet)
             pf_mapped = 0.0
             for t in pf.get("tokens", []):
-                sym = t["symbol"].lower()
-                if SYMBOL_TO_CG.get(sym) or sym in ("usdc", "usdt", "dai", "eth", "weth", "wbtc"):
-                    pf_mapped += t.get("usd_value", 0)
+                sym = (t.get("symbol") or "").lower()
+                if sym and (SYMBOL_TO_CG.get(sym) or sym in ("usdc", "usdt", "dai", "eth", "weth", "wbtc")):
+                    pf_mapped += t.get("usd_value", 0) or 0
             if pf_mapped > 0:
-                result[-1]["total_usd"] = round(pf_mapped, 2)
+                rows[-1] = dict(rows[-1])
+                rows[-1]["total_usd"] = round(pf_mapped, 2)
         except Exception:
             pass
-    
-    return result
+
+    if format == "v2":
+        return format_snapshots_v2(rows)
+
+    return format_snapshots_legacy(rows)
 
 
 @app.get("/api/snapshots/tokens")
@@ -1224,7 +691,7 @@ async def backfill_snapshots(user=Depends(get_current_user), db=Depends(get_db))
         raise HTTPException(400, "Aucun wallet")
     results = []
     for w in wallet_rows:
-        result = await _rebuild_history(user["id"], w["address"])
+        result = await _rebuild_history(user["id"], w["address"], _compute_portfolio)
         results.append(result)
     # Aggregate
     total_days = sum(r.get("days", 0) for r in results)
@@ -1250,9 +717,10 @@ async def backfill_snapshots(user=Depends(get_current_user), db=Depends(get_db))
         data = await _compute_portfolio(address)
         port_value = 0.0
         excluded = set(u.lower() for u in all_unmapped) | set(d.lower() for d in all_degraded)
-        for t in data["tokens"]:
-            if t["symbol"].lower() not in excluded and SYMBOL_TO_CG.get(t["symbol"].lower()):
-                port_value += t["usd_value"]
+        for t in data.get("tokens", []):
+            sym = (t.get("symbol") or "").lower()
+            if sym and sym not in excluded and SYMBOL_TO_CG.get(sym):
+                port_value += t.get("usd_value", 0) or 0
         if hist_value > 0:
             delta_pct = round((hist_value - port_value) / port_value * 100, 1)
             reconciliation = {"history_last_value": round(hist_value, 2),
@@ -1275,7 +743,13 @@ async def backfill_snapshots(user=Depends(get_current_user), db=Depends(get_db))
 
 @app.get("/api/pnl")
 async def get_pnl(wallet: str = Query(None), token: str = Query(None), range: str = Query("all"),
+                  format: str = Query("v1"),
                   user=Depends(get_current_user), db=Depends(get_db)):
+    """PNL endpoint with NaN-safe computation.
+
+    Query params:
+        format: 'v1' (default, array of objects) or 'v2' ({labels, values, meta}).
+    """
     conditions = ["user_id=?", str(user["id"])]
     params = [user["id"]]
 
@@ -1303,21 +777,11 @@ async def get_pnl(wallet: str = Query(None), token: str = Query(None), range: st
         except ValueError:
             pass
 
-    result = []
-    prev_value = None
-    for r in rows:
-        pnl = r["value_usd"] - r["cost_basis_usd"]
-        pnl_pct = round(pnl / r["cost_basis_usd"] * 100, 2) if r["cost_basis_usd"] > 0 else 0.0
-        pnl_day = round(r["value_usd"] - (prev_value or r["value_usd"]) - r["net_flows_usd"], 2) if prev_value is not None else 0.0
-        result.append({
-            "date": r["date"],
-            "value": r["value_usd"],
-            "cost_basis": r["cost_basis_usd"],
-            "pnl": round(pnl, 2),
-            "pnl_pct": pnl_pct,
-            "pnl_day": pnl_day,
-        })
-        prev_value = r["value_usd"]
+    # Use pure computation from pnl_service (NaN-safe)
+    result = compute_pnl_from_rows(rows)
+
+    if format == "v2":
+        return format_pnl_v2(result)
 
     return result
 
