@@ -1136,8 +1136,8 @@ async def get_snapshots(token: str = Query(None), wallet: str = Query(None), cha
     params = [user["id"]]
 
     if token:
-        conditions.append("token_symbol=?")
-        params.append(token.upper())
+        conditions.append("LOWER(token_symbol)=?")
+        params.append(token.lower())
     else:
         # No token filter: return aggregate rows only (token_symbol IS NULL)
         conditions.append("token_symbol IS NULL")
@@ -1242,8 +1242,8 @@ async def get_pnl(wallet: str = Query(None), token: str = Query(None), range: st
         conditions.append("wallet_address=?")
         params.append(wallet)
     if token:
-        conditions.append("token_symbol=?")
-        params.append(token.upper())
+        conditions.append("LOWER(token_symbol)=?")
+        params.append(token.lower())
     else:
         conditions.append("token_symbol IS NULL")
 
