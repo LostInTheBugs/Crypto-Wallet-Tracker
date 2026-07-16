@@ -358,6 +358,17 @@ SYMBOL_TO_CG = {
     "edu": "open-campus", "ube": "ubeswap", "gmx_dao": "gmx",
     "usdc.e": "usd-coin", "usdt0": "tether", "orbeth": "ethereum",
     "doge": "dogecoin", "wld": "worldcoin-wld",
+    # New mappings for common DeFi tokens
+    "wsteth": "wrapped-steth", "reth": "rocket-pool-eth", "morpho": "morpho",
+    "sena": "sena", "thales": "thales", "nexo": "nexo", "adai": "aave-dai",
+    "usde": "ethena-usde", "wormhole": "wormhole", "frax": "frax",
+    "rseth": "kelp-dao-restaked-eth", "ezeth": "renzo-restaked-eth",
+    "weeth": "wrapped-eeth", "susdc": "usd-coin", "ausdc": "usd-coin",
+    "ceur": "celo-euro", "ceth": "celo", "pendle": "pendle",
+    "mav": "maverick-protocol", "fluid": "fluid", "spectra": "spectra",
+    "seam": "seamless-protocol", "logx": "logx", "hyper": "hypercycle",
+    # Stables
+    "eura": "monerium-eur-money", "usdt.e": "tether",
 }
 
 
@@ -687,8 +698,9 @@ async def _rebuild_history(user_id: int, wallet_address: str):
     unmapped = set(u.lower() for u in price_result.get("unmapped", []))
     degraded = set(d.lower() for d in price_result.get("degraded", []))
     price_series = price_result.get("prices", {})
-    # Exclude both unmapped AND degraded tokens from value/cost computation
-    excluded = unmapped | degraded  # {sym_lower: {ts_ms: price}}
+    # Only unmapped tokens are fully excluded. Degraded (mapped but API-failed) tokens 
+    # still get cost tracking + current-price valuation.
+    excluded = unmapped  # degraded tokens are NOT excluded from value/cost
 
     # 2. Preload all transactions + sort price keys once
     async with aiosqlite.connect(DB_PATH) as db:
@@ -713,15 +725,45 @@ async def _rebuild_history(user_id: int, wallet_address: str):
         if tx["usd_price"] > 0:
             fallback_prices[sym] = tx["usd_price"]  # last wins
 
+    # Fetch current portfolio prices as ultimate fallback for mapped tokens
+    current_prices = {}
+    try:
+        from_portfolio = await _compute_portfolio(wallet_address)
+        for t in from_portfolio.get("tokens", []):
+            sym = t["symbol"].lower()
+            if t.get("price_usd", 0) > 0:
+                current_prices[sym] = t["price_usd"]
+    except Exception:
+        pass
+
+    # Spam token patterns to filter out
+    SPAM_PATTERNS = [
+        "visit ", "claim ", "reward", "airdrop", "http", "t.me", ".cfd", ".cc",
+        ".lat", ".lol", ".top", ".xyz", ".win", ".vip", ".club", "random",
+        "you are eligible", "you received", "you won", "coupon", "giveaway",
+        "visit website", "mint airdrop", "gift", "voucher", "bonus", "! ", "? ",
+        "$ claim", "www.", "@", "token", "web3", "web4", "nft", "u5dc", "usdtclaim",
+        "official website", "verify", "us_pool", "us_circle", "tronvanity",
+    ]
+    def _is_spam(sym: str) -> bool:
+        sym_lower = sym.lower()
+        for p in SPAM_PATTERNS:
+            if p in sym_lower:
+                return True
+        return False
+
     def _price_at(sym_lower: str, ts_ms: int) -> float:
-        """Get price for sym_lower at or before ts_ms. Fallback: fallback_prices, then 0."""
+        """Get price for sym_lower at or before ts_ms.
+        Priority: DefiLlama series > transaction usd_price > current portfolio price > 0."""
         sp = sorted_prices.get(sym_lower)
         if sp:
             idx = bisect.bisect_right([p[0] for p in sp], ts_ms) - 1
             if idx >= 0:
                 return sp[idx][1]
             return sp[0][1]  # before first point
-        return fallback_prices.get(sym_lower, 0.0)
+        if sym_lower in fallback_prices:
+            return fallback_prices[sym_lower]
+        return current_prices.get(sym_lower, 0.0)
 
     # 3. Determine date range
     first_date = txs[0]["block_time"][:10]
@@ -736,9 +778,15 @@ async def _rebuild_history(user_id: int, wallet_address: str):
         amount = tx["amount"] or 0
         price = tx["usd_price"] or 0
 
-        if sym in excluded or (not SYMBOL_TO_CG.get(sym) and price == 0):
-            excluded.add(sym)
+        # Skip unmapped tokens AND obvious spam
+        if sym in excluded:
             continue
+        if not SYMBOL_TO_CG.get(sym):
+            # Still not mapped but has usd_price from enrichment → include it
+            if price == 0 or _is_spam(sym):
+                excluded.add(sym)
+                continue
+            # Has price, allow it even without mapping
 
         if date not in daily_deltas:
             daily_deltas[date] = {}
@@ -788,7 +836,8 @@ async def _rebuild_history(user_id: int, wallet_address: str):
         for sym, bal in balances.items():
             if bal <= 0 or sym in excluded:
                 continue
-            if not SYMBOL_TO_CG.get(sym):
+            # Include mapped tokens + tokens that have a fallback price
+            if not SYMBOL_TO_CG.get(sym) and sym not in fallback_prices and sym not in current_prices:
                 continue
             p = _price_at(sym, day_ts_ms)
             if p > 0:
