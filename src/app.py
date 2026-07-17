@@ -878,25 +878,48 @@ async def portfolio(address: str = Query(...), force: bool = Query(False), user=
                                 enriched += 1
                                 continue
                     missing_history += 1
-                    # Fallback: compute avg cost per unit from transactions,
-                    # then multiply by current balance (avoids PNL distortion
-                    # when some TXs have usd_price=0, e.g. stablecoins).
+                    # Fallback: weighted-average cost method. Replay the
+                    # token's transactions in chronological order: buys add
+                    # amount*price to the cumulative cost, sells remove at
+                    # the AVERAGE cost per unit — NOT at the sale price.
+                    # (The old signed SUM subtracted sale PROCEEDS from the
+                    # cost, yielding absurd averages, e.g. STETH at
+                    # ~$296/unit instead of ~$1730.)
                     cur3 = await db.execute(
-                        "SELECT "
-                        "SUM(CASE WHEN direction='in' THEN amount ELSE -amount END) as solde, "
-                        "SUM(CASE WHEN direction='in' THEN amount*usd_price ELSE -amount*usd_price END) as cost "
-                        "FROM transactions WHERE user_id=? AND wallet_address=? AND LOWER(token_symbol)=?",
+                        "SELECT direction, amount, usd_price FROM transactions "
+                        "WHERE user_id=? AND wallet_address=? AND LOWER(token_symbol)=? "
+                        "ORDER BY block_time ASC",
                         (user["id"], address, sym))
-                    cost_row = await cur3.fetchone()
-                    solde_recon = (cost_row[0] or 0) if cost_row else 0
-                    cost_recon = (cost_row[1] or 0) if cost_row else 0
-                    if solde_recon > 0 and cost_recon > 0:
-                        avg_cost = cost_recon / solde_recon
-                        if math.isfinite(avg_cost):
-                            bal = t.get("balance", 0) or 0
-                            cost = avg_cost * bal
-                            t["cost_basis"] = round(cost, 2)
-                            t["pnl"] = round(usd_val - cost, 2)
+                    tx_rows = await cur3.fetchall()
+                    qty = 0.0
+                    cost = 0.0
+                    any_price = False
+                    for r in tx_rows:
+                        amount = r["amount"] or 0
+                        price = r["usd_price"] or 0
+                        if not (math.isfinite(amount) and math.isfinite(price)):
+                            continue
+                        if price > 0:
+                            any_price = True
+                        if r["direction"] == "in":
+                            qty += amount
+                            cost += amount * price
+                        elif r["direction"] == "out":
+                            if qty > 0:
+                                avg = cost / qty
+                                removed = min(cost, avg * amount)
+                                cost -= removed
+                            qty -= amount
+                            if qty < 0:
+                                qty = 0.0
+                            if qty == 0:
+                                cost = 0.0
+                    if any_price and qty > 0 and cost > 0 and math.isfinite(cost):
+                        avg_cost = cost / qty if qty > 0 else 0.0
+                        final_cost = avg_cost * (t.get("balance", 0) or 0)
+                        if math.isfinite(final_cost):
+                            t["cost_basis"] = round(final_cost, 2)
+                            t["pnl"] = round(usd_val - final_cost, 2)
                             continue
                     # Acquisition cost unknown (no priced transactions, no
                     # usable history): report null instead of a misleading
