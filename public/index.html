@@ -9,7 +9,7 @@
 :root{--bg:#0a0e14;--card:#12161c;--border:#1e2530;--text:#b0b8c4;--title:#e6edf3;--accent:#4dabf7;--green:#40c463;--red:#f85149}
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;font-size:14px;display:flex}
-.sidebar{width:220px;background:var(--card);border-right:1px solid var(--border);min-height:100vh;padding:20px 0;flex-shrink:0;display:flex;flex-direction:column}
+.sidebar{width:220px;background:var(--card);border-right:1px solid var(--border);height:100vh;padding:20px 0;flex-shrink:0;display:flex;flex-direction:column;position:sticky;top:0;align-self:flex-start;overflow-y:auto}
 .sidebar h2{font-size:1rem;color:var(--title);padding:0 20px 16px;border-bottom:1px solid var(--border);margin-bottom:12px}
 .sidebar a{display:block;padding:10px 20px;color:var(--text);text-decoration:none;font-size:.85rem;transition:all .1s}
 .sidebar a:hover,.sidebar a.active{color:var(--accent);background:#1a2838;border-left:3px solid var(--accent);padding-left:17px}
@@ -63,7 +63,7 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
 .chain-tag{padding:3px 8px;background:#1a2332;border:1px solid #1e2d42;border-radius:10px;font-size:.7rem;color:#c9d1d9}
 @media(max-width:768px){
   body{flex-direction:column}
-  .sidebar{width:100%;min-height:auto;padding:8px 12px;display:flex;flex-direction:row;align-items:center;gap:4px;overflow-x:auto;border-right:none;border-bottom:1px solid var(--border)}
+  .sidebar{width:100%;min-height:auto;height:auto;position:static;overflow-y:visible;padding:8px 12px;display:flex;flex-direction:row;align-items:center;gap:4px;overflow-x:auto;border-right:none;border-bottom:1px solid var(--border)}
   .sidebar h2{font-size:0;padding:0;border:none;margin:0;white-space:nowrap}
   .sidebar a{font-size:1.1rem;padding:6px 10px;white-space:nowrap;border-left:none!important;border-bottom:2px solid transparent}
   .sidebar a.active{border-left:none!important;border-bottom:2px solid var(--accent)}
@@ -218,7 +218,7 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>📦 Version</h2>
-        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.11.17</strong></p>
+        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.11.18</strong></p>
         <p id="verStatus" style="font-size:.85rem"></p>
         <button id="updateBtn" class="hidden" onclick="doUpdate()" style="margin-top:8px;background:#238636;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:.85rem">🔄 Mettre à jour</button>
         <p id="updateMsg" style="margin-top:8px;font-size:.8rem;color:#f0c040"></p>

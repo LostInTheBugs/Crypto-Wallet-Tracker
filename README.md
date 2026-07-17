@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — v2.11.17
+# Crypto Wallet Tracker — v2.11.18
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -124,6 +124,9 @@ Crypto-Wallet-Tracker/
 ---
 
 ## 📋 Changelog
+
+### v2.11.18
+- **Sidebar fixe** — le menu de gauche reste visible (position sticky, hauteur écran) même sur les pages longues comme Transactions ; le lien Paramètres n'est plus repoussé tout en bas.
 
 ### v2.11.17
 - **Correctif graphiques multi-wallets** — les courbes d'évolution et le PNL agrégés somment désormais les valeurs par date (GROUP BY). Avec plusieurs wallets, l'historique stockait une ligne par wallet et par date, tracées comme des points successifs → fausse oscillation. Résolu.
