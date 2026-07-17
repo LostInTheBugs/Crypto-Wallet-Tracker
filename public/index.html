@@ -111,7 +111,6 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
     <h1 id="pageTitle">📊 Dashboard</h1>
     <div class="topbar-right">
       <span class="user" id="userInfo"></span>
-      <button id="btnLogout" class="hidden" onclick="logout()">Déconnexion</button>
     </div>
   </div>
 
@@ -218,7 +217,7 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>📦 Version</h2>
-        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.11.18</strong></p>
+        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.11.19</strong></p>
         <p id="verStatus" style="font-size:.85rem"></p>
         <button id="updateBtn" class="hidden" onclick="doUpdate()" style="margin-top:8px;background:#238636;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:.85rem">🔄 Mettre à jour</button>
         <p id="updateMsg" style="margin-top:8px;font-size:.8rem;color:#f0c040"></p>
@@ -234,6 +233,10 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
         <input id="newPass2" type="password" placeholder="Confirmer le mot de passe" style="margin-bottom:8px;max-width:300px">
         <button class="btn btn-blue" onclick="doChangePassword()">Changer le mot de passe</button>
         <div id="pwdMsg" style="margin-top:8px;font-size:.85rem"></div>
+      </div>
+      <div class="card" style="margin-bottom:16px">
+        <h2>🚪 Session</h2>
+        <button id="btnLogout" onclick="logout()" style="background:#f85149;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:.85rem">Déconnexion</button>
       </div>
     </div>
   </div>

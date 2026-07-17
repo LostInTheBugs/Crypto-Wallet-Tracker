@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — v2.11.18
+# Crypto Wallet Tracker — v2.11.19
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -124,6 +124,9 @@ Crypto-Wallet-Tracker/
 ---
 
 ## 📋 Changelog
+
+### v2.11.19
+- **Déconnexion déplacée** — le bouton Déconnexion n'est plus dans la barre du haut de chaque page ; il est désormais dans la page Paramètres (section Session).
 
 ### v2.11.18
 - **Sidebar fixe** — le menu de gauche reste visible (position sticky, hauteur écran) même sur les pages longues comme Transactions ; le lien Paramètres n'est plus repoussé tout en bas.
