@@ -139,6 +139,7 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
 
     <div id="pageDashboard">
       <div class="grid" id="walletStats"></div>
+      <div id="cacheAge" style="display:none;color:#6e7681;font-size:.72rem;margin:-2px 0 8px 2px"></div>
       <div class="grid" id="pnlCards" style="margin-bottom:8px"></div>
       <div class="row">
         <div class="card"><h2>📊 Répartition par chaîne</h2><div class="chart-wrap"><canvas id="pieChart"></canvas></div><div class="chains" id="walletChains" style="margin-top:12px"></div></div>
@@ -217,7 +218,7 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>📦 Version</h2>
-        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.11.5</strong></p>
+        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.11.6</strong></p>
         <p id="verStatus" style="font-size:.85rem"></p>
         <button id="updateBtn" class="hidden" onclick="doUpdate()" style="margin-top:8px;background:#238636;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:.85rem">🔄 Mettre à jour</button>
         <p id="updateMsg" style="margin-top:8px;font-size:.8rem;color:#f0c040"></p>
@@ -359,7 +360,7 @@ async function doAuth(){
   try{var r=await fetch(path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:u,password:p})});var d=await r.json();if(!r.ok){document.getElementById("authError").textContent=d.detail||d.msg||"Erreur";return}if(authMode=="register"){toggleAuth();document.getElementById("authError").textContent="Compte créé ! Connecte-toi.";return}showDash()}catch(e){console.error("doAuth",e);document.getElementById("authError").textContent="Erreur réseau"}
 }
 
-async function logout(){await fetch("/api/auth/logout",{method:"POST"});document.getElementById("viewLogin").classList.remove("hidden");document.getElementById("viewDash").classList.add("hidden");document.getElementById("sidebar").classList.add("hidden");document.getElementById("userInfo").textContent="";document.getElementById("btnLogout").classList.add("hidden");activeWallet="ALL"}
+async function logout(){await fetch("/api/auth/logout",{method:"POST"});try{Object.keys(localStorage).forEach(function(k){if(k.indexOf("pfCache:")==0)localStorage.removeItem(k)})}catch(e){}document.getElementById("viewLogin").classList.remove("hidden");document.getElementById("viewDash").classList.add("hidden");document.getElementById("sidebar").classList.add("hidden");document.getElementById("userInfo").textContent="";document.getElementById("btnLogout").classList.add("hidden");activeWallet="ALL"}
 
 async function showDash(){
   document.getElementById("viewLogin").classList.add("hidden");document.getElementById("viewDash").classList.remove("hidden");document.getElementById("sidebar").classList.remove("hidden");document.getElementById("btnLogout").classList.remove("hidden");
@@ -446,22 +447,56 @@ async function addWallet(){var addr=document.getElementById("walletAddr").value.
 
 async function loadView(force){activeWallet=="ALL"?await loadAllWallets(force):await loadOneWallet(activeWallet,force)}
 
+// ── Cache client du portfolio (localStorage, par vue) ──────
+function pfCacheRead(view){
+  try{
+    var raw=localStorage.getItem("pfCache:"+view);if(!raw)return null;
+    var obj=JSON.parse(raw);
+    if(!obj||typeof obj!=="object"||!obj.data||typeof obj.ts!=="number")return null;
+    return obj;
+  }catch(e){try{localStorage.removeItem("pfCache:"+view)}catch(_){}return null}
+}
+function pfCacheWrite(view,data){
+  try{localStorage.setItem("pfCache:"+view,JSON.stringify({data:data,ts:Date.now()}))}catch(e){console.warn("pfCacheWrite",e)}
+}
+function showCacheAge(ts){
+  var el=document.getElementById("cacheAge");if(!el)return;
+  var m=Math.floor((Date.now()-ts)/60000),txt;
+  if(m<1)txt="à l'instant";else if(m<60)txt="il y a "+m+" min";else if(m<1440)txt="il y a "+Math.floor(m/60)+" h";else txt="il y a "+Math.floor(m/1440)+" j";
+  el.textContent="⏱ Mis à jour "+txt+" — actualisation en arrière-plan…";
+  el.style.display="block";
+}
+function hideCacheAge(){var el=document.getElementById("cacheAge");if(el)el.style.display="none"}
+
 async function loadOneWallet(addr,force){
   if(loadingAddr==addr&&!force)return;loadingAddr=addr;
-  document.getElementById("walletStats").innerHTML='<div class="loading">Scan...</div>';
-  try{var r=await fetch("/api/portfolio?address="+addr+(force?"&force=true":""));renderResult(await r.json())}catch(e){console.error("loadOneWallet",e)}
+  var cached=force?null:pfCacheRead(addr);
+  if(cached){renderResult(cached.data);showCacheAge(cached.ts)}
+  else document.getElementById("walletStats").innerHTML='<div class="loading">Scan...</div>';
+  try{
+    var r=await fetch("/api/portfolio?address="+addr+(force?"&force=true":""));
+    var d=await r.json();
+    pfCacheWrite(addr,d);
+    if(activeWallet!=addr)return; // la vue a changé pendant le fetch, ne pas écraser
+    renderResult(d);hideCacheAge();
+  }catch(e){console.error("loadOneWallet",e)}
 }
 
 async function loadAllWallets(force){
-  if(wallets.length==0){document.getElementById("walletStats").innerHTML="";if(pieChart)pieChart.destroy();if(lineChart)lineChart.destroy();return}
-  document.getElementById("walletStats").innerHTML='<div class="loading">Scan '+wallets.length+' wallet(s)...</div>';
+  if(wallets.length==0){document.getElementById("walletStats").innerHTML="";hideCacheAge();if(pieChart)pieChart.destroy();if(lineChart)lineChart.destroy();return}
+  var cached=force?null:pfCacheRead("ALL");
+  if(cached){renderResult(cached.data);showCacheAge(cached.ts)}
+  else document.getElementById("walletStats").innerHTML='<div class="loading">Scan '+wallets.length+' wallet(s)...</div>';
   try{
     var promises=wallets.map(function(w){return fetch("/api/portfolio?address="+w.address+(force?"&force=true":"")).then(function(r){return r.json()})});
     var results=await Promise.all(promises);
     var totalUsd=0,stakedUsd=0,allTokens=[],chainTotals={},chainSet={},allErrors=[];
     for(var i=0;i<results.length;i++){var d=results[i],w=wallets[i];totalUsd+=d.total_usd||0;stakedUsd+=d.staked_usd||0;for(var j=0;j<d.tokens.length;j++){var t=d.tokens[j];t._wallet=w.label||w.address.slice(0,10)+"...";allTokens.push(t)}for(var c in d.chains){if(d.chains.hasOwnProperty(c)){chainTotals[c]=(chainTotals[c]||0)+d.chains[c];chainSet[c]=true}}if(d.errors)for(var k=0;k<d.errors.length;k++)allErrors.push({wallet:w.label||w.address.slice(0,10)+"...",chain:d.errors[k].chain,error:d.errors[k].error})}
     allTokens.sort(function(a,b){return b.usd_value-a.usd_value});
-    renderResult({total_usd:Math.round(totalUsd*100)/100,staked_usd:Math.round(stakedUsd*100)/100,token_count:allTokens.length,chain_count:Object.keys(chainSet).length,chains:chainTotals,tokens:allTokens.slice(0,200),errors:allErrors.slice(0,10)});
+    var agg={total_usd:Math.round(totalUsd*100)/100,staked_usd:Math.round(stakedUsd*100)/100,token_count:allTokens.length,chain_count:Object.keys(chainSet).length,chains:chainTotals,tokens:allTokens.slice(0,200),errors:allErrors.slice(0,10)};
+    pfCacheWrite("ALL",agg);
+    if(activeWallet!="ALL")return; // la vue a changé pendant le fetch, ne pas écraser
+    renderResult(agg);hideCacheAge();
   }catch(e){console.error("loadAllWallets",e)}
 }
 
@@ -473,14 +508,12 @@ function renderResult(d){
     '<div class="stat-card"><div class="label">Chaînes actives</div><div class="value">'+d.chain_count+'</div></div>'+
     '<div class="stat-card"><div class="label">Wallets</div><div class="value">'+(activeWallet=="ALL"?wallets.length:1)+'</div></div>'+
     (d.staked_usd>0?'<div class="stat-card" style="border-left:2px solid #40c463"><div class="label">🔒 Staké</div><div class="value" style="color:#40c463">'+fmtCurr(d.staked_usd)+'</div></div>':'');
-  // Also add gas fees card
-  fetch("/api/transactions?limit=1").then(function(r){return r.json()}).then(function(d){
-    var gas=0;/* computed below */;
-    fetch("/api/transactions/gas-total").then(function(r2){return r2.json()}).then(function(gd){
-      document.getElementById("pnlCards").insertAdjacentHTML("beforeend",
-        '<div class="stat-card"><div class="label">⛽ Gaz total</div><div class="value">'+fmtCurr(gd.total_gas_usd||0)+'</div></div>');
-    }).catch(function(e){console.error("renderResult/gas-total",e)});
-  }).catch(function(e){console.error("renderResult/gas",e)});
+  // Also add gas fees card (id stable → pas de doublon quand renderResult est appelé deux fois : cache puis frais)
+  fetch("/api/transactions/gas-total").then(function(r){return r.json()}).then(function(gd){
+    var old=document.getElementById("gasCard");if(old)old.remove();
+    document.getElementById("pnlCards").insertAdjacentHTML("beforeend",
+      '<div class="stat-card" id="gasCard"><div class="label">⛽ Gaz total</div><div class="value">'+fmtCurr(gd.total_gas_usd||0)+'</div></div>');
+  }).catch(function(e){console.error("renderResult/gas-total",e)});
 
   if(currentPage=="dashboard"){
     if(pieChart)pieChart.destroy();
