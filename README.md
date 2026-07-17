@@ -126,7 +126,7 @@ Crypto-Wallet-Tracker/
 ## 📋 Changelog
 
 ### v2.11.12
-- **Coût moyen pondéré** — le calcul du coût d'acquisition par token (fallback transactions) utilise désormais la méthode du coût moyen pondéré : les ventes retirent du coût cumulé au coût moyen d'achat, pas au prix de vente. PNL correct pour les tokens ayant eu des ventes (ex. STETH : coût ≈ $1730/unité au lieu de ~$296).
+- **Coût moyen pondéré** — le calcul du coût d'acquisition par token (fallback transactions) utilise désormais la méthode du coût moyen pondéré : les ventes retirent du coût cumulé au coût moyen d'achat, pas au prix de vente. PNL correct pour les tokens ayant eu des ventes.
 
 ### v2.11.11
 - **Enrichissement des prix historiques** — prix d'acquisition par transaction via l'API historique DefiLlama (prix à date par adresse de contrat). La colonne `contract_address` est désormais stockée dans les transactions, ce qui permet de résoudre le prix réel d'achat de chaque token et de calculer un PNL exact (là où le prix est disponible).
@@ -160,7 +160,7 @@ Crypto-Wallet-Tracker/
 - **HyperEVM** — support de la chaîne HyperEVM (Blockscout hyperscan) avec pricing du coin natif HYPE via son token wrappé WHYPE sur DefiLlama. Note : seules les positions de wallet sont couvertes, pas le DeFi/staking.
 
 ### v2.11.1
-- **Correctif frais de gaz** — valorisation au prix du jeton natif par chaîne (xDAI pour Gnosis, CELO pour Celo, POL pour Polygon, XTZ pour Etherlink, METIS pour Metis, ETH pour Ethereum et L2) au lieu du prix ETH systématique qui surévaluait les frais sur les chaînes non-ETH (ex : ~0,22 xDAI × 2000 $ → ~450 $ au lieu de 0,22 $)
+- **Correctif frais de gaz** — valorisation au prix du jeton natif par chaîne (xDAI pour Gnosis, CELO pour Celo, POL pour Polygon, XTZ pour Etherlink, METIS pour Metis, ETH pour Ethereum et L2) au lieu du prix ETH systématique qui surévaluait les frais sur les chaînes non-ETH (un petit montant de jeton natif multiplié par le prix de l ETH gonflait fortement le total)
 
 ### v2.11.0
 - **Correctifs** — snapshots limités à 500, PNL par token (stablecoins sans PNL fantôme), frais de gaz anti-surcomptage (imputation unique par tx_hash)
