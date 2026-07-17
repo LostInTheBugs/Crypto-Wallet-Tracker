@@ -683,102 +683,32 @@ HIST_PRICE_TIMEOUT = 12         # seconds per request
 HIST_PRICE_RETRIES = 3          # retries on timeout / non-200 before giving up
 
 async def _enrich_historical_prices(user_id: int) -> int:
-    """Enrich transactions with historical token prices via DefiLlama.
+    """Enrich transactions with DefiLlama historical prices, in a SUBPROCESS.
 
-    Selects transactions where usd_price is missing (NULL or 0) and
-    contract_address is known, groups by chain, queries the DefiLlama
-    historical price endpoint, and updates usd_price (and usd_value).
-    Returns the number of rows enriched.
+    The HTTP calls are 100% reliable in a fresh process but fail intermittently
+    when run inside the long-lived uvicorn event loop, so we delegate to
+    services/enrich_worker.py. Returns the number of rows newly priced.
     """
     import logging
     _elog = logging.getLogger("crypto.enrich")
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute(
-            "SELECT id, chain, contract_address, block_time, amount "
-            "FROM transactions WHERE user_id=? "
-            "AND (usd_price IS NULL OR usd_price=0) "
-            "AND contract_address!='' AND price_checked=0 LIMIT 1000",
-            (user_id,))
-        rows = await cur.fetchall()
-    if not rows:
+    worker = os.path.join(os.path.dirname(os.path.abspath(__file__)), "services", "enrich_worker.py")
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, worker, str(user_id),
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            env={**os.environ, "DB_PATH": DB_PATH})
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=900)
+        out = (stdout.decode() or "").strip().split()
+        n = int(out[-1]) if out and out[-1].lstrip("-").isdigit() else 0
+        if stderr:
+            err = stderr.decode()[:200].strip()
+            if err:
+                _elog.warning(f"enrich worker stderr: {err}")
+        _elog.info(f"Historical price enrichment (subprocess): {n} priced, user {user_id}")
+        return n
+    except Exception as e:
+        _elog.warning(f"enrich subprocess failed: {e}")
         return 0
-
-    # Single GLOBAL semaphore — gentle, shared across ALL chains, so we never
-    # flood DefiLlama (previous per-chain semaphores × many chains caused
-    # timeouts and 0 rows enriched). Network calls only; writes are serialized.
-    sem = asyncio.Semaphore(HIST_PRICE_CONCURRENCY)
-
-    async def _price_one(row):
-        """Fetch the DefiLlama historical price for one transaction, with retries.
-
-        Returns:
-          ("price", id, price, amount)  when a price is found,
-          ("checked", id)               when DefiLlama answers (200) with no price,
-                                        or the row can never be priced (bad chain/date),
-          None                          when all retries failed (retry on a later run).
-        Never touches the database.
-        """
-        slug = CHAIN_TO_LLAMA.get(row["chain"])
-        if not slug:
-            return ("checked", row["id"])
-        addr = (row["contract_address"] or "").lower()
-        try:
-            dt = datetime.datetime.strptime(row["block_time"][:19], "%Y-%m-%d %H:%M:%S")
-            unix_ts = int(calendar.timegm(dt.timetuple()))
-        except Exception:
-            return ("checked", row["id"])
-        url = f"https://coins.llama.fi/prices/historical/{unix_ts}/{slug}:{addr}"
-        key = f"{slug}:{addr}"
-        async with sem:
-            for attempt in range(HIST_PRICE_RETRIES):
-                try:
-                    async with httpx.AsyncClient(timeout=HIST_PRICE_TIMEOUT) as cl:
-                        resp = await cl.get(url)
-                    if resp.status_code == 200:
-                        price = resp.json().get("coins", {}).get(key, {}).get("price", 0)
-                        if price and price > 0:
-                            return ("price", row["id"], price, row["amount"])
-                        return ("checked", row["id"])
-                    # non-200 (e.g. 429/5xx) → retry
-                except Exception:
-                    pass  # timeout / network error → retry
-                if attempt < HIST_PRICE_RETRIES - 1:
-                    await asyncio.sleep(1.5 ** attempt)  # ~1s, ~1.5s backoff
-            return None  # give up for now, leave price_checked=0 to retry later
-
-    results = await asyncio.gather(
-        *(_price_one(r) for r in rows), return_exceptions=True)
-
-    price_updates = []   # (id, price, amount) — priced (also marked checked)
-    checked_only = []    # ids DefiLlama answered with no price (mark checked)
-    for r in results:
-        if isinstance(r, tuple):
-            if r[0] == "price":
-                price_updates.append((r[1], r[2], r[3]))
-            elif r[0] == "checked":
-                checked_only.append(r[1])
-
-    # Serialize ALL writes on a single connection with one final commit.
-    if price_updates or checked_only:
-        async with aiosqlite.connect(DB_PATH) as db:
-            for rid, price, amount in price_updates:
-                await db.execute(
-                    "UPDATE transactions SET usd_price=?, usd_value=ROUND(?*?,2), "
-                    "price_checked=1 WHERE id=?",
-                    (round(price, 6), amount, price, rid))
-            for rid in checked_only:
-                await db.execute(
-                    "UPDATE transactions SET price_checked=1 WHERE id=?", (rid,))
-            await db.commit()
-
-    enriched = len(price_updates)
-    total_checked = enriched + len(checked_only)
-    _elog.info(
-        f"Historical price enrichment: {enriched} priced, {total_checked} checked, "
-        f"{len(rows) - total_checked} to retry, user {user_id}")
-    return enriched
 
 
 async def _get_eth_price_at(timestamp_str: str) -> float:

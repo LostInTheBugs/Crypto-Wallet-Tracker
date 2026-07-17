@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — v2.11.15
+# Crypto Wallet Tracker — v2.11.16
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -124,6 +124,9 @@ Crypto-Wallet-Tracker/
 ---
 
 ## 📋 Changelog
+
+### v2.11.16
+- **Enrichissement fiabilisé (sous-process)** — l'enrichissement des prix historiques s'exécute désormais dans un process dédié, ce qui le rend fiable (les mêmes appels échouaient de façon intermittente dans la boucle événementielle du serveur). Ajout d'un drapeau `price_checked` pour la convergence.
 
 ### v2.11.15
 - **Ordre d'enrichissement** — l'endpoint d'enrichissement lance d'abord les prix historiques (budget de requêtes DefiLlama propre) avant les autres enrichissements, évitant les échecs liés au rate-limit
