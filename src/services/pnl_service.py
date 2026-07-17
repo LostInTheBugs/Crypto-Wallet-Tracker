@@ -147,7 +147,6 @@ async def _rebuild_history(
     unmapped = set(u.lower() for u in price_result.get("unmapped", []))
     degraded = set(d.lower() for d in price_result.get("degraded", []))
     price_series = price_result.get("prices", {})
-    excluded = unmapped  # only unmapped tokens fully excluded
 
     # ═══════════════════════════════════════════════════════════════
     # 2. Preload all transactions, sorted by time
@@ -155,7 +154,7 @@ async def _rebuild_history(
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
-            "SELECT token_symbol, amount, usd_price, direction, block_time, chain "
+            "SELECT token_symbol, amount, usd_price, direction, block_time, chain, contract_address "
             "FROM transactions WHERE user_id=? AND wallet_address=? "
             "ORDER BY block_time ASC",
             (user_id, wallet_address))
@@ -166,64 +165,68 @@ async def _rebuild_history(
         return {"ok": True, "days": 0, "unmapped_tokens": list(unmapped)}
 
     # ═══════════════════════════════════════════════════════════════
-    # 3. Build fallback prices from transactions and portfolio
+    # 3. Token identity + price sources (contract-aware)
     # ═══════════════════════════════════════════════════════════════
-    # Pre-sort price series for each token
-    sorted_prices: Dict[str, List[Tuple[int, float]]] = {}
+    # A token's identity ("tid") is its CONTRACT ADDRESS (fallback:
+    # chain:symbol). This prevents two different tokens sharing a symbol —
+    # e.g. the real BOB (~$1) and a spam "bob" (millions of units) — from
+    # being merged and mispriced together.
+    def _tid(symbol, chain, contract):
+        c = (contract or "").strip().lower()
+        return c if c else f"{(chain or '').lower()}:{(symbol or '').lower()}"
+
+    tid_sym: Dict[str, str] = {}     # tid -> display symbol (lower)
+    tid_chain: Dict[str, str] = {}   # tid -> chain
+    for tx in txs:
+        tid = _tid(tx["token_symbol"], tx["chain"], tx["contract_address"])
+        tid_sym.setdefault(tid, (tx["token_symbol"] or "").lower())
+        tid_chain.setdefault(tid, tx["chain"])
+
+    # Symbol-keyed DefiLlama/CoinGecko series (from price_service)
+    sorted_prices_sym: Dict[str, List[Tuple[int, float]]] = {}
     for sym, p_dict in price_series.items():
         if p_dict:
-            sorted_prices[sym] = sorted(p_dict.items())  # [(ts_ms, price), ...]
+            sorted_prices_sym[sym] = sorted(p_dict.items())
 
-    # Build fallback prices from transactions (last known usd_price per token)
-    fallback_prices: Dict[str, float] = {}
+    # Per-tid fallback price (last known usd_price of THIS token) + dated points
+    fallback_prices: Dict[str, float] = {}                           # tid -> price
+    tx_price_points: Dict[str, Dict[int, float]] = defaultdict(dict)  # tid -> {ts_ms: price}
     for tx in txs:
-        sym = tx["token_symbol"].lower()
-        if tx["usd_price"] > 0:
-            fallback_prices[sym] = tx["usd_price"]
-
-    # v2.11.13: build dated price series from transaction prices for tokens
-    # NOT covered by DefiLlama series (unmapped but priced tokens such as
-    # STETH/HEX enriched at import time). normalize_prices_for_timeline can
-    # then forward-fill a real per-date price instead of one static value.
-    tx_price_points: Dict[str, Dict[int, float]] = defaultdict(dict)
-    for tx in txs:
-        sym = tx["token_symbol"].lower()
-        if sym in sorted_prices:
+        if not tx["usd_price"] or tx["usd_price"] <= 0:
             continue
-        price = tx["usd_price"] or 0
-        if price <= 0:
-            continue
+        tid = _tid(tx["token_symbol"], tx["chain"], tx["contract_address"])
+        fallback_prices[tid] = tx["usd_price"]
         try:
-            dt = datetime.datetime.strptime(
-                tx["block_time"][:19], "%Y-%m-%d %H:%M:%S")
-            ts_ms = calendar.timegm(dt.timetuple()) * 1000
+            dt = datetime.datetime.strptime(tx["block_time"][:19], "%Y-%m-%d %H:%M:%S")
+            tx_price_points[tid][calendar.timegm(dt.timetuple()) * 1000] = tx["usd_price"]
         except Exception:
-            continue
-        tx_price_points[sym][ts_ms] = price
-    for sym, points in tx_price_points.items():
-        sorted_prices[sym] = sorted(points.items())  # [(ts_ms, price), ...]
+            pass
 
-    # v2.11.13: unmapped tokens that carry at least one transaction price are
-    # NOT excluded anymore — their tx prices provide real dated series above.
-    # (excluded aliases unmapped, so these tokens also stop being reported as
-    # excluded to the frontend.) Spam and truly price-less unmapped tokens
-    # remain excluded (see tx loop below).
-    excluded.difference_update(fallback_prices.keys())
+    # Per-tid dated price series: prefer the token's own tx-price series,
+    # else fall back to its symbol's DefiLlama series.
+    sorted_prices: Dict[str, List[Tuple[int, float]]] = {}   # keyed by tid
+    for tid, sym in tid_sym.items():
+        if tx_price_points.get(tid):
+            sorted_prices[tid] = sorted(tx_price_points[tid].items())
+        elif sym in sorted_prices_sym:
+            sorted_prices[tid] = sorted_prices_sym[sym]
 
-    # Fetch current portfolio prices as ultimate fallback
-    current_prices: Dict[str, float] = {}
-    current_values: Dict[str, float] = {}
+    # Fetch current portfolio prices/values as ultimate fallback (keyed by tid)
+    current_prices: Dict[str, float] = {}   # tid -> price
+    current_values: Dict[str, float] = {}   # tid -> usd_value
     if compute_portfolio:
         try:
             from_portfolio = await compute_portfolio(wallet_address)
             for t in from_portfolio.get("tokens", []):
-                sym = t["symbol"].lower()
+                tid = _tid(t.get("symbol"), t.get("chain"), t.get("contract_address"))
+                tid_sym.setdefault(tid, (t.get("symbol") or "").lower())
+                tid_chain.setdefault(tid, t.get("chain"))
                 price = t.get("usd_price", 0)
                 total_val = t.get("usd_value", 0)
                 if price > 0:
-                    current_prices[sym] = price
+                    current_prices[tid] = price
                 if total_val > 0:
-                    current_values[sym] = total_val
+                    current_values[tid] = total_val
         except Exception as e:
             logger.warning(f"[rebuild] portfolio fetch failed: {e}")
 
@@ -243,51 +246,58 @@ async def _rebuild_history(
     # 5. Compute balance deltas for each day (sparse)
     # ═══════════════════════════════════════════════════════════════
     daily_deltas: Dict[str, Dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    excluded_tids: Set[str] = set()
+
+    tx_tids: Set[str] = {_tid(tx["token_symbol"], tx["chain"], tx["contract_address"]) for tx in txs}
+
+    def _keep_tid(tid: str) -> bool:
+        """Keep a token if its symbol is CoinGecko-mapped, or if THIS contract
+        has its own price. Spam and price-less unmapped tokens are dropped —
+        so a same-symbol spam token can't inherit another token's price."""
+        sym = tid_sym.get(tid, "")
+        if SYMBOL_TO_CG.get(sym):
+            return True
+        if _is_spam(sym):
+            return False
+        return tid in fallback_prices or current_prices.get(tid, 0) > 0
 
     # Detect orphan tokens (have portfolio value but no transactions)
-    tx_syms: Set[str] = {tx["token_symbol"].lower() for tx in txs}
-    for sym in current_values:
-        if sym not in tx_syms and sym not in excluded:
-            if SYMBOL_TO_CG.get(sym) or sym in fallback_prices:
-                price = current_prices.get(sym, 0)
-                if price > 0:
-                    qty = current_values[sym] / price
-                    if qty > 0:
-                        daily_deltas[first_date][sym] += qty
-                        if sym not in fallback_prices:
-                            fallback_prices[sym] = price
+    for tid, val in current_values.items():
+        if tid not in tx_tids and _keep_tid(tid):
+            price = current_prices.get(tid, 0)
+            if price > 0:
+                qty = val / price
+                if qty > 0:
+                    daily_deltas[first_date][tid] += qty
+                    if tid not in fallback_prices:
+                        fallback_prices[tid] = price
 
     for tx in txs:
-        sym = tx["token_symbol"].lower()
+        tid = _tid(tx["token_symbol"], tx["chain"], tx["contract_address"])
         date = tx["block_time"][:10]
         amount = tx["amount"] or 0
-        price = tx["usd_price"] or 0
 
-        if sym in excluded:
+        if tid in excluded_tids:
             continue
-        if not SYMBOL_TO_CG.get(sym):
-            # v2.11.13: keep spam and truly price-less unmapped tokens out;
-            # unmapped tokens with at least one priced transaction stay in
-            # (their tx-price series feeds normalize_prices_for_timeline).
-            if _is_spam(sym) or sym not in fallback_prices:
-                excluded.add(sym)
-                continue
+        if not _keep_tid(tid):
+            excluded_tids.add(tid)
+            continue
 
         if tx["direction"] == "in":
-            daily_deltas[date][sym] += amount
+            daily_deltas[date][tid] += amount
         else:
-            daily_deltas[date][sym] -= amount
+            daily_deltas[date][tid] -= amount
 
     # ═══════════════════════════════════════════════════════════════
     # 6. Collect all active token symbols (have balance or price)
     # ═══════════════════════════════════════════════════════════════
-    active_syms: Set[str] = set()
-    for sym in tx_syms:
-        if sym not in excluded:
-            active_syms.add(sym)
-    for sym in current_values:
-        if sym not in excluded:
-            active_syms.add(sym)
+    active_tids: Set[str] = set()
+    for tid in tx_tids:
+        if tid not in excluded_tids:
+            active_tids.add(tid)
+    for tid in current_values:
+        if tid not in excluded_tids:
+            active_tids.add(tid)
 
     # ═══════════════════════════════════════════════════════════════
     # 7. Pre-normalize prices: for each active token, build a
@@ -295,29 +305,23 @@ async def _rebuild_history(
     # ═══════════════════════════════════════════════════════════════
     price_matrix: Dict[str, List[float]] = {}
     missing_price_count = 0
-    for sym in active_syms:
+    for tid in active_tids:
         prices = normalize_prices_for_timeline(
-            timeline, sym, sorted_prices, fallback_prices, current_prices
+            timeline, tid, sorted_prices, fallback_prices, current_prices
         )
-        price_matrix[sym] = prices
-        zero_count = sum(1 for p in prices if p == 0.0)
-        if zero_count > 0:
-            missing_price_count += zero_count
-            logger.debug(
-                f"[rebuild] token={sym}: {zero_count}/{n_days} days with price=0"
-            )
+        price_matrix[tid] = prices
+        missing_price_count += sum(1 for p in prices if p == 0.0)
 
     logger.info(
-        f"[rebuild] active_tokens={len(active_syms)}, "
-        f"missing_price_slots={missing_price_count}/{len(active_syms)*n_days}"
+        f"[rebuild] active_tokens={len(active_tids)}, "
+        f"missing_price_slots={missing_price_count}/{max(1, len(active_tids)*n_days)}"
     )
 
     # ═══════════════════════════════════════════════════════════════
     # 8. Walk timeline: compute balances, costs, values for each day
     # ═══════════════════════════════════════════════════════════════
-    balances: Dict[str, float] = defaultdict(float)  # per-token cumulative balance
-    costs: Dict[str, float] = defaultdict(float)      # per-token cumulative cost basis
-    token_chain: Dict[str, str] = {}
+    balances: Dict[str, float] = defaultdict(float)  # per-token-id cumulative balance
+    costs: Dict[str, float] = defaultdict(float)      # per-token-id cumulative cost basis
     daily_rows: list = []
 
     tokens_skipped: Set[str] = set()
@@ -327,58 +331,52 @@ async def _rebuild_history(
         day_deltas = daily_deltas.get(date_str, {})
 
         # --- 8a. Update per-token balances and costs ---
-        for sym, delta in day_deltas.items():
-            old_bal = balances[sym]
+        for tid, delta in day_deltas.items():
+            old_bal = balances[tid]
             new_bal = max(0.0, old_bal + delta)
 
-            # Get price for this day from the normalized price matrix
             day_price = (
-                price_matrix[sym][day_idx]
-                if sym in price_matrix
-                else _price_at(sym, 0, sorted_prices, fallback_prices, current_prices)
+                price_matrix[tid][day_idx]
+                if tid in price_matrix
+                else _price_at(tid, 0, sorted_prices, fallback_prices, current_prices)
             )
 
             if delta > 0 and old_bal >= 0:
-                # Incoming: add cost at day's price
-                costs[sym] += delta * max(0.0, day_price)
+                costs[tid] += delta * max(0.0, day_price)          # incoming: add cost at day price
             elif delta < 0 and old_bal > 0:
-                # Outgoing: remove at average cost
-                avg_cost = costs[sym] / old_bal if old_bal > 0 else 0.0
-                costs[sym] = max(0.0, costs[sym] - abs(delta) * avg_cost)
+                avg_cost = costs[tid] / old_bal if old_bal > 0 else 0.0
+                costs[tid] = max(0.0, costs[tid] - abs(delta) * avg_cost)  # outgoing: at avg cost
 
-            balances[sym] = new_bal
+            balances[tid] = new_bal
             if new_bal == 0:
-                costs[sym] = 0.0
+                costs[tid] = 0.0
 
         # --- 8b. Compute daily value: sum(balance × price) ---
         value = 0.0
         per_token_values: Dict[str, float] = {}
 
-        for sym in active_syms:
-            bal = balances.get(sym, 0.0)
-            if bal <= 0 or sym in excluded:
+        for tid in active_tids:
+            bal = balances.get(tid, 0.0)
+            if bal <= 0 or tid in excluded_tids:
                 continue
 
-            # Get pre-normalized price for this day
-            if sym in price_matrix:
-                p = price_matrix[sym][day_idx]
+            if tid in price_matrix:
+                p = price_matrix[tid][day_idx]
             else:
-                # Fallback for tokens not in price_matrix (shouldn't happen)
                 day_ts = calendar.timegm(datetime.datetime.strptime(date_str, "%Y-%m-%d").timetuple()) + 43200
-                day_ts_ms = day_ts * 1000
-                p = _price_at(sym, day_ts_ms, sorted_prices, fallback_prices, current_prices)
+                p = _price_at(tid, day_ts * 1000, sorted_prices, fallback_prices, current_prices)
 
             if p <= 0:
                 continue
 
             token_val = bal * p
             if not math.isfinite(token_val):
-                tokens_skipped.add(sym)
+                tokens_skipped.add(tid)
                 continue
 
             token_val = round(token_val, 2)
             value += token_val
-            per_token_values[sym] = token_val
+            per_token_values[tid] = token_val
 
         if not math.isfinite(value):
             value = 0.0
@@ -387,11 +385,11 @@ async def _rebuild_history(
 
         # --- 8c. Net flows: sum(delta × price) ---
         net_flows = 0.0
-        for sym, delta in day_deltas.items():
-            if sym in price_matrix:
-                p = price_matrix[sym][day_idx]
+        for tid, delta in day_deltas.items():
+            if tid in price_matrix:
+                p = price_matrix[tid][day_idx]
             else:
-                p = _price_at(sym, 0, sorted_prices, fallback_prices, current_prices)
+                p = _price_at(tid, 0, sorted_prices, fallback_prices, current_prices)
             flow = delta * p
             if math.isfinite(flow):
                 net_flows += flow
@@ -408,11 +406,13 @@ async def _rebuild_history(
             round(net_flows, 2), None, None,
         ))
 
-        # --- 8f. Per-token rows ---
-        for sym, token_val in per_token_values.items():
+        # --- 8f. Per-token rows (stored by display symbol; several contracts
+        #         of the same symbol are summed per date by the read queries) ---
+        for tid, token_val in per_token_values.items():
             daily_rows.append((
                 user_id, wallet_address, date_str,
-                token_val, round(costs.get(sym, 0.0), 2), 0, sym, token_chain.get(sym),
+                token_val, round(costs.get(tid, 0.0), 2), 0,
+                tid_sym.get(tid), tid_chain.get(tid),
             ))
 
     # ═══════════════════════════════════════════════════════════════
@@ -440,7 +440,7 @@ async def _rebuild_history(
 
     logger.info(
         f"[rebuild] DONE user={user_id} wallet={wallet_address}: "
-        f"days={n_days} tokens={len(active_syms)} "
+        f"days={n_days} tokens={len(active_tids)} "
         f"rows_written={len(daily_rows)} "
         f"skipped_tokens={len(tokens_skipped)} "
         f"missing_price_slots={missing_price_count} "
