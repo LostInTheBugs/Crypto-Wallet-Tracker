@@ -258,7 +258,7 @@ async def fetch_chain(client, chain, host, address):
                     if _is_spam(symbol):
                         continue
 
-                    contract_addr = t.get("address") or ""
+                    contract_addr = t.get("address") or t.get("address_hash") or ""
 
                     tokens.append({
                         "name": name,

@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — v2.11.2
+# Crypto Wallet Tracker — v2.11.3
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -124,6 +124,9 @@ Crypto-Wallet-Tracker/
 ---
 
 ## 📋 Changelog
+
+### v2.11.3
+- **Correctif Blockscout** — prise en charge de la clé `address_hash` (instances récentes type hyperscan) en fallback de `address` pour la résolution des adresses de contrat → pricing DefiLlama des tokens HyperEVM (WHYPE, etc.)
 
 ### v2.11.2
 - **HyperEVM** — support de la chaîne HyperEVM (Blockscout hyperscan) avec pricing du coin natif HYPE via son token wrappé WHYPE sur DefiLlama. Note : seules les positions de wallet sont couvertes, pas le DeFi/staking.
