@@ -707,18 +707,25 @@ async def _enrich_historical_prices(user_id: int) -> int:
     for r in rows:
         by_chain.setdefault(r["chain"], []).append(r)
 
-    enriched_lock = asyncio.Lock()
-    enriched = 0
+    async def _process_chain(chain: str, items: list) -> list:
+        """Network-only price lookups for one chain.
 
-    async def _process_chain(chain: str, items: list) -> int:
+        Returns a list of (row_id, price, amount) tuples. DB writes are
+        deliberately NOT done here: they are serialized afterwards on a
+        single connection to avoid concurrent-connection SQLite locks.
+        """
         llama_slug = CHAIN_TO_LLAMA.get(chain)
         if not llama_slug:
-            return 0
+            return []
 
         sem = asyncio.Semaphore(HIST_PRICE_CONCURRENCY)
-        chain_enriched = 0
 
-        async def _price_one(row) -> int:
+        async def _price_one(row):
+            """Fetch the DefiLlama historical price for one transaction.
+
+            Returns (row_id, price, amount) when price > 0, else None.
+            Never touches the database.
+            """
             addr = row["contract_address"].lower()
             bt = row["block_time"]
             # Convert block_time "YYYY-MM-DD HH:MM:SS" (UTC) to unix timestamp
@@ -726,49 +733,53 @@ async def _enrich_historical_prices(user_id: int) -> int:
                 dt = datetime.datetime.strptime(bt[:19], "%Y-%m-%d %H:%M:%S")
                 unix_ts = int(calendar.timegm(dt.timetuple()))
             except Exception:
-                return 0
+                return None
 
             try:
                 async with httpx.AsyncClient(timeout=HIST_PRICE_TIMEOUT) as cl:
                     url = f"https://coins.llama.fi/prices/historical/{unix_ts}/{llama_slug}:{addr}"
                     resp = await cl.get(url)
                     if resp.status_code != 200:
-                        return 0
+                        return None
                     data = resp.json()
                     coins = data.get("coins", {})
                     key = f"{llama_slug}:{addr}"
                     price = coins.get(key, {}).get("price", 0)
                     if not price or price <= 0:
-                        return 0
-
-                    async with aiosqlite.connect(DB_PATH) as db2:
-                        await db2.execute(
-                            "UPDATE transactions SET usd_price=?, usd_value=ROUND(?*?, 2) WHERE id=?",
-                            (round(price, 6), row["amount"], price, row["id"]))
-                        await db2.commit()
-                    return 1
+                        return None
+                    return (row["id"], price, row["amount"])
             except Exception:
-                return 0
+                return None
 
         async def _with_sem(row):
-            nonlocal chain_enriched
             async with sem:
-                c = await _price_one(row)
-                chain_enriched += c
+                return await _price_one(row)
 
-        tasks = [_with_sem(r) for r in items]
-        await asyncio.gather(*tasks)
-        return chain_enriched
+        results = await asyncio.gather(*(_with_sem(r) for r in items))
+        return [r for r in results if r is not None]
 
-    # Process chains in parallel
-    results = await asyncio.gather(
+    # Process chains in parallel — concurrency applies to NETWORK calls only
+    chain_results = await asyncio.gather(
         *(_process_chain(chain, items) for chain, items in by_chain.items()),
         return_exceptions=True)
 
-    for r in results:
-        if isinstance(r, int):
-            enriched += r
+    updates: list = []
+    for r in chain_results:
+        if isinstance(r, list):
+            updates.extend(r)
 
+    # Serialize ALL writes on a single connection with one final commit.
+    # One-connection-per-write in parallel caused silent SQLite lock
+    # failures (0 rows actually enriched).
+    if updates:
+        async with aiosqlite.connect(DB_PATH) as db:
+            for rid, price, amount in updates:
+                await db.execute(
+                    "UPDATE transactions SET usd_price=?, usd_value=ROUND(?*?,2) WHERE id=?",
+                    (round(price, 6), amount, price, rid))
+            await db.commit()
+
+    enriched = len(updates)
     _elog.info(f"Historical price enrichment: {enriched}/{len(rows)} rows enriched for user {user_id}")
     return enriched
 

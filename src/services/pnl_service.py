@@ -181,6 +181,35 @@ async def _rebuild_history(
         if tx["usd_price"] > 0:
             fallback_prices[sym] = tx["usd_price"]
 
+    # v2.11.13: build dated price series from transaction prices for tokens
+    # NOT covered by DefiLlama series (unmapped but priced tokens such as
+    # STETH/HEX enriched at import time). normalize_prices_for_timeline can
+    # then forward-fill a real per-date price instead of one static value.
+    tx_price_points: Dict[str, Dict[int, float]] = defaultdict(dict)
+    for tx in txs:
+        sym = tx["token_symbol"].lower()
+        if sym in sorted_prices:
+            continue
+        price = tx["usd_price"] or 0
+        if price <= 0:
+            continue
+        try:
+            dt = datetime.datetime.strptime(
+                tx["block_time"][:19], "%Y-%m-%d %H:%M:%S")
+            ts_ms = calendar.timegm(dt.timetuple()) * 1000
+        except Exception:
+            continue
+        tx_price_points[sym][ts_ms] = price
+    for sym, points in tx_price_points.items():
+        sorted_prices[sym] = sorted(points.items())  # [(ts_ms, price), ...]
+
+    # v2.11.13: unmapped tokens that carry at least one transaction price are
+    # NOT excluded anymore — their tx prices provide real dated series above.
+    # (excluded aliases unmapped, so these tokens also stop being reported as
+    # excluded to the frontend.) Spam and truly price-less unmapped tokens
+    # remain excluded (see tx loop below).
+    excluded.difference_update(fallback_prices.keys())
+
     # Fetch current portfolio prices as ultimate fallback
     current_prices: Dict[str, float] = {}
     current_values: Dict[str, float] = {}
@@ -237,7 +266,10 @@ async def _rebuild_history(
         if sym in excluded:
             continue
         if not SYMBOL_TO_CG.get(sym):
-            if price == 0 or _is_spam(sym):
+            # v2.11.13: keep spam and truly price-less unmapped tokens out;
+            # unmapped tokens with at least one priced transaction stay in
+            # (their tx-price series feeds normalize_prices_for_timeline).
+            if _is_spam(sym) or sym not in fallback_prices:
                 excluded.add(sym)
                 continue
 

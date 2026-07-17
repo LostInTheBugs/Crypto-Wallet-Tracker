@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — v2.11.12
+# Crypto Wallet Tracker — v2.11.13
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -124,6 +124,10 @@ Crypto-Wallet-Tracker/
 ---
 
 ## 📋 Changelog
+
+### v2.11.13
+- **Correctif concurrence enrichissement** — l'enrichissement des prix historiques ouvrait une connexion SQLite par écriture, en parallèle, provoquant des verrous silencieux (0 ligne enrichie). Les appels réseau DefiLlama restent concurrents, mais les écritures en base sont désormais sérialisées sur une connexion unique avec un commit final.
+- **Tokens prisés non mappés inclus dans l'historique** — les tokens absents du mapping CoinGecko mais disposant de prix d'acquisition en transaction ne sont plus exclus du rebuild : leurs prix de transaction forment des séries de prix par date (forward-fill), ce qui les intègre à l'historique agrégé et améliore la réconciliation.
 
 ### v2.11.12
 - **Coût moyen pondéré** — le calcul du coût d'acquisition par token (fallback transactions) utilise désormais la méthode du coût moyen pondéré : les ventes retirent du coût cumulé au coût moyen d'achat, pas au prix de vente. PNL correct pour les tokens ayant eu des ventes.
