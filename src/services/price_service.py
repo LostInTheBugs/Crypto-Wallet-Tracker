@@ -1,5 +1,6 @@
 """Price service — CoinGecko/DefiLlama price fetching, caching, and interpolation."""
 import asyncio
+import calendar
 import datetime
 import os
 import time as _time
@@ -126,7 +127,7 @@ async def _load_prices_from_cache(sym_lower: str) -> dict:
     result = {}
     for r in rows:
         try:
-            ts = int(_time.mktime(_time.strptime(r["date"], "%Y-%m-%d"))) * 1000
+            ts = calendar.timegm(_time.strptime(r["date"], "%Y-%m-%d")) * 1000
             result[ts] = r["price_usd"]
         except Exception:
             pass
@@ -277,7 +278,7 @@ async def _fetch_prices_per_token(user_id: int, wallet_address: str, _get_user_c
             row = await cur.fetchone()
         if row and row["earliest"]:
             try:
-                from_ts = int(_time.mktime(_time.strptime(row["earliest"][:19], "%Y-%m-%d %H:%M:%S"))) - 86400
+                from_ts = calendar.timegm(_time.strptime(row["earliest"][:19], "%Y-%m-%d %H:%M:%S")) - 86400
             except Exception:
                 from_ts = now - 365 * 86400
         else:

@@ -227,23 +227,29 @@ async def _fetch_native_coin(client, chain: str, host: str, address: str) -> dic
 async def fetch_chain(client, chain, host, address):
     """Fetch ERC-20/721/1155 tokens AND native coin balance in parallel."""
     try:
-        # Parallel: tokens + native coin
-        tokens_task = client.get(
-            f"https://{host}/api/v2/addresses/{address}/tokens",
-            timeout=15,
-        )
-        native_task = _fetch_native_coin(client, chain, host, address)
+        # Native coin (single call) runs first; then paginate the token list
+        # (Blockscout returns ~50/page — a single page missed tokens on large
+        # wallets). MAX_TOKEN_PAGES caps the cost on spam-heavy wallets.
+        native = await _fetch_native_coin(client, chain, host, address)
 
-        # Await both
-        r, native = await asyncio.gather(tokens_task, native_task)
-
-        # --- Process token list ---
-        if r.status_code != 200:
-            tokens = []
-            error = f"HTTP {r.status_code}"
-        else:
+        tokens = []
+        error = None
+        MAX_TOKEN_PAGES = 10
+        url = f"https://{host}/api/v2/addresses/{address}/tokens"
+        params = {}
+        page = 0
+        while page < MAX_TOKEN_PAGES:
+            try:
+                r = await client.get(url, params=params, timeout=15)
+            except Exception as e:
+                if page == 0:
+                    error = str(e)[:80]
+                break
+            if r.status_code != 200:
+                if page == 0:
+                    error = f"HTTP {r.status_code}"
+                break
             data = r.json()
-            tokens = []
             for item in data.get("items", []):
                 if item is None:
                     continue
@@ -273,7 +279,11 @@ async def fetch_chain(client, chain, host, address):
                 except Exception:
                     # One bad token must NOT kill the whole chain
                     logger.debug(f"[fetch_chain] {chain}: skipping malformed token item")
-            error = None
+            nxt = data.get("next_page_params")
+            if not nxt:
+                break
+            params = nxt
+            page += 1
 
         # --- Prepend native coin if present ---
         if native:

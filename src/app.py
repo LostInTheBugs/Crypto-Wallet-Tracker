@@ -76,6 +76,12 @@ TOKEN_EXPIRY = 30  # days
 async def lifespan(app: FastAPI):
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     async with aiosqlite.connect(DB_PATH) as db:
+        # WAL: concurrent readers during a write, far fewer "database is locked"
+        try:
+            await db.execute("PRAGMA journal_mode=WAL")
+            await db.execute("PRAGMA busy_timeout=5000")
+        except Exception:
+            pass
         await db.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -182,8 +188,6 @@ async def lifespan(app: FastAPI):
                 FOREIGN KEY(user_id) REFERENCES users(id)
             )
         """)
-        # Purge old polluted snapshot data
-        await db.execute("DELETE FROM snapshots")
         await db.commit()
     yield
 
@@ -479,7 +483,7 @@ async def import_progress(user=Depends(get_current_user)):
 async def get_transactions(wallet: str = Query(None), chain: str = Query(None), token: str = Query(None),
                            direction: str = Query(None), limit: int = Query(100), offset: int = Query(0),
                            user=Depends(get_current_user), db=Depends(get_db)):
-    conditions = ["user_id=?", str(user["id"])]
+    conditions = ["user_id=?"]
     params = [user["id"]]
     if wallet:
         conditions.append("wallet_address=?")
@@ -946,7 +950,7 @@ async def get_snapshots(token: str = Query(None), wallet: str = Query(None), cha
     Query params:
         format: 'v1' (default, legacy array of objects) or 'v2' ({labels, values, meta}).
     """
-    conditions = ["user_id=?", str(user["id"])]
+    conditions = ["user_id=?"]
     params = [user["id"]]
 
     if token:
@@ -1070,7 +1074,7 @@ async def get_pnl(wallet: str = Query(None), token: str = Query(None), range: st
     Query params:
         format: 'v1' (default, array of objects) or 'v2' ({labels, values, meta}).
     """
-    conditions = ["user_id=?", str(user["id"])]
+    conditions = ["user_id=?"]
     params = [user["id"]]
 
     if wallet and wallet != "ALL":

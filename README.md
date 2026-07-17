@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — v2.11.21
+# Crypto Wallet Tracker — v2.11.22
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -124,6 +124,13 @@ Crypto-Wallet-Tracker/
 ---
 
 ## 📋 Changelog
+
+### v2.11.22 — Robustesse & qualité
+- **SQLite en mode WAL** + `busy_timeout` : lectures concurrentes pendant une écriture, bien moins de « database is locked »
+- **Pagination des tokens** : `fetch_chain` parcourt plusieurs pages (plafond de sécurité) au lieu d'une seule → plus de tokens détectés sur les gros wallets
+- **Snapshots conservés** au redémarrage (plus de purge de la table `snapshots`)
+- **Cohérence UTC** dans le cache de prix (fin d'un décalage possible selon le fuseau du serveur)
+- **Nettoyage** d'une condition SQL parasite ; ajout d'une suite de tests des fonctions pures (`tests/test_core.py`)
 
 ### v2.11.21 — Sécurité
 - **SESSION_SECRET** — génération et persistance automatiques d'une clé aléatoire forte si aucune n'est fournie (les jetons de session n'étaient plus falsifiables). Ne retombe jamais sur une valeur vide ou connue.
