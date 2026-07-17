@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — v2.11.6
+# Crypto Wallet Tracker — v2.11.7
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -124,6 +124,9 @@ Crypto-Wallet-Tracker/
 ---
 
 ## 📋 Changelog
+
+### v2.11.7
+- **Page Wallets** — affichage par wallet du montant total (USD/€), du nombre de tokens et des chaînes détectées (nombre + liste compacte triée par montant), rempli depuis le cache client puis rafraîchi via l'API ; ligne Total en bas du tableau
 
 ### v2.11.6
 - **Cache client du portefeuille** — le résultat du portfolio est mémorisé dans le navigateur (localStorage, par vue « Tous » ou par wallet) : affichage instantané au rechargement de la page, rafraîchissement en tâche de fond avec indicateur « Mis à jour il y a X min », plus de « Scan… » systématique (conservé uniquement au premier chargement ou en rafraîchissement forcé)

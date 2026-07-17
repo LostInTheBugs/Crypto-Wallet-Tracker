@@ -218,7 +218,7 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>📦 Version</h2>
-        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.11.6</strong></p>
+        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.11.7</strong></p>
         <p id="verStatus" style="font-size:.85rem"></p>
         <button id="updateBtn" class="hidden" onclick="doUpdate()" style="margin-top:8px;background:#238636;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:.85rem">🔄 Mettre à jour</button>
         <p id="updateMsg" style="margin-top:8px;font-size:.8rem;color:#f0c040"></p>
@@ -392,16 +392,53 @@ function renderWalletPage(){
   if (wallets.length == 0) {
     html += '<div class="loading">Aucun wallet</div>';
   } else {
-    html += '<table><thead><tr><th>Label</th><th>Adresse</th><th style="width:80px"></th></tr></thead><tbody>';
+    html += '<table><thead><tr><th>Label</th><th>Adresse</th><th>Montant</th><th>Tokens</th><th>Chaînes</th><th style="width:80px"></th></tr></thead><tbody>';
     for (var i=0;i<wallets.length;i++) {
       html += '<tr><td><span id="wlbl_'+wallets[i].id+'" onclick="editLabel('+wallets[i].id+')" style="cursor:pointer;color:var(--accent)" title="Cliquer pour éditer">'+(wallets[i].label||"—")+' ✎</span></td>'+
         '<td style="font-family:monospace;font-size:.8rem">'+wallets[i].address+'</td>'+
+        '<td class="usd" id="wamt_'+wallets[i].id+'">…</td>'+
+        '<td id="wtok_'+wallets[i].id+'">…</td>'+
+        '<td id="wchain_'+wallets[i].id+'" style="max-width:340px">…</td>'+
         '<td><button class="btn btn-red" style="padding:4px 10px;font-size:.7rem" onclick="delWallet('+wallets[i].id+')">✕</button></td></tr>';
     }
-    html += '</tbody></table>';
+    html += '</tbody>';
+    if(wallets.length>1)html+='<tfoot><tr><td style="font-weight:600">Total</td><td></td><td class="usd" id="wtotal_amt">…</td><td></td><td></td><td></td></tr></tfoot>';
+    html += '</table>';
   }
   html += '</div>';
   document.getElementById("pageWallets").innerHTML = html;
+  if(wallets.length)fillWalletRows();
+}
+
+// ── Détails par wallet (montant, tokens, chaînes détectées) ──────
+var _wPageTotals={};
+function _wRowFill(id,d){
+  var amt=document.getElementById("wamt_"+id),tok=document.getElementById("wtok_"+id),ch=document.getElementById("wchain_"+id);
+  if(!amt||!tok||!ch||!d)return;
+  amt.textContent=fmtCurr(d.total_usd||0);
+  tok.textContent=(d.token_count!=null)?d.token_count:"—";
+  var names=[];
+  if(d.chains)for(var c in d.chains){if(d.chains.hasOwnProperty(c)&&d.chains[c]>0)names.push(c)}
+  names.sort(function(a,b){return (d.chains[b]||0)-(d.chains[a]||0)});
+  var n=(d.chain_count!=null)?d.chain_count:names.length;
+  ch.innerHTML='<b>'+n+'</b>'+(names.length?' <span style="color:#6e7681;font-size:.68rem">'+names.join(", ")+'</span>':'');
+  _wPageTotals[id]=d.total_usd||0;
+  var tot=document.getElementById("wtotal_amt");
+  if(tot){var s=0;for(var k in _wPageTotals)if(_wPageTotals.hasOwnProperty(k))s+=_wPageTotals[k];tot.textContent=fmtCurr(s)}
+}
+function _wRowErr(id){
+  ["wamt_","wtok_","wchain_"].forEach(function(p){var el=document.getElementById(p+id);if(el&&el.textContent==="…")el.textContent="—"})
+}
+function fillWalletRows(){
+  _wPageTotals={};
+  wallets.forEach(function(w){
+    var cached=pfCacheRead(w.address);
+    if(cached)_wRowFill(w.id,cached.data);
+    fetch("/api/portfolio?address="+w.address)
+      .then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.json()})
+      .then(function(d){pfCacheWrite(w.address,d);_wRowFill(w.id,d)})
+      .catch(function(e){console.warn("fillWalletRows",w.address,e);_wRowErr(w.id)});
+  });
 }
 
 function editLabel(id){
