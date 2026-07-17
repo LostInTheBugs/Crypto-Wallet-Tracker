@@ -144,9 +144,9 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
         <div class="card"><h2>📊 Répartition par chaîne</h2><div class="chart-wrap"><canvas id="pieChart"></canvas></div><div class="chains" id="walletChains" style="margin-top:12px"></div></div>
         <div class="card"><h2>📈 Évolution
           <span style="display:inline-flex;gap:4px;margin-left:8px">
-            <span class="range-pill active" onclick="setQuickRange('day',this)">1J</span>
-            <span class="range-pill" onclick="setQuickRange('week',this)">1S</span>
-            <span class="range-pill" onclick="setQuickRange('month',this)">1M</span>
+            <span class="range-pill active" onclick="setQuickRange('week',this)">1 sem</span>
+            <span class="range-pill" onclick="setQuickRange('month',this)">1 mois</span>
+            <span class="range-pill" onclick="setQuickRange('quarter',this)">3 mois</span>
           </span>
         </h2><div class="chart-wrap"><canvas id="miniChart"></canvas></div></div>
       </div>
@@ -217,7 +217,7 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>📦 Version</h2>
-        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.11.4</strong></p>
+        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.11.5</strong></p>
         <p id="verStatus" style="font-size:.85rem"></p>
         <button id="updateBtn" class="hidden" onclick="doUpdate()" style="margin-top:8px;background:#238636;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:.85rem">🔄 Mettre à jour</button>
         <p id="updateMsg" style="margin-top:8px;font-size:.8rem;color:#f0c040"></p>
@@ -314,7 +314,7 @@ function changeLang() {
 
 var currentPage = "dashboard";
 var authMode="login", wallets=[], activeWallet="ALL", eurRate=null, currency=localStorage.getItem("currency")||"usd";
-var pieChart=null, lineChart=null, miniChart=null, pnlChart=null, lastResult=null, loadingAddr=null, chartRange="all", quickRange="day", pnlRange="30";
+var pieChart=null, lineChart=null, miniChart=null, pnlChart=null, lastResult=null, loadingAddr=null, chartRange="all", quickRange="week", pnlRange="30";
 
 function switchPage(page) {
   currentPage = page;
@@ -539,7 +539,7 @@ async function drawMiniChart(){
     var r=await fetch("/api/snapshots");var snaps=await r.json();
     console.log("[drawMiniChart] API response:",snaps.length,"points");
     if(snaps.length<1){if(miniChart)miniChart.destroy();miniChart=null;var mcEl=document.getElementById("miniChart");if(mcEl&&mcEl.parentElement)mcEl.parentElement.innerHTML='<div style="text-align:center;padding:40px;color:#6e7681">'+t("noData")+'</div>';return}
-    var days={"day":1,"week":7,"month":30};
+    var days={"week":7,"month":30,"quarter":90};
     var cutoff=Date.now()-days[quickRange]*86400*1000;
     snaps=snaps.filter(function(s){return new Date(s.date+"Z").getTime()>cutoff});
     if(snaps.length<1){if(miniChart)miniChart.destroy();miniChart=null;var mcEl2=document.getElementById("miniChart");if(mcEl2&&mcEl2.parentElement)mcEl2.parentElement.innerHTML='<div style="text-align:center;padding:40px;color:#6e7681">'+t("noData")+'</div>';return}

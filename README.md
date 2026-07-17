@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — v2.11.4
+# Crypto Wallet Tracker — v2.11.5
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -124,6 +124,9 @@ Crypto-Wallet-Tracker/
 ---
 
 ## 📋 Changelog
+
+### v2.11.5
+- **Dashboard** — plages du graphe Évolution remplacées par 1 semaine / 1 mois / 3 mois (retrait du « 1J » qui n'affichait qu'un point)
 
 ### v2.11.4
 - **Page Transactions** — lien vers l'explorateur de blocs par transaction (🔗) + colonne "Sens" clarifiée avec libellé Reçu/Envoyé et infobulle
