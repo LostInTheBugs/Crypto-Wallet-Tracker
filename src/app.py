@@ -43,7 +43,32 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("aiosqlite").setLevel(logging.WARNING)
 
 DB_PATH = os.environ.get("DB_PATH", "/data/wallets.db")
-SESSION_SECRET = os.environ.get("SESSION_SECRET", "change-me")
+def _load_session_secret() -> str:
+    """Use SESSION_SECRET if a strong value is provided; otherwise generate a
+    random secret and persist it in the data volume. Never fall back to an
+    empty or well-known value (that would make JWTs forgeable)."""
+    import secrets, pathlib
+    env = (os.environ.get("SESSION_SECRET") or "").strip()
+    if env and env != "change-me" and len(env) >= 16:
+        return env
+    try:
+        p = pathlib.Path(os.path.dirname(DB_PATH) or "/data") / ".session_secret"
+        if p.exists():
+            s = p.read_text().strip()
+            if len(s) >= 16:
+                return s
+        os.makedirs(os.path.dirname(str(p)), exist_ok=True)
+        s = secrets.token_hex(32)
+        p.write_text(s)
+        try: os.chmod(p, 0o600)
+        except Exception: pass
+        return s
+    except Exception:
+        # Last resort: ephemeral (sessions won't survive a restart, but stay secure)
+        return secrets.token_hex(32)
+
+
+SESSION_SECRET = _load_session_secret()
 TOKEN_EXPIRY = 30  # days
 
 
@@ -1158,7 +1183,10 @@ async def latest_version():
 
 @app.post("/api/update")
 async def update_application(user=Depends(get_current_user)):
-    """Trigger git pull + docker rebuild from GitHub. Auth required."""
+    """Trigger git pull + docker rebuild from GitHub. Disabled by default:
+    set ALLOW_UPDATE=1 to enable (it can run arbitrary upstream code)."""
+    if (os.environ.get("ALLOW_UPDATE") or "").strip().lower() not in ("1", "true", "yes"):
+        raise HTTPException(403, "Mise à jour désactivée sur ce serveur (ALLOW_UPDATE non défini)")
     import asyncio.subprocess
     try:
         # Run git pull

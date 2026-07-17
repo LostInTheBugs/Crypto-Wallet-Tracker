@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — v2.11.20
+# Crypto Wallet Tracker — v2.11.21
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -124,6 +124,11 @@ Crypto-Wallet-Tracker/
 ---
 
 ## 📋 Changelog
+
+### v2.11.21 — Sécurité
+- **SESSION_SECRET** — génération et persistance automatiques d'une clé aléatoire forte si aucune n'est fournie (les jetons de session n'étaient plus falsifiables). Ne retombe jamais sur une valeur vide ou connue.
+- **Anti-XSS** — échappement des noms, symboles et icônes de tokens (contrôlés par des tiers) dans les tableaux Détail tokens et Transactions.
+- **/api/update** — désactivé par défaut ; nécessite `ALLOW_UPDATE=1` (l'endpoint pouvait exécuter du code amont).
 
 ### v2.11.20
 - **Interface épurée** — suppression de la barre de titre en haut : la page courante est simplement mise en évidence dans le menu de gauche. Le nom du compte connecté est déplacé dans Paramètres (section Session).

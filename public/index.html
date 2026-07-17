@@ -211,7 +211,7 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>📦 Version</h2>
-        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.11.20</strong></p>
+        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.11.21</strong></p>
         <p id="verStatus" style="font-size:.85rem"></p>
         <button id="updateBtn" class="hidden" onclick="doUpdate()" style="margin-top:8px;background:#238636;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:.85rem">🔄 Mettre à jour</button>
         <p id="updateMsg" style="margin-top:8px;font-size:.8rem;color:#f0c040"></p>
@@ -240,6 +240,8 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
 <script>
 // ── i18n ──────────────────────────────────────────────────
 var LANG = localStorage.getItem("lang") || "fr";
+// Échappe le HTML (noms/symboles de tokens = contrôlés par des tiers → anti-XSS)
+function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c];});}
 var T = {
   fr: {
     dashboard: "Dashboard", stats: "Statistiques", tokens: "Détail tokens",
@@ -579,9 +581,9 @@ function renderResult(d){
 function renderTokenTable(d){
   var sym=currSymbol(),showWallet=activeWallet=="ALL"&&wallets.length>1;
   var html='<div class="card"><h2>📋 Détail tokens <span style="font-weight:400;font-size:.7rem;color:#6e7681">('+d.token_count+' tokens)</span></h2><table><thead><tr><th>Token</th>'+(showWallet?'<th>Wallet</th>':'')+'<th>Chaîne</th><th>Balance</th><th>Prix</th><th>'+sym+' Valeur</th><th>'+sym+' PNL</th></tr></thead><tbody>';
-  for(var i=0;i<d.tokens.length;i++){var t=d.tokens[i];var icon=t.icon?'<img class="ti" src="'+t.icon+'" onerror="this.style.display=\'none\'">':'';var pf=sym+(t.usd_price<0.01?t.usd_price.toFixed(6):t.usd_price.toFixed(4));
+  for(var i=0;i<d.tokens.length;i++){var t=d.tokens[i];var icon=t.icon?'<img class="ti" src="'+esc(t.icon)+'" onerror="this.style.display=\'none\'">':'';var pf=sym+(t.usd_price<0.01?t.usd_price.toFixed(6):t.usd_price.toFixed(4));
     var pnlKnown=(t.pnl!==null&&t.pnl!==undefined);var pnl=pnlKnown?t.pnl:0;var pnlColor=pnlKnown?(pnl>=0?"#40c463":"#f85149"):"#6e7681";var pnlStr=pnlKnown?((pnl>=0?"+":"")+sym+Math.abs(pnl).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})):"—";
-    var catBadge=t.category==="staked"?' <span style="background:#14532d;color:#4ade80;font-size:.6rem;padding:1px 5px;border-radius:3px;margin-left:4px">staked</span>':'';html+='<tr><td>'+icon+'<b>'+t.name+'</b> <span style="color:#6e7681;font-size:.75rem">'+t.symbol+'</span>'+catBadge+'</td>'+(showWallet?'<td style="font-size:.75rem;color:#6e7681">'+t._wallet+'</td>':'')+'<td class="chain">'+t.chain+'</td><td>'+t.balance.toLocaleString()+'</td><td>'+pf+'</td><td class="usd">'+fmtCurr(t.usd_value)+'</td><td class="usd" style="color:'+pnlColor+'">'+pnlStr+'</td></tr>'}
+    var catBadge=t.category==="staked"?' <span style="background:#14532d;color:#4ade80;font-size:.6rem;padding:1px 5px;border-radius:3px;margin-left:4px">staked</span>':'';html+='<tr><td>'+icon+'<b>'+esc(t.name)+'</b> <span style="color:#6e7681;font-size:.75rem">'+esc(t.symbol)+'</span>'+catBadge+'</td>'+(showWallet?'<td style="font-size:.75rem;color:#6e7681">'+esc(t._wallet)+'</td>':'')+'<td class="chain">'+t.chain+'</td><td>'+t.balance.toLocaleString()+'</td><td>'+pf+'</td><td class="usd">'+fmtCurr(t.usd_value)+'</td><td class="usd" style="color:'+pnlColor+'">'+pnlStr+'</td></tr>'}
   html+='</tbody></table></div>';
   document.getElementById("pageTokens").innerHTML=html;
 }
@@ -910,7 +912,7 @@ async function loadTransactions(page){
       var gas=t.gas_fee_usd?sym+t.gas_fee_usd.toFixed(2):"-";
       html+='<tr><td style="font-size:.75rem;white-space:nowrap">'+date+'</td>'+
         '<td style="font-size:.75rem;color:#6e7681">'+short+'</td>'+
-        '<td><b>'+t.token_symbol+'</b> <span style="color:#6e7681;font-size:.7rem">'+t.token_name+'</span></td>'+
+        '<td><b>'+esc(t.token_symbol)+'</b> <span style="color:#6e7681;font-size:.7rem">'+esc(t.token_name)+'</span></td>'+
         '<td class="chain">'+t.chain+'</td>'+
         '<td>'+t.amount.toLocaleString(undefined,{maximumFractionDigits:6})+'</td>'+
         '<td style="font-size:.8rem">'+(t.usd_price?sym+t.usd_price.toFixed(4):"-")+'</td>'+
