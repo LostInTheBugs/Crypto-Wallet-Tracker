@@ -368,6 +368,8 @@ async def _fetch_then_rebuild(user_id: int, address: str):
         _import_progress[user_id] = {"stage": "enrich", "done": 0, "total": count, "in_done": in_total, "in_total": in_total, "out_done": out_total, "out_total": out_total}
         result = await _rebuild_history(user_id, address, _compute_portfolio)
         _import_progress[user_id] = {"stage": "done", "done": count, "total": count, "unmapped": result.get("unmapped_tokens", [])}
+        # Fetch gas fees after rebuild (non-blocking, fire-and-forget)
+        asyncio.create_task(_fetch_gas_for_user(user_id))
     except Exception:
         _import_progress[user_id] = {"stage": "done", "done": 0, "total": 0, "error": True}
 
@@ -415,51 +417,63 @@ async def get_transactions(wallet: str = Query(None), chain: str = Query(None), 
     return {"total": total, "items": items}
 
 
-@app.post("/api/transactions/fetch-gas")
-async def fetch_gas_fees(user=Depends(get_current_user), db=Depends(get_db)):
-    """Fetch gas fees for transactions that don't have them yet."""
-    cur = await db.execute(
-        "SELECT DISTINCT tx_hash, chain FROM transactions WHERE user_id=? AND tx_hash!='' AND gas_fee_eth=0 LIMIT 500",
-        (user["id"],))
-    txns = await cur.fetchall()
+async def _fetch_gas_for_user(user_id: int) -> int:
+    """Fetch gas fees for a user's transactions that don't have them yet.
+    
+    Returns count of updated distinct tx_hashes.
+    Gas is imputed to exactly ONE row per tx_hash (the one with minimal log_index)
+    to avoid overcounting when a single tx has multiple transfers.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT DISTINCT tx_hash, chain FROM transactions WHERE user_id=? AND tx_hash!='' AND gas_fee_eth=0 LIMIT 500",
+            (user_id,))
+        txns = await cur.fetchall()
     if not txns:
-        return {"ok": True, "updated": 0}
+        return 0
     
     updated = 0
-    # Batch by chain
     by_chain = {}
     for t in txns:
         by_chain.setdefault(t["chain"], []).append(t["tx_hash"])
     
     for chain, hashes in by_chain.items():
         host = CHAINS.get(chain)
-        if not host: continue
-        # Process in batches of 20
-        for i in range(0, len(hashes), 20):
-            batch = hashes[i:i+20]
-            # Fetch each tx individually (Blockscout doesn't batch)
-            for tx_hash in batch:
-                try:
-                    async with httpx.AsyncClient(timeout=15) as bc:
-                        r = await bc.get(f"https://{host}/api/v2/transactions/{tx_hash}")
-                        if r.status_code == 200:
-                            data = r.json()
-                            gas_used = float(data.get("gas_used") or 0)
-                            gas_price = float(data.get("gas_price") or 0)
-                            eth_fee = (gas_used * gas_price) / 1e18
-                            if eth_fee > 0:
-                                # Get ETH price from our price_history
-                                eth_usd = await _get_eth_price_at(data.get("timestamp", ""))
-                                usd_fee = eth_fee * eth_usd
+        if not host:
+            continue
+        for tx_hash in hashes:
+            try:
+                async with httpx.AsyncClient(timeout=15) as bc:
+                    r = await bc.get(f"https://{host}/api/v2/transactions/{tx_hash}")
+                    if r.status_code == 200:
+                        data = r.json()
+                        gas_used = float(data.get("gas_used") or 0)
+                        gas_price = float(data.get("gas_price") or 0)
+                        eth_fee = (gas_used * gas_price) / 1e18
+                        if eth_fee > 0:
+                            eth_usd = await _get_eth_price_at(data.get("timestamp", ""))
+                            usd_fee = eth_fee * eth_usd
+                            # Impute gas to ONE row per tx_hash (minimal log_index)
+                            async with aiosqlite.connect(DB_PATH) as db:
                                 await db.execute(
-                                    "UPDATE transactions SET gas_fee_eth=?, gas_fee_usd=? WHERE tx_hash=? AND user_id=?",
-                                    (round(eth_fee, 8), round(usd_fee, 2), tx_hash, user["id"]))
-                                updated += 1
-                    await asyncio.sleep(0.3)  # rate limit
-                except Exception:
-                    continue
-        await db.commit()
+                                    "UPDATE transactions SET gas_fee_eth=?, gas_fee_usd=? "
+                                    "WHERE id=(SELECT id FROM transactions "
+                                    "WHERE tx_hash=? AND user_id=? ORDER BY log_index ASC LIMIT 1)",
+                                    (round(eth_fee, 8), round(usd_fee, 2), tx_hash, user_id))
+                                await db.commit()
+                            updated += 1
+                await asyncio.sleep(0.3)
+            except Exception:
+                continue
     
+    return updated
+
+
+@app.post("/api/transactions/fetch-gas")
+async def fetch_gas_fees(user=Depends(get_current_user)):
+    """Public endpoint — triggers gas fee fetch for the authenticated user."""
+    updated = await _fetch_gas_for_user(user["id"])
     return {"ok": True, "updated": updated}
 
 
@@ -565,12 +579,23 @@ async def portfolio(address: str = Query(...), force: bool = Query(False), user=
                         enriched += 1
                     else:
                         missing_history += 1
-                        # Fallback: compute from transactions
+                        # Fallback: compute avg cost per unit from transactions,
+                        # then multiply by current balance (avoids PNL distortion
+                        # when some TXs have usd_price=0, e.g. stablecoins).
                         cur3 = await db.execute(
-                            "SELECT SUM(CASE WHEN direction='in' THEN amount*usd_price ELSE -amount*usd_price END) FROM transactions WHERE user_id=? AND wallet_address=? AND LOWER(token_symbol)=?",
+                            "SELECT "
+                            "SUM(CASE WHEN direction='in' THEN amount ELSE -amount END) as solde, "
+                            "SUM(CASE WHEN direction='in' THEN amount*usd_price ELSE -amount*usd_price END) as cost "
+                            "FROM transactions WHERE user_id=? AND wallet_address=? AND LOWER(token_symbol)=?",
                             (user["id"], address, sym))
                         cost_row = await cur3.fetchone()
-                        cost = (cost_row[0] or 0) if cost_row else 0
+                        solde_recon = (cost_row[0] or 0) if cost_row else 0
+                        cost_recon = (cost_row[1] or 0) if cost_row else 0
+                        avg_cost = (cost_recon / solde_recon) if (solde_recon and solde_recon > 0) else 0
+                        if not math.isfinite(avg_cost):
+                            avg_cost = 0
+                        bal = t.get("balance", 0) or 0
+                        cost = avg_cost * bal
                         t["cost_basis"] = round(cost, 2)
                         t["pnl"] = round(usd_val - cost, 2)
                 except Exception:
@@ -614,6 +639,8 @@ async def _daily_tx_refresh(user_id: int):
         count = await _fetch_transactions_for_wallet(user_id, w["address"])
         if count > 0:
             await _rebuild_history(user_id, w["address"], _compute_portfolio)
+    # Fetch gas fees after daily refresh (non-blocking)
+    asyncio.create_task(_fetch_gas_for_user(user_id))
 
 
 # ── Snapshots / History API ──────────────────────────────────────
@@ -648,6 +675,8 @@ async def get_snapshots(token: str = Query(None), wallet: str = Query(None), cha
         f"SELECT value_usd as total_usd, cost_basis_usd as cost_basis, date FROM daily_history WHERE {where} ORDER BY date ASC",
         tuple(params))
     rows = await cur.fetchall()
+    # Convert sqlite3.Row to dict — .get() not supported on Row objects
+    rows = [dict(r) for r in rows]
 
     if not rows:
         if format == "v2":

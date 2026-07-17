@@ -380,7 +380,7 @@ async def _rebuild_history(
         for sym, token_val in per_token_values.items():
             daily_rows.append((
                 user_id, wallet_address, date_str,
-                token_val, 0, 0, sym, token_chain.get(sym),
+                token_val, round(costs.get(sym, 0.0), 2), 0, sym, token_chain.get(sym),
             ))
 
     # ═══════════════════════════════════════════════════════════════
