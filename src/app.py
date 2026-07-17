@@ -143,6 +143,8 @@ async def lifespan(app: FastAPI):
         except: pass
         try: await db.execute("ALTER TABLE transactions ADD COLUMN contract_address TEXT DEFAULT ''")
         except: pass
+        try: await db.execute("ALTER TABLE transactions ADD COLUMN price_checked INTEGER DEFAULT 0")
+        except: pass
         try: await db.execute("CREATE INDEX IF NOT EXISTS idx_tx_dedup ON transactions(tx_hash, log_index, user_id)")
         except: pass
         # User API keys
@@ -676,8 +678,9 @@ async def gas_total(user=Depends(get_current_user), db=Depends(get_db),
 
 # ── Historical price enrichment (DefiLlama) ──────────────────────
 
-HIST_PRICE_CONCURRENCY = 5
-HIST_PRICE_TIMEOUT = 8
+HIST_PRICE_CONCURRENCY = 6      # global (all chains share this), gentle on DefiLlama
+HIST_PRICE_TIMEOUT = 12         # seconds per request
+HIST_PRICE_RETRIES = 3          # retries on timeout / non-200 before giving up
 
 async def _enrich_historical_prices(user_id: int) -> int:
     """Enrich transactions with historical token prices via DefiLlama.
@@ -693,94 +696,88 @@ async def _enrich_historical_prices(user_id: int) -> int:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
-            "SELECT id, tx_hash, chain, contract_address, block_time, amount "
+            "SELECT id, chain, contract_address, block_time, amount "
             "FROM transactions WHERE user_id=? "
             "AND (usd_price IS NULL OR usd_price=0) "
-            "AND contract_address!='' LIMIT 1000",
+            "AND contract_address!='' AND price_checked=0 LIMIT 1000",
             (user_id,))
         rows = await cur.fetchall()
     if not rows:
         return 0
 
-    # Group by chain
-    by_chain: dict[str, list] = {}
-    for r in rows:
-        by_chain.setdefault(r["chain"], []).append(r)
+    # Single GLOBAL semaphore — gentle, shared across ALL chains, so we never
+    # flood DefiLlama (previous per-chain semaphores × many chains caused
+    # timeouts and 0 rows enriched). Network calls only; writes are serialized.
+    sem = asyncio.Semaphore(HIST_PRICE_CONCURRENCY)
 
-    async def _process_chain(chain: str, items: list) -> list:
-        """Network-only price lookups for one chain.
+    async def _price_one(row):
+        """Fetch the DefiLlama historical price for one transaction, with retries.
 
-        Returns a list of (row_id, price, amount) tuples. DB writes are
-        deliberately NOT done here: they are serialized afterwards on a
-        single connection to avoid concurrent-connection SQLite locks.
+        Returns:
+          ("price", id, price, amount)  when a price is found,
+          ("checked", id)               when DefiLlama answers (200) with no price,
+                                        or the row can never be priced (bad chain/date),
+          None                          when all retries failed (retry on a later run).
+        Never touches the database.
         """
-        llama_slug = CHAIN_TO_LLAMA.get(chain)
-        if not llama_slug:
-            return []
+        slug = CHAIN_TO_LLAMA.get(row["chain"])
+        if not slug:
+            return ("checked", row["id"])
+        addr = (row["contract_address"] or "").lower()
+        try:
+            dt = datetime.datetime.strptime(row["block_time"][:19], "%Y-%m-%d %H:%M:%S")
+            unix_ts = int(calendar.timegm(dt.timetuple()))
+        except Exception:
+            return ("checked", row["id"])
+        url = f"https://coins.llama.fi/prices/historical/{unix_ts}/{slug}:{addr}"
+        key = f"{slug}:{addr}"
+        async with sem:
+            for attempt in range(HIST_PRICE_RETRIES):
+                try:
+                    async with httpx.AsyncClient(timeout=HIST_PRICE_TIMEOUT) as cl:
+                        resp = await cl.get(url)
+                    if resp.status_code == 200:
+                        price = resp.json().get("coins", {}).get(key, {}).get("price", 0)
+                        if price and price > 0:
+                            return ("price", row["id"], price, row["amount"])
+                        return ("checked", row["id"])
+                    # non-200 (e.g. 429/5xx) → retry
+                except Exception:
+                    pass  # timeout / network error → retry
+                if attempt < HIST_PRICE_RETRIES - 1:
+                    await asyncio.sleep(1.5 ** attempt)  # ~1s, ~1.5s backoff
+            return None  # give up for now, leave price_checked=0 to retry later
 
-        sem = asyncio.Semaphore(HIST_PRICE_CONCURRENCY)
+    results = await asyncio.gather(
+        *(_price_one(r) for r in rows), return_exceptions=True)
 
-        async def _price_one(row):
-            """Fetch the DefiLlama historical price for one transaction.
-
-            Returns (row_id, price, amount) when price > 0, else None.
-            Never touches the database.
-            """
-            addr = row["contract_address"].lower()
-            bt = row["block_time"]
-            # Convert block_time "YYYY-MM-DD HH:MM:SS" (UTC) to unix timestamp
-            try:
-                dt = datetime.datetime.strptime(bt[:19], "%Y-%m-%d %H:%M:%S")
-                unix_ts = int(calendar.timegm(dt.timetuple()))
-            except Exception:
-                return None
-
-            try:
-                async with httpx.AsyncClient(timeout=HIST_PRICE_TIMEOUT) as cl:
-                    url = f"https://coins.llama.fi/prices/historical/{unix_ts}/{llama_slug}:{addr}"
-                    resp = await cl.get(url)
-                    if resp.status_code != 200:
-                        return None
-                    data = resp.json()
-                    coins = data.get("coins", {})
-                    key = f"{llama_slug}:{addr}"
-                    price = coins.get(key, {}).get("price", 0)
-                    if not price or price <= 0:
-                        return None
-                    return (row["id"], price, row["amount"])
-            except Exception:
-                return None
-
-        async def _with_sem(row):
-            async with sem:
-                return await _price_one(row)
-
-        results = await asyncio.gather(*(_with_sem(r) for r in items))
-        return [r for r in results if r is not None]
-
-    # Process chains in parallel — concurrency applies to NETWORK calls only
-    chain_results = await asyncio.gather(
-        *(_process_chain(chain, items) for chain, items in by_chain.items()),
-        return_exceptions=True)
-
-    updates: list = []
-    for r in chain_results:
-        if isinstance(r, list):
-            updates.extend(r)
+    price_updates = []   # (id, price, amount) — priced (also marked checked)
+    checked_only = []    # ids DefiLlama answered with no price (mark checked)
+    for r in results:
+        if isinstance(r, tuple):
+            if r[0] == "price":
+                price_updates.append((r[1], r[2], r[3]))
+            elif r[0] == "checked":
+                checked_only.append(r[1])
 
     # Serialize ALL writes on a single connection with one final commit.
-    # One-connection-per-write in parallel caused silent SQLite lock
-    # failures (0 rows actually enriched).
-    if updates:
+    if price_updates or checked_only:
         async with aiosqlite.connect(DB_PATH) as db:
-            for rid, price, amount in updates:
+            for rid, price, amount in price_updates:
                 await db.execute(
-                    "UPDATE transactions SET usd_price=?, usd_value=ROUND(?*?,2) WHERE id=?",
+                    "UPDATE transactions SET usd_price=?, usd_value=ROUND(?*?,2), "
+                    "price_checked=1 WHERE id=?",
                     (round(price, 6), amount, price, rid))
+            for rid in checked_only:
+                await db.execute(
+                    "UPDATE transactions SET price_checked=1 WHERE id=?", (rid,))
             await db.commit()
 
-    enriched = len(updates)
-    _elog.info(f"Historical price enrichment: {enriched}/{len(rows)} rows enriched for user {user_id}")
+    enriched = len(price_updates)
+    total_checked = enriched + len(checked_only)
+    _elog.info(
+        f"Historical price enrichment: {enriched} priced, {total_checked} checked, "
+        f"{len(rows) - total_checked} to retry, user {user_id}")
     return enriched
 
 
@@ -1027,14 +1024,13 @@ async def get_snapshots(token: str = Query(None), wallet: str = Query(None), cha
     if not token and rows and wallet:
         try:
             pf = await _compute_portfolio(wallet)
-            pf_mapped = 0.0
-            for t in pf.get("tokens", []):
-                sym = (t.get("symbol") or "").lower()
-                if sym and (SYMBOL_TO_CG.get(sym) or sym in ("usdc", "usdt", "dai", "eth", "weth", "wbtc")):
-                    pf_mapped += t.get("usd_value", 0) or 0
-            if pf_mapped > 0:
+            # Use the full portfolio total (tokens are already spam-filtered in
+            # _compute_portfolio). Since v2.11.13 the history includes priced
+            # unmapped tokens too, so the last point should reflect the real total.
+            pf_total = pf.get("total_usd", 0) or 0
+            if pf_total > 0:
                 rows[-1] = dict(rows[-1])
-                rows[-1]["total_usd"] = round(pf_mapped, 2)
+                rows[-1]["total_usd"] = round(pf_total, 2)
         except Exception:
             pass
 
@@ -1081,19 +1077,15 @@ async def backfill_snapshots(user=Depends(get_current_user), db=Depends(get_db))
             (user["id"],))
         hist_row = await cur2.fetchone()
         hist_value = hist_row["value_usd"] if hist_row else 0
-        # Portfolio value for mapped tokens only
+        # Portfolio value over the SAME set the history now covers (all priced,
+        # spam-filtered tokens), so delta_pct is a meaningful indicator.
         address = wallet_rows[0]["address"]
         data = await _compute_portfolio(address)
-        port_value = 0.0
-        excluded = set(u.lower() for u in all_unmapped) | set(d.lower() for d in all_degraded)
-        for t in data.get("tokens", []):
-            sym = (t.get("symbol") or "").lower()
-            if sym and sym not in excluded and SYMBOL_TO_CG.get(sym):
-                port_value += t.get("usd_value", 0) or 0
-        if hist_value > 0:
+        port_value = data.get("total_usd", 0) or 0
+        if hist_value > 0 and port_value > 0:
             delta_pct = round((hist_value - port_value) / port_value * 100, 1)
             reconciliation = {"history_last_value": round(hist_value, 2),
-                            "portfolio_mapped_value": round(port_value, 2),
+                            "portfolio_value": round(port_value, 2),
                             "delta_pct": delta_pct}
     except Exception:
         pass

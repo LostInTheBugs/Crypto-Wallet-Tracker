@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — v2.11.13
+# Crypto Wallet Tracker — v2.11.14
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -124,6 +124,10 @@ Crypto-Wallet-Tracker/
 ---
 
 ## 📋 Changelog
+
+### v2.11.14
+- **Enrichissement des prix fiabilisé** — concurrence globale douce (une seule limite partagée entre toutes les chaînes au lieu d'une par chaîne), retries avec backoff sur timeout/erreur, et drapeau `price_checked` pour ne plus re-tester à chaque exécution les tokens sans prix (spam/inconnus)
+- **Agrégat aligné** — la dernière valeur des courbes d'évolution et la réconciliation portent désormais sur l'ensemble des tokens réellement valorisés (tokens déjà filtrés du spam), pour un indicateur cohérent
 
 ### v2.11.13
 - **Correctif concurrence enrichissement** — l'enrichissement des prix historiques ouvrait une connexion SQLite par écriture, en parallèle, provoquant des verrous silencieux (0 ligne enrichie). Les appels réseau DefiLlama restent concurrents, mais les écritures en base sont désormais sérialisées sur une connexion unique avec un commit final.
