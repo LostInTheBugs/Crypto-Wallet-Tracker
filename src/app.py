@@ -1155,11 +1155,14 @@ async def enrich_transactions(user=Depends(get_current_user), db=Depends(get_db)
     wallets_list = await cur.fetchall()
     if not wallets_list:
         return {"ok": True, "enriched": 0, "historical": 0}
+    # Historical enrichment FIRST so it gets a clean DefiLlama rate budget
+    # (running _fetch_prices_per_token first would exhaust it and make the
+    # historical calls fail).
+    historical = await _enrich_historical_prices(user["id"])
     total = 0
     for w in wallets_list:
         result = await _fetch_prices_per_token(user["id"], w["address"])
         total += result.get("enriched", 0)
-    historical = await _enrich_historical_prices(user["id"])
     return {"ok": True, "enriched": total, "historical": historical}
 
 
