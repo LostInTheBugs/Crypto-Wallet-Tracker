@@ -471,7 +471,8 @@ async def get_transactions(wallet: str = Query(None), chain: str = Query(None), 
         "usd_value": r["usd_value"], "chain": r["chain"], "tx_hash": r["tx_hash"],
         "block_time": r["block_time"], "direction": r["direction"], "log_index": r["log_index"],
         "gas_fee_usd": r["gas_fee_usd"],
-        "wallet_label": _wallet_labels.get(r["wallet_address"], "")
+        "wallet_label": _wallet_labels.get(r["wallet_address"], ""),
+        "explorer_url": f"https://{CHAINS[r['chain']]}/tx/{r['tx_hash']}" if r["tx_hash"] and CHAINS.get(r["chain"]) else ""
     } for r in rows]
     return {"total": total, "items": items}
 

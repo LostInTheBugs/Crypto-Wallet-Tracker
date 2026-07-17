@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — v2.11.3
+# Crypto Wallet Tracker — v2.11.4
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -124,6 +124,9 @@ Crypto-Wallet-Tracker/
 ---
 
 ## 📋 Changelog
+
+### v2.11.4
+- **Page Transactions** — lien vers l'explorateur de blocs par transaction (🔗) + colonne "Sens" clarifiée avec libellé Reçu/Envoyé et infobulle
 
 ### v2.11.3
 - **Correctif Blockscout** — prise en charge de la clé `address_hash` (instances récentes type hyperscan) en fallback de `address` pour la résolution des adresses de contrat → pricing DefiLlama des tokens HyperEVM (WHYPE, etc.)
