@@ -20,7 +20,7 @@ from services.price_service import (
     _fetch_defillama_batch, _fetch_coingecko_batch,
 )
 from services.portfolio_service import (
-    _compute_portfolio, CHAINS, fetch_chain,
+    _compute_portfolio, CHAINS, NATIVE_COIN, fetch_chain,
     format_snapshots_v2, format_snapshots_legacy,
 )
 from services.pnl_service import (
@@ -484,6 +484,47 @@ GAS_CB_FAILURES = 5            # consecutive failures before circuit-breaker tri
 import logging
 _gas_log = logging.getLogger("crypto.gas")
 
+# ── Native price cache ────────────────────────────────────────────
+_native_price_cache: dict[str, tuple[float, float]] = {}  # chain → (price_usd, timestamp)
+_NATIVE_PRICE_TTL = 3600  # 1 hour
+
+
+async def _get_native_price(chain: str, host: str) -> float:
+    """Get native coin USD price via Blockscout /api/v2/stats → coin_price.
+
+    Cached in memory with 1h TTL. For ETH-gas chains, falls back to
+    _get_eth_price_at if the Blockscout endpoint is unreachable.
+    For non-ETH chains, returns 0 when no price is available (never
+    substitutes the ETH price).
+    """
+    now = _time.time()
+    cached = _native_price_cache.get(chain)
+    if cached:
+        price, ts = cached
+        if now - ts < _NATIVE_PRICE_TTL:
+            return price
+
+    try:
+        async with httpx.AsyncClient(timeout=5, follow_redirects=True) as bc:
+            r = await bc.get(f"https://{host}/api/v2/stats")
+            if r.status_code == 200:
+                data = r.json()
+                coin_price = float(data.get("coin_price") or 0)
+                if coin_price > 0:
+                    _native_price_cache[chain] = (coin_price, now)
+                    return coin_price
+    except Exception:
+        pass
+
+    # Fallback: only ETH-gas chains may fall back to _get_eth_price_at
+    native_symbol = NATIVE_COIN.get(chain, {}).get("symbol", "")
+    if native_symbol == "ETH":
+        try:
+            return await _get_eth_price_at("")
+        except Exception:
+            pass
+    return 0.0
+
 
 async def _fetch_gas_for_user(user_id: int) -> int:
     """Fetch gas fees for a user's transactions that don't have them yet.
@@ -553,8 +594,8 @@ async def _fetch_gas_for_user(user_id: int) -> int:
                     gas_price = float(data.get("gas_price") or 0)
                     eth_fee = (gas_used * gas_price) / 1e18
                     if eth_fee > 0:
-                        eth_usd = await _get_eth_price_at(data.get("timestamp", ""))
-                        usd_fee = eth_fee * eth_usd
+                        native_price = await _get_native_price(chain, host)
+                        usd_fee = eth_fee * native_price if native_price > 0 else 0
                         # Impute gas to ONE row per tx_hash (minimal log_index)
                         async with aiosqlite.connect(DB_PATH) as db:
                             await db.execute(

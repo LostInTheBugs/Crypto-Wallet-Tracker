@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — v2.11.0
+# Crypto Wallet Tracker — v2.11.1
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -124,6 +124,9 @@ Crypto-Wallet-Tracker/
 ---
 
 ## 📋 Changelog
+
+### v2.11.1
+- **Correctif frais de gaz** — valorisation au prix du jeton natif par chaîne (xDAI pour Gnosis, CELO pour Celo, POL pour Polygon, XTZ pour Etherlink, METIS pour Metis, ETH pour Ethereum et L2) au lieu du prix ETH systématique qui surévaluait les frais sur les chaînes non-ETH (ex : ~0,22 xDAI × 2000 $ → ~450 $ au lieu de 0,22 $)
 
 ### v2.11.0
 - **Correctifs** — snapshots limités à 500, PNL par token (stablecoins sans PNL fantôme), frais de gaz anti-surcomptage (imputation unique par tx_hash)
