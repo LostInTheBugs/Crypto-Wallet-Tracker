@@ -938,8 +938,12 @@ async def get_snapshots(token: str = Query(None), wallet: str = Query(None), cha
         params.append(chain)
 
     where = " AND ".join(conditions)
+    # SUM per date: daily_history has one aggregate row PER WALLET per date, so
+    # across multiple wallets we must sum them (otherwise the chart plots each
+    # wallet as a separate point on the same date → wild oscillation).
     cur = await db.execute(
-        f"SELECT value_usd as total_usd, cost_basis_usd as cost_basis, date FROM daily_history WHERE {where} ORDER BY date ASC",
+        f"SELECT date, SUM(value_usd) as total_usd, SUM(cost_basis_usd) as cost_basis "
+        f"FROM daily_history WHERE {where} GROUP BY date ORDER BY date ASC",
         tuple(params))
     rows = await cur.fetchall()
     # Convert sqlite3.Row to dict — .get() not supported on Row objects
@@ -1054,8 +1058,12 @@ async def get_pnl(wallet: str = Query(None), token: str = Query(None), range: st
         conditions.append("token_symbol IS NULL")
 
     where = " AND ".join(conditions)
+    # SUM per date across wallets (one aggregate row per wallet per date), else
+    # the PNL series gets several conflicting points per date → nonsense.
     cur = await db.execute(
-        f"SELECT date, value_usd, cost_basis_usd, net_flows_usd FROM daily_history WHERE {where} ORDER BY date ASC",
+        f"SELECT date, SUM(value_usd) as value_usd, SUM(cost_basis_usd) as cost_basis_usd, "
+        f"SUM(net_flows_usd) as net_flows_usd FROM daily_history WHERE {where} "
+        f"GROUP BY date ORDER BY date ASC",
         tuple(params))
     rows = await cur.fetchall()
 
