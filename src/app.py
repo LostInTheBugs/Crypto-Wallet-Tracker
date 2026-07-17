@@ -540,21 +540,23 @@ async def _fetch_gas_for_user(user_id: int) -> int:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
-            "SELECT DISTINCT tx_hash, chain FROM transactions WHERE user_id=? AND tx_hash!='' AND gas_fee_eth=0 LIMIT 500",
+            "SELECT DISTINCT tx_hash, chain, wallet_address FROM transactions "
+            "WHERE user_id=? AND tx_hash!='' AND gas_fee_eth=0 LIMIT 500",
             (user_id,))
         txns = await cur.fetchall()
     if not txns:
         return 0
 
-    by_chain: dict[str, list[str]] = {}
+    # by_chain: chain → list of (tx_hash, wallet_address) tuples
+    by_chain: dict[str, list[tuple[str, str]]] = {}
     for t in txns:
-        by_chain.setdefault(t["chain"], []).append(t["tx_hash"])
+        by_chain.setdefault(t["chain"], []).append((t["tx_hash"], t["wallet_address"]))
 
     # Shared counter for atomic updates across parallel chains
     updated_lock = asyncio.Lock()
     updated = 0
 
-    async def _process_chain(chain: str, hashes: list[str]) -> int:
+    async def _process_chain(chain: str, items: list[tuple[str, str]]) -> int:
         host = CHAINS.get(chain)
         if not host:
             return 0
@@ -581,7 +583,7 @@ async def _fetch_gas_for_user(user_id: int) -> int:
                 consecutive_fails += 1
                 return (tx_hash, None)
 
-        async def _fetch_with_sem(tx_hash: str):
+        async def _fetch_with_sem(tx_hash: str, wallet_address: str):
             nonlocal chain_updated
             async with sem:
                 # Circuit breaker check
@@ -594,36 +596,40 @@ async def _fetch_gas_for_user(user_id: int) -> int:
                     gas_used = float(data.get("gas_used") or 0)
                     gas_price = float(data.get("gas_price") or 0)
                     eth_fee = (gas_used * gas_price) / 1e18
-                    if eth_fee > 0:
-                        native_price = await _get_native_price(chain, host)
-                        usd_fee = eth_fee * native_price if native_price > 0 else 0
-                        # Impute gas to ONE row per tx_hash (minimal log_index)
-                        async with aiosqlite.connect(DB_PATH) as db:
-                            await db.execute(
-                                "UPDATE transactions SET gas_fee_eth=?, gas_fee_usd=? "
-                                "WHERE id=(SELECT id FROM transactions "
-                                "WHERE tx_hash=? AND user_id=? ORDER BY log_index ASC LIMIT 1)",
-                                (round(eth_fee, 8), round(usd_fee, 2), tx_hash, user_id))
-                            await db.commit()
+                    # Only count gas USD if wallet is the sender
+                    from_hash = (data.get("from") or {}).get("hash", "")
+                    paid = bool(from_hash) and from_hash.lower() == wallet_address.lower()
+                    native_price = await _get_native_price(chain, host) if paid else 0.0
+                    usd_fee = round(eth_fee * native_price, 2) if (paid and native_price > 0) else 0.0
+                    # Always mark tx as processed (gas_fee_eth); USD=0 for receipts
+                    async with aiosqlite.connect(DB_PATH) as db:
+                        await db.execute(
+                            "UPDATE transactions SET gas_fee_eth=?, gas_fee_usd=? "
+                            "WHERE id=(SELECT id FROM transactions "
+                            "WHERE tx_hash=? AND user_id=? AND wallet_address=? "
+                            "ORDER BY log_index ASC LIMIT 1)",
+                            (round(eth_fee, 8), usd_fee, tx_hash, user_id, wallet_address))
+                        await db.commit()
+                    if usd_fee > 0:
                         chain_updated += 1
                 except Exception:
                     pass
 
-        # Process all tx hashes for this chain in parallel (bounded by semaphore)
-        tasks = [_fetch_with_sem(h) for h in hashes]
+        # Process all items for this chain in parallel (bounded by semaphore)
+        tasks = [_fetch_with_sem(tx_hash, wallet_address) for tx_hash, wallet_address in items]
         await asyncio.gather(*tasks)
 
         if consecutive_fails >= GAS_CB_FAILURES:
             _gas_log.warning(
                 "Circuit breaker tripped for chain=%s after %d consecutive failures "
-                "(processed %d/%d tx hashes)",
-                chain, consecutive_fails, chain_updated, len(hashes))
+                "(processed %d/%d items)",
+                chain, consecutive_fails, chain_updated, len(items))
 
         return chain_updated
 
     # Process all chains in parallel
     results = await asyncio.gather(
-        *(_process_chain(chain, hashes) for chain, hashes in by_chain.items()),
+        *(_process_chain(chain, items) for chain, items in by_chain.items()),
         return_exceptions=True)
 
     for r in results:
@@ -643,8 +649,17 @@ async def fetch_gas_fees(user=Depends(get_current_user)):
 
 
 @app.get("/api/transactions/gas-total")
-async def gas_total(user=Depends(get_current_user), db=Depends(get_db)):
-    cur = await db.execute("SELECT COALESCE(SUM(gas_fee_usd),0) as total FROM transactions WHERE user_id=?", (user["id"],))
+async def gas_total(user=Depends(get_current_user), db=Depends(get_db),
+                    wallet: str = Query(None)):
+    if wallet:
+        cur = await db.execute(
+            "SELECT COALESCE(SUM(gas_fee_usd),0) as total "
+            "FROM transactions WHERE user_id=? AND wallet_address=?",
+            (user["id"], wallet))
+    else:
+        cur = await db.execute(
+            "SELECT COALESCE(SUM(gas_fee_usd),0) as total "
+            "FROM transactions WHERE user_id=?", (user["id"],))
     row = await cur.fetchone()
     return {"total_gas_usd": round(row["total"] if row else 0, 2)}
 

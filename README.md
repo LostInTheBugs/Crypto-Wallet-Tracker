@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — v2.11.7
+# Crypto Wallet Tracker — v2.11.8
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -124,6 +124,10 @@ Crypto-Wallet-Tracker/
 ---
 
 ## 📋 Changelog
+
+### v2.11.8
+- **Frais de gaz** — ne comptabilise que le gaz réellement payé par le wallet (émetteur de la tx, `from` == adresse du wallet) ; les réceptions sont exclues (gaz payé par l'expéditeur)
+- **Colonne Gaz par wallet** — ajout d'une colonne Gaz (⛽) dans la page Wallets, avec somme des frais réellement supportés par chaque wallet, rafraîchie depuis l'API
 
 ### v2.11.7
 - **Page Wallets** — affichage par wallet du montant total (USD/€), du nombre de tokens et des chaînes détectées (nombre + liste compacte triée par montant), rempli depuis le cache client puis rafraîchi via l'API ; ligne Total en bas du tableau
