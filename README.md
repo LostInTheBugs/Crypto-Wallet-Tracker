@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — v2.10.0
+# Crypto Wallet Tracker — v2.11.0
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -120,6 +120,15 @@ Crypto-Wallet-Tracker/
 - **Aucune clé privée** — uniquement des adresses publiques
 - Clés API utilisateur : stockées chiffrées, jamais renvoyées en clair (masquées `sk-...abc`)
 - Données 100 % locales (SQLite)
+
+---
+
+## 📋 Changelog
+
+### v2.11.0
+- **Correctifs** — snapshots limités à 500, PNL par token (stablecoins sans PNL fantôme), frais de gaz anti-surcomptage (imputation unique par tx_hash)
+- **Backfill gaz parallèle** — requêtes par chaîne en parallèle avec concurrence bornée (asyncio.Semaphore), circuit breaker par chaîne après 5 échecs consécutifs, timeout réduit à 8s
+- **Pagination transactions complète** — le cap dur de 100 pages est remplacé par une boucle jusqu'à épuisement de `next_page_params` (garde-fou `MAX_TX_PAGES` configurable, défaut 1000), avec retries exponentiels sur erreurs HTTP transitoires (timeout, 5xx)
 
 ---
 

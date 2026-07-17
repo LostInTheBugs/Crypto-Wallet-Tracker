@@ -303,21 +303,70 @@ _import_progress = {}
 _last_tx_refresh = {}
 
 
+# ── Tx fetch constants ────────────────────────────────────────────
+MAX_TX_PAGES = int(os.environ.get("MAX_TX_PAGES", "1000"))
+TX_RETRIES = 3
+TX_RETRY_BACKOFF = 1.5         # seconds base backoff (exponential)
+
+
 async def _fetch_transactions_for_wallet(user_id: int, address: str) -> int:
-    """Fetch token transfers with pagination. Dedup on (tx_hash, log_index, user_id)."""
+    """Fetch token transfers with pagination. Dedup on (tx_hash, log_index, user_id).
+
+    Continues until next_page_params is exhausted (or MAX_TX_PAGES safety cap).
+    Retries transient HTTP errors (timeout, 5xx) with exponential backoff.
+    A chain that fails does not interrupt the others.
+    """
     total_tx = 0
+    import logging
+    _tx_log = logging.getLogger("crypto.tx_fetch")
+
     for chain, host in CHAINS.items():
         try:
             async with httpx.AsyncClient(timeout=30, follow_redirects=True) as bc:
                 url = f"https://{host}/api/v2/addresses/{address}/token-transfers"
                 params: dict = {"type": "ERC-20,ERC-721,ERC-1155"}
                 page_count = 0
-                while page_count < 100:  # safety cap
-                    resp = await bc.get(url, params=params)
-                    if resp.status_code != 200: break
+                while page_count < MAX_TX_PAGES:
+                    # Retry loop for transient HTTP errors
+                    last_err = None
+                    resp = None
+                    for attempt in range(1, TX_RETRIES + 1):
+                        try:
+                            resp = await bc.get(url, params=params)
+                            if resp.status_code == 200:
+                                break  # success — exit retry loop
+                            last_err = f"HTTP {resp.status_code}"
+                            if resp.status_code < 500:
+                                # Client error (4xx): no point retrying
+                                break
+                        except Exception as e:
+                            last_err = str(e)[:100]
+                            resp = None
+                        # Only retry on 5xx/timeout (transient)
+                        if attempt < TX_RETRIES and last_err and (
+                                "50" in last_err or
+                                "timeout" in last_err.lower() or
+                                "Connection" in last_err):
+                            backoff = TX_RETRY_BACKOFF ** attempt
+                            _tx_log.debug(
+                                "Retry %d/%d for chain=%s page=%d (err=%s) after %.1fs",
+                                attempt + 1, TX_RETRIES, chain, page_count + 1,
+                                last_err, backoff)
+                            await asyncio.sleep(backoff)
+                        else:
+                            break
+
+                    if resp is None or (last_err and resp.status_code != 200):
+                        _tx_log.warning(
+                            "Giving up on chain=%s at page %d: %s",
+                            chain, page_count + 1, last_err)
+                        break
+
                     data = resp.json()
                     items = data.get("items", [])
-                    if not items: break
+                    if not items:
+                        break
+
                     async with aiosqlite.connect(DB_PATH) as db:
                         for item in items:
                             token = item.get("token") or {}
@@ -328,12 +377,14 @@ async def _fetch_transactions_for_wallet(user_id: int, address: str) -> int:
                                 cur2 = await db.execute(
                                     "SELECT id FROM transactions WHERE tx_hash=? AND log_index=? AND user_id=?",
                                     (tx_hash, log_index, user_id))
-                                if await cur2.fetchone(): continue
+                                if await cur2.fetchone():
+                                    continue
                             try:
                                 amount = int(item.get("total", {}).get("value", "0") or "0") / (10 ** (int(token.get("decimals") or 18)))
-                            except:
+                            except Exception:
                                 amount = 0
-                            if amount == 0: continue
+                            if amount == 0:
+                                continue
                             symbol = token.get("symbol", "?")
                             name = token.get("name", "Unknown")
                             ts = item.get("timestamp", "")
@@ -344,12 +395,20 @@ async def _fetch_transactions_for_wallet(user_id: int, address: str) -> int:
                                 (user_id, address, symbol, name, amount, chain, tx_hash, ts[:19].replace("T", " ") if ts else "", direction, log_index))
                             total_tx += 1
                         await db.commit()
+
                     nxt = data.get("next_page_params")
-                    if not nxt: break
+                    if not nxt:
+                        break
                     params = {**params, **nxt}
                     page_count += 1
+
+                if page_count >= MAX_TX_PAGES:
+                    _tx_log.warning(
+                        "Reached MAX_TX_PAGES=%d for chain=%s wallet=%s — history may be incomplete",
+                        MAX_TX_PAGES, chain, address[:10])
         except Exception:
             continue
+
     return total_tx
 
 
@@ -417,9 +476,21 @@ async def get_transactions(wallet: str = Query(None), chain: str = Query(None), 
     return {"total": total, "items": items}
 
 
+# ── Gas fee constants ─────────────────────────────────────────────
+GAS_TIMEOUT = 8                # seconds per HTTP request
+GAS_CONCURRENCY = 5            # max parallel requests per chain
+GAS_CB_FAILURES = 5            # consecutive failures before circuit-breaker trips
+
+import logging
+_gas_log = logging.getLogger("crypto.gas")
+
+
 async def _fetch_gas_for_user(user_id: int) -> int:
     """Fetch gas fees for a user's transactions that don't have them yet.
-    
+
+    Processes chains in parallel, with bounded concurrency per chain
+    and a circuit breaker that abandons a chain after N consecutive failures.
+
     Returns count of updated distinct tx_hashes.
     Gas is imputed to exactly ONE row per tx_hash (the one with minimal log_index)
     to avoid overcounting when a single tx has multiple transfers.
@@ -432,41 +503,93 @@ async def _fetch_gas_for_user(user_id: int) -> int:
         txns = await cur.fetchall()
     if not txns:
         return 0
-    
-    updated = 0
-    by_chain = {}
+
+    by_chain: dict[str, list[str]] = {}
     for t in txns:
         by_chain.setdefault(t["chain"], []).append(t["tx_hash"])
-    
-    for chain, hashes in by_chain.items():
+
+    # Shared counter for atomic updates across parallel chains
+    updated_lock = asyncio.Lock()
+    updated = 0
+
+    async def _process_chain(chain: str, hashes: list[str]) -> int:
         host = CHAINS.get(chain)
         if not host:
-            continue
-        for tx_hash in hashes:
+            return 0
+
+        sem = asyncio.Semaphore(GAS_CONCURRENCY)
+        chain_updated = 0
+        consecutive_fails = 0
+
+        async def _fetch_one(tx_hash: str) -> tuple[str, dict | None]:
+            nonlocal consecutive_fails
             try:
-                async with httpx.AsyncClient(timeout=15) as bc:
+                async with httpx.AsyncClient(timeout=GAS_TIMEOUT, follow_redirects=True) as bc:
                     r = await bc.get(f"https://{host}/api/v2/transactions/{tx_hash}")
                     if r.status_code == 200:
-                        data = r.json()
-                        gas_used = float(data.get("gas_used") or 0)
-                        gas_price = float(data.get("gas_price") or 0)
-                        eth_fee = (gas_used * gas_price) / 1e18
-                        if eth_fee > 0:
-                            eth_usd = await _get_eth_price_at(data.get("timestamp", ""))
-                            usd_fee = eth_fee * eth_usd
-                            # Impute gas to ONE row per tx_hash (minimal log_index)
-                            async with aiosqlite.connect(DB_PATH) as db:
-                                await db.execute(
-                                    "UPDATE transactions SET gas_fee_eth=?, gas_fee_usd=? "
-                                    "WHERE id=(SELECT id FROM transactions "
-                                    "WHERE tx_hash=? AND user_id=? ORDER BY log_index ASC LIMIT 1)",
-                                    (round(eth_fee, 8), round(usd_fee, 2), tx_hash, user_id))
-                                await db.commit()
-                            updated += 1
-                await asyncio.sleep(0.3)
+                        consecutive_fails = 0
+                        return (tx_hash, r.json())
+                    # Non-200: treat as failure
+                    consecutive_fails += 1
+                    if 400 <= r.status_code < 500:
+                        # Client error (e.g. tx not found) — don't retry, don't count toward breaker
+                        consecutive_fails = 0
+                    return (tx_hash, None)
             except Exception:
-                continue
-    
+                consecutive_fails += 1
+                return (tx_hash, None)
+
+        async def _fetch_with_sem(tx_hash: str):
+            nonlocal chain_updated
+            async with sem:
+                # Circuit breaker check
+                if consecutive_fails >= GAS_CB_FAILURES:
+                    return  # abandon this chain
+                tx_hash, data = await _fetch_one(tx_hash)
+                if data is None:
+                    return
+                try:
+                    gas_used = float(data.get("gas_used") or 0)
+                    gas_price = float(data.get("gas_price") or 0)
+                    eth_fee = (gas_used * gas_price) / 1e18
+                    if eth_fee > 0:
+                        eth_usd = await _get_eth_price_at(data.get("timestamp", ""))
+                        usd_fee = eth_fee * eth_usd
+                        # Impute gas to ONE row per tx_hash (minimal log_index)
+                        async with aiosqlite.connect(DB_PATH) as db:
+                            await db.execute(
+                                "UPDATE transactions SET gas_fee_eth=?, gas_fee_usd=? "
+                                "WHERE id=(SELECT id FROM transactions "
+                                "WHERE tx_hash=? AND user_id=? ORDER BY log_index ASC LIMIT 1)",
+                                (round(eth_fee, 8), round(usd_fee, 2), tx_hash, user_id))
+                            await db.commit()
+                        chain_updated += 1
+                except Exception:
+                    pass
+
+        # Process all tx hashes for this chain in parallel (bounded by semaphore)
+        tasks = [_fetch_with_sem(h) for h in hashes]
+        await asyncio.gather(*tasks)
+
+        if consecutive_fails >= GAS_CB_FAILURES:
+            _gas_log.warning(
+                "Circuit breaker tripped for chain=%s after %d consecutive failures "
+                "(processed %d/%d tx hashes)",
+                chain, consecutive_fails, chain_updated, len(hashes))
+
+        return chain_updated
+
+    # Process all chains in parallel
+    results = await asyncio.gather(
+        *(_process_chain(chain, hashes) for chain, hashes in by_chain.items()),
+        return_exceptions=True)
+
+    for r in results:
+        if isinstance(r, int):
+            updated += r
+        elif isinstance(r, Exception):
+            _gas_log.warning("Gas fetch chain task failed: %s", r)
+
     return updated
 
 
