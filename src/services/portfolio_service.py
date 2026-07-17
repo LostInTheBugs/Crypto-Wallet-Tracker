@@ -109,8 +109,10 @@ SPAM_PATTERNS = [
 ]
 
 
-def _is_spam(sym: str) -> bool:
-    """Check if a token symbol matches known spam patterns."""
+def _is_spam(sym) -> bool:
+    """Check if a token symbol matches known spam patterns. Accepts None."""
+    if not sym or not isinstance(sym, str):
+        return False
     sym_lower = sym.lower()
     for p in SPAM_PATTERNS:
         if p in sym_lower:
@@ -133,8 +135,10 @@ _STAKED_EXACT = {
 _KNOWN_BASES = {"usdt", "usdc", "dai", "eth", "weth", "wbtc", "op", "arb", "matic", "pol", "link", "uni", "aave", "crv", "snx"}
 
 
-def _token_category(symbol: str) -> str:
-    """Classify a token as 'staked' or 'wallet' based on symbol heuristics."""
+def _token_category(symbol) -> str:
+    """Classify a token as 'staked' or 'wallet' based on symbol heuristics. Accepts None."""
+    if not symbol or not isinstance(symbol, str):
+        return "wallet"
     sym = symbol.lower().strip()
     if not sym:
         return "wallet"
@@ -155,8 +159,14 @@ def _token_category(symbol: str) -> str:
             return "staked"
 
     # Prefix: "moo" → Beefy
-    if sym.startswith("moo"):
-        return "staked"
+    if sym.startswith("moo") and len(sym) > 4:
+        # Beefy tokens are mooXxxYyy (moo + at least 1 uppercase char)
+        # Avoid matching spam tokens like "MOON"
+        if len(sym) >= 4 and sym[3].isupper():
+            return "staked"
+        # Also match "moo" followed by known pattern (e.g. mooBIFI)
+        if sym.startswith("moobifi") or sym.startswith("moovelo"):
+            return "staked"
 
     # Prefix: "s*" → Stargate
     if sym.startswith("s*"):
@@ -228,28 +238,32 @@ async def fetch_chain(client, chain, host, address):
             for item in data.get("items", []):
                 if item is None:
                     continue
-                t = item.get("token") or {}
-                raw = item.get("value")
+                try:
+                    t = item.get("token") or {}
+                    raw = item.get("value")
 
-                symbol = t.get("symbol", "?")
-                name = t.get("name", "Unknown")
+                    symbol = t.get("symbol") or "?"
+                    name = t.get("name") or "Unknown"
 
-                # ── Spam filter ──
-                if _is_spam(symbol):
-                    continue
+                    # ── Spam filter ──
+                    if _is_spam(symbol):
+                        continue
 
-                contract_addr = t.get("address", "")
+                    contract_addr = t.get("address") or ""
 
-                tokens.append({
-                    "name": name,
-                    "symbol": symbol,
-                    "decimals": int(t.get("decimals") or 18),
-                    "balance_raw": str(raw) if raw else "0",
-                    "usd_price": float(t.get("exchange_rate") or 0),
-                    "icon": t.get("icon_url", ""),
-                    "type": t.get("type", "ERC-20"),
-                    "contract_address": contract_addr,
-                })
+                    tokens.append({
+                        "name": name,
+                        "symbol": symbol,
+                        "decimals": int(t.get("decimals") or 18),
+                        "balance_raw": str(raw) if raw else "0",
+                        "usd_price": float(t.get("exchange_rate") or 0),
+                        "icon": t.get("icon_url", ""),
+                        "type": t.get("type", "ERC-20"),
+                        "contract_address": contract_addr,
+                    })
+                except Exception:
+                    # One bad token must NOT kill the whole chain
+                    logger.debug(f"[fetch_chain] {chain}: skipping malformed token item")
             error = None
 
         # --- Prepend native coin if present ---
@@ -306,8 +320,15 @@ async def _fetch_defillama_current_prices(queries: list[tuple[str, str, str]]) -
         # Build comma-separated address list (max ~50 per call)
         for i in range(0, len(tokens_in_chain), 50):
             batch = tokens_in_chain[i:i + 50]
-            addr_list = ",".join(addr for addr, _ in batch)
-            url = f"https://coins.llama.fi/prices/current/{chain_slug}:{addr_list}"
+            addr_list = ",".join(f"{chain_slug}:{addr.lower()}" for addr, _ in batch)
+            # DefiLlama requires chain prefix on EVERY address
+            url = f"https://coins.llama.fi/prices/current/{addr_list}"
+            # Safety: if URL is too long, trim batch
+            if len(url) > 4000:
+                half = len(batch) // 2
+                batch = batch[:half]
+                addr_list = ",".join(f"{chain_slug}:{addr.lower()}" for addr, _ in batch)
+                url = f"https://coins.llama.fi/prices/current/{addr_list}"
 
             try:
                 async with httpx.AsyncClient(timeout=15) as c:
@@ -320,7 +341,7 @@ async def _fetch_defillama_current_prices(queries: list[tuple[str, str, str]]) -
                     price = coin_data.get("price", 0)
                     if price > 0:
                         # Key format: "chain:address"
-                        addr = key.split(":", 1)[-1] if ":" in key else key
+                        addr = key.split(":", 1)[-1].lower() if ":" in key else key.lower()
                         prices[addr] = float(price)
             except Exception:
                 continue
@@ -402,8 +423,8 @@ async def _compute_portfolio(address: str) -> dict:
                 if item["usd_price"] > 0:
                     continue
                 addr = item.get("contract_address", "")
-                if addr and addr in llama_prices:
-                    new_price = llama_prices[addr]
+                if addr and addr.lower() in llama_prices:
+                    new_price = llama_prices[addr.lower()]
                     item["usd_price"] = new_price
                     new_usd = item["balance"] * new_price
                     delta = new_usd - item["usd_value"]
