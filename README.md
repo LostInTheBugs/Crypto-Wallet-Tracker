@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — v2.11.19
+# Crypto Wallet Tracker — v2.11.20
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -124,6 +124,9 @@ Crypto-Wallet-Tracker/
 ---
 
 ## 📋 Changelog
+
+### v2.11.20
+- **Interface épurée** — suppression de la barre de titre en haut : la page courante est simplement mise en évidence dans le menu de gauche. Le nom du compte connecté est déplacé dans Paramètres (section Session).
 
 ### v2.11.19
 - **Déconnexion déplacée** — le bouton Déconnexion n'est plus dans la barre du haut de chaque page ; il est désormais dans la page Paramètres (section Session).

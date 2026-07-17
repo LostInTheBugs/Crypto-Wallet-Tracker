@@ -107,12 +107,6 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
 </div>
 
 <div class="main">
-  <div class="topbar">
-    <h1 id="pageTitle">📊 Dashboard</h1>
-    <div class="topbar-right">
-      <span class="user" id="userInfo"></span>
-    </div>
-  </div>
 
   <div id="viewLogin">
     <div class="card" style="max-width:380px">
@@ -217,7 +211,7 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>📦 Version</h2>
-        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.11.19</strong></p>
+        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.11.20</strong></p>
         <p id="verStatus" style="font-size:.85rem"></p>
         <button id="updateBtn" class="hidden" onclick="doUpdate()" style="margin-top:8px;background:#238636;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:.85rem">🔄 Mettre à jour</button>
         <p id="updateMsg" style="margin-top:8px;font-size:.8rem;color:#f0c040"></p>
@@ -236,6 +230,7 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>🚪 Session</h2>
+        <p style="margin-bottom:12px">👤 Connecté en tant que <strong id="userInfo"></strong></p>
         <button id="btnLogout" onclick="logout()" style="background:#f85149;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:.85rem">Déconnexion</button>
       </div>
     </div>
@@ -324,8 +319,6 @@ function switchPage(page) {
   currentPage = page;
   document.querySelectorAll(".sidebar a").forEach(function(a){ a.classList.remove("active"); });
   document.querySelector('[data-page="'+page+'"]').classList.add("active");
-  var titles = {dashboard:"📊 "+t("dashboard"),stats:"📈 "+t("stats"),tokens:"📋 "+t("tokens"),txns:"📜 "+t("txns"),wallets:"💼 "+t("wallets"),settings:"⚙️ "+t("settings")};
-  document.getElementById("pageTitle").innerHTML = titles[page] || t(page);
   document.getElementById("pageDashboard").classList.toggle("hidden", page!="dashboard");
   document.getElementById("pageStats").classList.toggle("hidden", page!="stats");
   document.getElementById("pageTokens").classList.toggle("hidden", page!="tokens");
@@ -367,7 +360,7 @@ async function logout(){await fetch("/api/auth/logout",{method:"POST"});try{Obje
 
 async function showDash(){
   document.getElementById("viewLogin").classList.add("hidden");document.getElementById("viewDash").classList.remove("hidden");document.getElementById("sidebar").classList.remove("hidden");document.getElementById("btnLogout").classList.remove("hidden");
-  var r=await fetch("/api/auth/me");if(r.ok){var u=await r.json();document.getElementById("userInfo").textContent="👤 "+u.username}
+  var r=await fetch("/api/auth/me");if(r.ok){var u=await r.json();var ui=document.getElementById("userInfo");if(ui)ui.textContent=u.username}
   applyLang();
   await loadWallets();
 }
