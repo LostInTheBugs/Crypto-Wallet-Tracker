@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — v2.11.23
+# Crypto Wallet Tracker — v2.11.24
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -124,6 +124,9 @@ Crypto-Wallet-Tracker/
 ---
 
 ## 📋 Changelog
+
+### v2.11.24
+- **Client HTTP partagé** — le backfill des frais de gaz réutilise une seule connexion HTTP par chaîne (au lieu d'en créer une par transaction), réduisant le churn de connexions.
 
 ### v2.11.23 — Reconstruction par contrat
 - **Fin des collisions de symbole** — la reconstruction historique regroupe désormais les tokens par **adresse de contrat** (et non plus par symbole). Deux tokens partageant un symbole (ex. le vrai BOB ~1 $ et un spam « bob » à millions d'unités) ne sont plus fusionnés ni valorisés au prix de l'autre → fin des valeurs aberrantes dans l'agrégat.

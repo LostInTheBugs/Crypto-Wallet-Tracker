@@ -606,31 +606,30 @@ async def _fetch_gas_for_user(user_id: int) -> int:
         chain_updated = 0
         consecutive_fails = 0
 
-        async def _fetch_one(tx_hash: str) -> tuple[str, dict | None]:
+        async def _fetch_one(bc, tx_hash: str) -> tuple[str, dict | None]:
             nonlocal consecutive_fails
             try:
-                async with httpx.AsyncClient(timeout=GAS_TIMEOUT, follow_redirects=True) as bc:
-                    r = await bc.get(f"https://{host}/api/v2/transactions/{tx_hash}")
-                    if r.status_code == 200:
-                        consecutive_fails = 0
-                        return (tx_hash, r.json())
-                    # Non-200: treat as failure
-                    consecutive_fails += 1
-                    if 400 <= r.status_code < 500:
-                        # Client error (e.g. tx not found) — don't retry, don't count toward breaker
-                        consecutive_fails = 0
-                    return (tx_hash, None)
+                r = await bc.get(f"https://{host}/api/v2/transactions/{tx_hash}")
+                if r.status_code == 200:
+                    consecutive_fails = 0
+                    return (tx_hash, r.json())
+                # Non-200: treat as failure
+                consecutive_fails += 1
+                if 400 <= r.status_code < 500:
+                    # Client error (e.g. tx not found) — don't retry, don't count toward breaker
+                    consecutive_fails = 0
+                return (tx_hash, None)
             except Exception:
                 consecutive_fails += 1
                 return (tx_hash, None)
 
-        async def _fetch_with_sem(tx_hash: str, wallet_address: str):
+        async def _fetch_with_sem(bc, tx_hash: str, wallet_address: str):
             nonlocal chain_updated
             async with sem:
                 # Circuit breaker check
                 if consecutive_fails >= GAS_CB_FAILURES:
                     return  # abandon this chain
-                tx_hash, data = await _fetch_one(tx_hash)
+                tx_hash, data = await _fetch_one(bc, tx_hash)
                 if data is None:
                     return
                 try:
@@ -656,9 +655,11 @@ async def _fetch_gas_for_user(user_id: int) -> int:
                 except Exception:
                     pass
 
-        # Process all items for this chain in parallel (bounded by semaphore)
-        tasks = [_fetch_with_sem(tx_hash, wallet_address) for tx_hash, wallet_address in items]
-        await asyncio.gather(*tasks)
+        # Process all items for this chain in parallel (bounded by semaphore),
+        # sharing ONE HTTP client per chain to avoid per-request connection churn
+        async with httpx.AsyncClient(timeout=GAS_TIMEOUT, follow_redirects=True) as bc:
+            tasks = [_fetch_with_sem(bc, tx_hash, wallet_address) for tx_hash, wallet_address in items]
+            await asyncio.gather(*tasks)
 
         if consecutive_fails >= GAS_CB_FAILURES:
             _gas_log.warning(
