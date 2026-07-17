@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — v2.11.10
+# Crypto Wallet Tracker — v2.11.11
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -124,6 +124,9 @@ Crypto-Wallet-Tracker/
 ---
 
 ## 📋 Changelog
+
+### v2.11.11
+- **Enrichissement des prix historiques** — prix d'acquisition par transaction via l'API historique DefiLlama (prix à date par adresse de contrat). La colonne `contract_address` est désormais stockée dans les transactions, ce qui permet de résoudre le prix réel d'achat de chaque token et de calculer un PNL exact (là où le prix est disponible).
 
 ### v2.11.10
 - **PNL** — affichage "—" lorsque le prix d'acquisition est inconnu (transactions sans prix historique), au lieu d'un PNL trompeur égal à la valeur totale.

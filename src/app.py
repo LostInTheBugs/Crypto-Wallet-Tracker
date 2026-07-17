@@ -7,7 +7,7 @@ from fastapi import FastAPI, Query, HTTPException, Request, Depends
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from contextlib import asynccontextmanager
-import httpx, asyncio, jwt, bcrypt, aiosqlite, os, datetime, time as _time, bisect, math, subprocess
+import httpx, asyncio, jwt, bcrypt, aiosqlite, os, datetime, calendar, time as _time, bisect, math, subprocess
 
 # Service imports
 import sys, os
@@ -140,6 +140,8 @@ async def lifespan(app: FastAPI):
         try: await db.execute("ALTER TABLE transactions ADD COLUMN gas_fee_eth REAL DEFAULT 0")
         except: pass
         try: await db.execute("ALTER TABLE transactions ADD COLUMN gas_fee_usd REAL DEFAULT 0")
+        except: pass
+        try: await db.execute("ALTER TABLE transactions ADD COLUMN contract_address TEXT DEFAULT ''")
         except: pass
         try: await db.execute("CREATE INDEX IF NOT EXISTS idx_tx_dedup ON transactions(tx_hash, log_index, user_id)")
         except: pass
@@ -372,12 +374,19 @@ async def _fetch_transactions_for_wallet(user_id: int, address: str) -> int:
                             token = item.get("token") or {}
                             tx_hash = item.get("transaction_hash") or item.get("tx_hash", "")
                             log_index = int(item.get("log_index") or 0)
+                            contract = (token.get("address") or token.get("address_hash") or "")
                             # Dedup on (tx_hash, log_index, user_id)
                             if tx_hash:
                                 cur2 = await db.execute(
-                                    "SELECT id FROM transactions WHERE tx_hash=? AND log_index=? AND user_id=?",
+                                    "SELECT id, contract_address FROM transactions WHERE tx_hash=? AND log_index=? AND user_id=?",
                                     (tx_hash, log_index, user_id))
-                                if await cur2.fetchone():
+                                existing = await cur2.fetchone()
+                                if existing:
+                                    # Backfill contract_address if missing
+                                    if contract and not (existing[1] or ""):
+                                        await db.execute(
+                                            "UPDATE transactions SET contract_address=? WHERE tx_hash=? AND log_index=? AND user_id=?",
+                                            (contract, tx_hash, log_index, user_id))
                                     continue
                             try:
                                 amount = int(item.get("total", {}).get("value", "0") or "0") / (10 ** (int(token.get("decimals") or 18)))
@@ -391,8 +400,8 @@ async def _fetch_transactions_for_wallet(user_id: int, address: str) -> int:
                             to_addr = (item.get("to") or {}).get("hash", "")
                             direction = "in" if to_addr.lower() == address.lower() else "out"
                             await db.execute(
-                                "INSERT INTO transactions (user_id, wallet_address, token_symbol, token_name, amount, chain, tx_hash, block_time, direction, log_index) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                                (user_id, address, symbol, name, amount, chain, tx_hash, ts[:19].replace("T", " ") if ts else "", direction, log_index))
+                                "INSERT INTO transactions (user_id, wallet_address, token_symbol, token_name, amount, chain, tx_hash, block_time, direction, log_index, contract_address) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                (user_id, address, symbol, name, amount, chain, tx_hash, ts[:19].replace("T", " ") if ts else "", direction, log_index, contract))
                             total_tx += 1
                         await db.commit()
 
@@ -418,6 +427,7 @@ async def _fetch_then_rebuild(user_id: int, address: str):
     try:
         _import_progress[user_id] = {"stage": "fetch", "done": 0, "total": len(CHAINS), "in_done": 0, "in_total": 0, "out_done": 0, "out_total": 0}
         count = await _fetch_transactions_for_wallet(user_id, address)
+        await _enrich_historical_prices(user_id)
         async with aiosqlite.connect(DB_PATH) as db:
             db.row_factory = aiosqlite.Row
             cur = await db.execute("SELECT direction, COUNT(*) as c FROM transactions WHERE user_id=? AND usd_price=0 GROUP BY direction", (user_id,))
@@ -664,6 +674,105 @@ async def gas_total(user=Depends(get_current_user), db=Depends(get_db),
     return {"total_gas_usd": round(row["total"] if row else 0, 2)}
 
 
+# ── Historical price enrichment (DefiLlama) ──────────────────────
+
+HIST_PRICE_CONCURRENCY = 5
+HIST_PRICE_TIMEOUT = 8
+
+async def _enrich_historical_prices(user_id: int) -> int:
+    """Enrich transactions with historical token prices via DefiLlama.
+
+    Selects transactions where usd_price is missing (NULL or 0) and
+    contract_address is known, groups by chain, queries the DefiLlama
+    historical price endpoint, and updates usd_price (and usd_value).
+    Returns the number of rows enriched.
+    """
+    import logging
+    _elog = logging.getLogger("crypto.enrich")
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT id, tx_hash, chain, contract_address, block_time, amount "
+            "FROM transactions WHERE user_id=? "
+            "AND (usd_price IS NULL OR usd_price=0) "
+            "AND contract_address!='' LIMIT 1000",
+            (user_id,))
+        rows = await cur.fetchall()
+    if not rows:
+        return 0
+
+    # Group by chain
+    by_chain: dict[str, list] = {}
+    for r in rows:
+        by_chain.setdefault(r["chain"], []).append(r)
+
+    enriched_lock = asyncio.Lock()
+    enriched = 0
+
+    async def _process_chain(chain: str, items: list) -> int:
+        llama_slug = CHAIN_TO_LLAMA.get(chain)
+        if not llama_slug:
+            return 0
+
+        sem = asyncio.Semaphore(HIST_PRICE_CONCURRENCY)
+        chain_enriched = 0
+
+        async def _price_one(row) -> int:
+            addr = row["contract_address"].lower()
+            bt = row["block_time"]
+            # Convert block_time "YYYY-MM-DD HH:MM:SS" (UTC) to unix timestamp
+            try:
+                dt = datetime.datetime.strptime(bt[:19], "%Y-%m-%d %H:%M:%S")
+                unix_ts = int(calendar.timegm(dt.timetuple()))
+            except Exception:
+                return 0
+
+            try:
+                async with httpx.AsyncClient(timeout=HIST_PRICE_TIMEOUT) as cl:
+                    url = f"https://coins.llama.fi/prices/historical/{unix_ts}/{llama_slug}:{addr}"
+                    resp = await cl.get(url)
+                    if resp.status_code != 200:
+                        return 0
+                    data = resp.json()
+                    coins = data.get("coins", {})
+                    key = f"{llama_slug}:{addr}"
+                    price = coins.get(key, {}).get("price", 0)
+                    if not price or price <= 0:
+                        return 0
+
+                    async with aiosqlite.connect(DB_PATH) as db2:
+                        await db2.execute(
+                            "UPDATE transactions SET usd_price=?, usd_value=ROUND(?*?, 2) WHERE id=?",
+                            (round(price, 6), row["amount"], price, row["id"]))
+                        await db2.commit()
+                    return 1
+            except Exception:
+                return 0
+
+        async def _with_sem(row):
+            nonlocal chain_enriched
+            async with sem:
+                c = await _price_one(row)
+                chain_enriched += c
+
+        tasks = [_with_sem(r) for r in items]
+        await asyncio.gather(*tasks)
+        return chain_enriched
+
+    # Process chains in parallel
+    results = await asyncio.gather(
+        *(_process_chain(chain, items) for chain, items in by_chain.items()),
+        return_exceptions=True)
+
+    for r in results:
+        if isinstance(r, int):
+            enriched += r
+
+    _elog.info(f"Historical price enrichment: {enriched}/{len(rows)} rows enriched for user {user_id}")
+    return enriched
+
+
 async def _get_eth_price_at(timestamp_str: str) -> float:
     """Get ETH price at a given timestamp. Returns USD price."""
     if not timestamp_str:
@@ -833,6 +942,7 @@ async def _daily_tx_refresh(user_id: int):
         wallets_list = await cur.fetchall()
     for w in wallets_list:
         count = await _fetch_transactions_for_wallet(user_id, w["address"])
+        await _enrich_historical_prices(user_id)
         if count > 0:
             await _rebuild_history(user_id, w["address"], _compute_portfolio)
     # Fetch gas fees after daily refresh (non-blocking)
@@ -1018,12 +1128,13 @@ async def enrich_transactions(user=Depends(get_current_user), db=Depends(get_db)
     cur = await db.execute("SELECT address FROM wallets WHERE user_id=?", (user["id"],))
     wallets_list = await cur.fetchall()
     if not wallets_list:
-        return {"ok": True, "enriched": 0}
+        return {"ok": True, "enriched": 0, "historical": 0}
     total = 0
     for w in wallets_list:
         result = await _fetch_prices_per_token(user["id"], w["address"])
         total += result.get("enriched", 0)
-    return {"ok": True, "enriched": total}
+    historical = await _enrich_historical_prices(user["id"])
+    return {"ok": True, "enriched": total, "historical": historical}
 
 
 @app.post("/api/transactions/fetch")
