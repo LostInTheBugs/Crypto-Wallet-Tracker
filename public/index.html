@@ -101,6 +101,7 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
   <a href="#" class="active" onclick="switchPage('dashboard')" data-page="dashboard">📊 <span>Dashboard</span></a>
   <a href="#" onclick="switchPage('stats')" data-page="stats">📈 <span>Statistiques</span></a>
   <a href="#" onclick="switchPage('tokens')" data-page="tokens">📋 <span>Détail tokens</span></a>
+  <a href="#" onclick="switchPage('nfts')" data-page="nfts">🖼️ <span>NFTs</span></a>
   <a href="#" onclick="switchPage('txns')" data-page="txns">📜 <span>Transactions</span></a>
   <a href="#" onclick="switchPage('wallets')" data-page="wallets">💼 <span>Wallets</span></a>
   <a href="#" onclick="switchPage('settings')" data-page="settings" style="margin-top:auto">⚙️ <span>Paramètres</span></a>
@@ -184,6 +185,7 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
     </div>
 
     <div id="pageTokens" class="hidden"></div>
+    <div id="pageNFTs" class="hidden"></div>
     <div id="pageTxns" class="hidden">
       <div class="card"><h2>📜 Transactions
         <span style="display:inline-flex;gap:6px;margin-left:12px;align-items:center">
@@ -211,7 +213,7 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>📦 Version</h2>
-        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.11.24</strong></p>
+        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.11.25</strong></p>
         <p id="verStatus" style="font-size:.85rem"></p>
         <button id="updateBtn" class="hidden" onclick="doUpdate()" style="margin-top:8px;background:#238636;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:.85rem">🔄 Mettre à jour</button>
         <p id="updateMsg" style="margin-top:8px;font-size:.8rem;color:#f0c040"></p>
@@ -244,7 +246,7 @@ var LANG = localStorage.getItem("lang") || "fr";
 function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c];});}
 var T = {
   fr: {
-    dashboard: "Dashboard", stats: "Statistiques", tokens: "Détail tokens",
+    dashboard: "Dashboard", stats: "Statistiques", tokens: "Détail tokens", nfts: "NFTs",
     wallets: "Wallets", settings: "Paramètres", logout: "Déconnexion",
     txns: "Transactions",
     login: "Connexion", register: "Créer un compte", loginBtn: "Se connecter",
@@ -266,7 +268,7 @@ var T = {
     noData: "📭 Aucune donnée",
   },
   en: {
-    dashboard: "Dashboard", stats: "Statistics", tokens: "Token Details",
+    dashboard: "Dashboard", stats: "Statistics", tokens: "Token Details", nfts: "NFTs",
     wallets: "Wallets", settings: "Settings", logout: "Logout",
     txns: "Transactions",
     login: "Login", register: "Register", loginBtn: "Login",
@@ -293,7 +295,7 @@ function applyLang() {
   document.getElementById("setLang").value = LANG;
   // Update sidebar
   var links = document.querySelectorAll(".sidebar a");
-  var keys = ["dashboard","stats","tokens","txns","wallets","settings"];
+  var keys = ["dashboard","stats","tokens","nfts","txns","wallets","settings"];
   for (var i=0;i<Math.min(links.length,keys.length);i++) {
     var span = links[i].querySelector("span");
     if (span) span.textContent = t(keys[i]);
@@ -324,6 +326,7 @@ function switchPage(page) {
   document.getElementById("pageDashboard").classList.toggle("hidden", page!="dashboard");
   document.getElementById("pageStats").classList.toggle("hidden", page!="stats");
   document.getElementById("pageTokens").classList.toggle("hidden", page!="tokens");
+  document.getElementById("pageNFTs").classList.toggle("hidden", page!="nfts");
   document.getElementById("pageTxns").classList.toggle("hidden", page!="txns");
   document.getElementById("pageWallets").classList.toggle("hidden", page!="wallets");
   document.getElementById("pageSettings").classList.toggle("hidden", page!="settings");
@@ -331,6 +334,7 @@ function switchPage(page) {
   if (page=="stats") { populateFilters(); drawLineChart(); drawPnlChart(); }
   if (page=="txns") loadTransactions();
   if (page=="tokens" && lastResult) renderTokenTable(lastResult);
+  if (page=="nfts") loadNFTs();
   if (page=="wallets") renderWalletPage();
   if (page=="settings") renderSettingsPage();
 }
@@ -586,6 +590,39 @@ function renderTokenTable(d){
     var catBadge=t.category==="staked"?' <span style="background:#14532d;color:#4ade80;font-size:.6rem;padding:1px 5px;border-radius:3px;margin-left:4px">staked</span>':'';html+='<tr><td>'+icon+'<b>'+esc(t.name)+'</b> <span style="color:#6e7681;font-size:.75rem">'+esc(t.symbol)+'</span>'+catBadge+'</td>'+(showWallet?'<td style="font-size:.75rem;color:#6e7681">'+esc(t._wallet)+'</td>':'')+'<td class="chain">'+t.chain+'</td><td>'+t.balance.toLocaleString()+'</td><td>'+pf+'</td><td class="usd">'+fmtCurr(t.usd_value)+'</td><td class="usd" style="color:'+pnlColor+'">'+pnlStr+'</td></tr>'}
   html+='</tbody></table></div>';
   document.getElementById("pageTokens").innerHTML=html;
+}
+
+async function loadNFTs(){
+  var el=document.getElementById("pageNFTs");
+  el.innerHTML='<div class="card"><div class="loading">Chargement des NFTs…</div></div>';
+  try{
+    var addrs=activeWallet=="ALL"?wallets.map(function(w){return w.address}):[activeWallet];
+    addrs=addrs.filter(function(a){return a&&a!="ALL"});
+    if(!addrs.length){el.innerHTML='<div class="card"><h2>🖼️ NFTs</h2><div class="loading">Aucun wallet</div></div>';return}
+    var results=await Promise.all(addrs.map(function(a){
+      return fetch("/api/nfts?address="+encodeURIComponent(a)).then(function(r){return r.json()}).catch(function(){return {nfts:[]}});
+    }));
+    var all=[];results.forEach(function(d){(d&&d.nfts||[]).forEach(function(n){all.push(n)})});
+    if(!all.length){el.innerHTML='<div class="card"><h2>🖼️ NFTs</h2><div class="loading" style="padding:24px">Aucun NFT trouvé sur ce wallet.</div></div>';return}
+    var html='<div class="card"><h2>🖼️ NFTs <span style="font-weight:400;font-size:.7rem;color:#6e7681">('+all.length+')</span></h2>';
+    html+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-top:12px">';
+    for(var i=0;i<all.length;i++){
+      var n=all[i];
+      var media=n.image?'<img src="'+esc(n.image)+'" loading="lazy" referrerpolicy="no-referrer" onerror="this.onerror=null;this.style.display=\'none\';this.parentElement.querySelector(\'.noimg\').style.display=\'flex\'" style="width:100%;height:150px;object-fit:cover;display:block;background:#0d1117">':'';
+      html+='<div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;overflow:hidden">'+
+        '<div style="position:relative">'+media+
+          '<div class="noimg" style="display:'+(n.image?'none':'flex')+';width:100%;height:150px;align-items:center;justify-content:center;background:#0d1117;color:#6e7681;font-size:1.6rem">🖼️</div>'+
+        '</div>'+
+        '<div style="padding:8px">'+
+          '<div style="font-size:.78rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="'+esc(n.name)+'">'+esc(n.name)+'</div>'+
+          '<div style="font-size:.68rem;color:#6e7681;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="'+esc(n.collection)+'">'+esc(n.collection)+'</div>'+
+          '<div style="font-size:.6rem;color:#6e7681;margin-top:3px">'+esc(n.chain)+' · '+esc(n.token_type)+'</div>'+
+        '</div>'+
+      '</div>';
+    }
+    html+='</div></div>';
+    el.innerHTML=html;
+  }catch(e){console.error("loadNFTs",e);el.innerHTML='<div class="card"><div class="error">Erreur de chargement des NFTs</div></div>'}
 }
 
 async function drawLineChart(){

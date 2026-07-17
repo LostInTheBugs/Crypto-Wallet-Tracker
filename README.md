@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — v2.11.24
+# Crypto Wallet Tracker — v2.11.25
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -124,6 +124,11 @@ Crypto-Wallet-Tracker/
 ---
 
 ## 📋 Changelog
+
+### v2.11.25 — Page NFTs
+- **Nouvelle page NFTs** — grille d'images des NFT (ERC-721 / ERC-1155 / ERC-404) détenus par le(s) wallet(s), agrégée sur toutes les chaînes via l'API Blockscout.
+- Nouvel endpoint `GET /api/nfts?address=…` (interroge toutes les chaînes en parallèle, filtre le spam, résout les URI IPFS, plafonné à 600 items).
+- Affichage : nom, collection, chaîne et type de token ; images en `lazy-load` avec repli 🖼️ si l'image est indisponible. Fonctionne pour un wallet ou en vue agrégée (« ALL »).
 
 ### v2.11.24
 - **Client HTTP partagé** — le backfill des frais de gaz réutilise une seule connexion HTTP par chaîne (au lieu d'en créer une par transaction), réduisant le churn de connexions.

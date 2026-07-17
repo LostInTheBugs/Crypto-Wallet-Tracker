@@ -20,7 +20,7 @@ from services.price_service import (
     _fetch_defillama_batch, _fetch_coingecko_batch,
 )
 from services.portfolio_service import (
-    _compute_portfolio, CHAINS, NATIVE_COIN, fetch_chain,
+    _compute_portfolio, CHAINS, NATIVE_COIN, fetch_chain, _is_spam,
     format_snapshots_v2, format_snapshots_legacy,
 )
 from services.pnl_service import (
@@ -938,6 +938,71 @@ async def _daily_tx_refresh(user_id: int):
             await _rebuild_history(user_id, w["address"], _compute_portfolio)
     # Fetch gas fees after daily refresh (non-blocking)
     asyncio.create_task(_fetch_gas_for_user(user_id))
+
+
+# ── NFTs ─────────────────────────────────────────────────────────
+
+async def _fetch_nfts_chain(client, chain: str, host: str, address: str, max_pages: int = 2) -> list:
+    """Fetch owned NFTs (ERC-721/1155/404) on one chain, spam-filtered."""
+    out = []
+    url = f"https://{host}/api/v2/addresses/{address}/nft"
+    params = {"type": "ERC-721,ERC-1155,ERC-404"}
+    page = 0
+    while page < max_pages:
+        try:
+            r = await client.get(url, params=params, timeout=12)
+        except Exception:
+            break
+        if r.status_code != 200:
+            break
+        data = r.json()
+        for it in data.get("items", []):
+            if not it:
+                continue
+            try:
+                t = it.get("token") or {}
+                coll = t.get("name") or "?"
+                sym = t.get("symbol") or ""
+                if _is_spam(coll) or _is_spam(sym):
+                    continue
+                md = it.get("metadata") if isinstance(it.get("metadata"), dict) else {}
+                name = (md.get("name") if md else None) or f"{coll} #{it.get('id', '')}"[:60]
+                img = it.get("image_url") or it.get("media_url") or ""
+                if isinstance(img, str) and img.startswith("ipfs://"):
+                    img = "https://ipfs.io/ipfs/" + img[7:]
+                out.append({
+                    "chain": chain,
+                    "collection": coll,
+                    "token_type": it.get("token_type") or t.get("type") or "",
+                    "id": str(it.get("id") or ""),
+                    "name": name,
+                    "image": img,
+                    "contract": (t.get("address") or t.get("address_hash") or ""),
+                })
+            except Exception:
+                continue
+        nxt = data.get("next_page_params")
+        if not nxt:
+            break
+        params = {**params, **nxt}
+        page += 1
+    return out
+
+
+@app.get("/api/nfts")
+async def get_nfts(address: str = Query(...), user=Depends(get_current_user)):
+    if not address.startswith("0x"):
+        raise HTTPException(400, "Adresse invalide")
+    async with httpx.AsyncClient(follow_redirects=True) as client:
+        results = await asyncio.gather(
+            *[_fetch_nfts_chain(client, c, h, address) for c, h in CHAINS.items()],
+            return_exceptions=True)
+    nfts = []
+    for r in results:
+        if isinstance(r, list):
+            nfts.extend(r)
+    # Group count by collection for a quick summary
+    return {"address": address, "count": len(nfts), "nfts": nfts[:600]}
 
 
 # ── Snapshots / History API ──────────────────────────────────────
