@@ -567,37 +567,47 @@ async def portfolio(address: str = Query(...), force: bool = Query(False), user=
                     if not sym:
                         continue
                     usd_val = t.get("usd_value", 0) or 0
-                    # Try daily_history first
+                    # Try daily_history first — rescale reconstructed cost
+                    # to on-chain value (avoids phantom PNL when
+                    # reconstructed balance ≠ on-chain balance).
                     cur2 = await db.execute(
-                        "SELECT cost_basis_usd FROM daily_history WHERE user_id=? AND wallet_address=? AND token_symbol=? ORDER BY date DESC LIMIT 1",
+                        "SELECT cost_basis_usd, value_usd FROM daily_history "
+                        "WHERE user_id=? AND wallet_address=? AND token_symbol=? "
+                        "ORDER BY date DESC LIMIT 1",
                         (user["id"], address, sym))
                     token_row = await cur2.fetchone()
                     if token_row and token_row["cost_basis_usd"] > 0:
-                        cost = round(token_row["cost_basis_usd"], 2)
-                        t["cost_basis"] = cost
-                        t["pnl"] = round(usd_val - cost, 2)
-                        enriched += 1
-                    else:
-                        missing_history += 1
-                        # Fallback: compute avg cost per unit from transactions,
-                        # then multiply by current balance (avoids PNL distortion
-                        # when some TXs have usd_price=0, e.g. stablecoins).
-                        cur3 = await db.execute(
-                            "SELECT "
-                            "SUM(CASE WHEN direction='in' THEN amount ELSE -amount END) as solde, "
-                            "SUM(CASE WHEN direction='in' THEN amount*usd_price ELSE -amount*usd_price END) as cost "
-                            "FROM transactions WHERE user_id=? AND wallet_address=? AND LOWER(token_symbol)=?",
-                            (user["id"], address, sym))
-                        cost_row = await cur3.fetchone()
-                        solde_recon = (cost_row[0] or 0) if cost_row else 0
-                        cost_recon = (cost_row[1] or 0) if cost_row else 0
-                        avg_cost = (cost_recon / solde_recon) if (solde_recon and solde_recon > 0) else 0
-                        if not math.isfinite(avg_cost):
-                            avg_cost = 0
-                        bal = t.get("balance", 0) or 0
-                        cost = avg_cost * bal
-                        t["cost_basis"] = round(cost, 2)
-                        t["pnl"] = round(usd_val - cost, 2)
+                        hist_value = token_row["value_usd"] or 0
+                        if hist_value > 0:
+                            ratio = token_row["cost_basis_usd"] / hist_value
+                            if math.isfinite(ratio):
+                                # Rescale: cost ≈ usd_val × ratio
+                                # Stablecoin: ratio ≈ 1 ⇒ pnl ≈ 0
+                                cost = round(usd_val * ratio, 2)
+                                t["cost_basis"] = cost
+                                t["pnl"] = round(usd_val - cost, 2)
+                                enriched += 1
+                                continue
+                    missing_history += 1
+                    # Fallback: compute avg cost per unit from transactions,
+                    # then multiply by current balance (avoids PNL distortion
+                    # when some TXs have usd_price=0, e.g. stablecoins).
+                    cur3 = await db.execute(
+                        "SELECT "
+                        "SUM(CASE WHEN direction='in' THEN amount ELSE -amount END) as solde, "
+                        "SUM(CASE WHEN direction='in' THEN amount*usd_price ELSE -amount*usd_price END) as cost "
+                        "FROM transactions WHERE user_id=? AND wallet_address=? AND LOWER(token_symbol)=?",
+                        (user["id"], address, sym))
+                    cost_row = await cur3.fetchone()
+                    solde_recon = (cost_row[0] or 0) if cost_row else 0
+                    cost_recon = (cost_row[1] or 0) if cost_row else 0
+                    avg_cost = (cost_recon / solde_recon) if (solde_recon and solde_recon > 0) else 0
+                    if not math.isfinite(avg_cost):
+                        avg_cost = 0
+                    bal = t.get("balance", 0) or 0
+                    cost = avg_cost * bal
+                    t["cost_basis"] = round(cost, 2)
+                    t["pnl"] = round(usd_val - cost, 2)
                 except Exception:
                     # Single token failure must not affect others
                     t.setdefault("cost_basis", 0)
