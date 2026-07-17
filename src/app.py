@@ -781,17 +781,23 @@ async def portfolio(address: str = Query(...), force: bool = Query(False), user=
                     cost_row = await cur3.fetchone()
                     solde_recon = (cost_row[0] or 0) if cost_row else 0
                     cost_recon = (cost_row[1] or 0) if cost_row else 0
-                    avg_cost = (cost_recon / solde_recon) if (solde_recon and solde_recon > 0) else 0
-                    if not math.isfinite(avg_cost):
-                        avg_cost = 0
-                    bal = t.get("balance", 0) or 0
-                    cost = avg_cost * bal
-                    t["cost_basis"] = round(cost, 2)
-                    t["pnl"] = round(usd_val - cost, 2)
+                    if solde_recon > 0 and cost_recon > 0:
+                        avg_cost = cost_recon / solde_recon
+                        if math.isfinite(avg_cost):
+                            bal = t.get("balance", 0) or 0
+                            cost = avg_cost * bal
+                            t["cost_basis"] = round(cost, 2)
+                            t["pnl"] = round(usd_val - cost, 2)
+                            continue
+                    # Acquisition cost unknown (no priced transactions, no
+                    # usable history): report null instead of a misleading
+                    # pnl == usd_value ("bought for free").
+                    t["cost_basis"] = None
+                    t["pnl"] = None
                 except Exception:
                     # Single token failure must not affect others
-                    t.setdefault("cost_basis", 0)
-                    t.setdefault("pnl", 0)
+                    t.setdefault("cost_basis", None)
+                    t.setdefault("pnl", None)
 
         import logging
         logger = logging.getLogger("crypto.portfolio")

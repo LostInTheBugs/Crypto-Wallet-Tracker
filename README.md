@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — v2.11.9
+# Crypto Wallet Tracker — v2.11.10
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -124,6 +124,9 @@ Crypto-Wallet-Tracker/
 ---
 
 ## 📋 Changelog
+
+### v2.11.10
+- **PNL** — affichage "—" lorsque le prix d'acquisition est inconnu (transactions sans prix historique), au lieu d'un PNL trompeur égal à la valeur totale.
 
 ### v2.11.9
 - **Correctif** — suppression d un caractère d échappement littéral (\n) introduit dans le JavaScript en v2.11.8, qui cassait toute la page (impossible de se connecter). Page de nouveau fonctionnelle.
