@@ -7,7 +7,7 @@ from fastapi import FastAPI, Query, HTTPException, Request, Depends
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from contextlib import asynccontextmanager
-import httpx, asyncio, jwt, bcrypt, aiosqlite, os, datetime, time as _time, bisect, math
+import httpx, asyncio, jwt, bcrypt, aiosqlite, os, datetime, time as _time, bisect, math, subprocess
 
 # Service imports
 import sys, os
@@ -851,6 +851,46 @@ async def latest_version():
     except Exception:
         pass
     return {"tag": ""}
+
+
+@app.post("/api/update")
+async def update_application(user=Depends(get_current_user)):
+    """Trigger git pull + docker rebuild from GitHub. Auth required."""
+    import asyncio.subprocess
+    try:
+        # Run git pull
+        proc = await asyncio.subprocess.create_subprocess_exec(
+            "git", "pull", "origin", "main",
+            cwd="/opt/crypto-wallet-tracker",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+        git_ok = proc.returncode == 0
+
+        if not git_ok:
+            return {
+                "ok": False,
+                "msg": f"git pull failed: {stderr.decode()[:200]}",
+            }
+
+        # Run docker compose up -d --build (background — takes ~60s)
+        proc2 = await asyncio.subprocess.create_subprocess_exec(
+            "docker", "compose", "up", "-d", "--build",
+            cwd="/opt/crypto-wallet-tracker",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        # Don't wait — docker compose will recreate the container
+        # Return immediately; the new container will serve this response
+
+        return {
+            "ok": True,
+            "msg": "Mise à jour lancée. L'application redémarre...",
+            "git_output": stdout.decode()[:200],
+        }
+    except Exception as e:
+        return {"ok": False, "msg": str(e)[:200]}
 
 
 # ── API Keys (per user) ─────────────────────────────────────────

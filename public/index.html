@@ -217,8 +217,10 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>📦 Version</h2>
-        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.9.4</strong></p>
+        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.10.0</strong></p>
         <p id="verStatus" style="font-size:.85rem"></p>
+        <button id="updateBtn" class="hidden" onclick="doUpdate()" style="margin-top:8px;background:#238636;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:.85rem">🔄 Mettre à jour</button>
+        <p id="updateMsg" style="margin-top:8px;font-size:.8rem;color:#f0c040"></p>
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>🔑 Clés API</h2>
@@ -258,6 +260,7 @@ var T = {
     pwdTooShort: "❌ 4 caractères minimum",
     verCurrent: "Version actuelle", verLatest: "Dernière version",
     verUpToDate: "✅ À jour", verOutdated: "⚠️ Nouvelle version disponible",
+    updateBtn: "🔄 Mettre à jour", updating: "⏳ Mise à jour en cours...",
     verCheckError: "❌ Impossible de vérifier",
     noData: "📭 Aucune donnée",
   },
@@ -279,6 +282,7 @@ var T = {
     pwdTooShort: "❌ 4 characters minimum",
     verCurrent: "Current version", verLatest: "Latest version",
     verUpToDate: "✅ Up to date", verOutdated: "⚠️ New version available",
+    updateBtn: "🔄 Update now", updating: "⏳ Updating...",
     verCheckError: "❌ Unable to check",
     noData: "📭 No data",
   }
@@ -629,6 +633,16 @@ function renderSettingsPage(){
   renderApiKeys();
 }
 
+async function doUpdate(){
+  var btn=document.getElementById("updateBtn"),msg=document.getElementById("updateMsg");
+  btn.disabled=true;btn.textContent=t("updating");msg.textContent="";
+  try{
+    var r=await fetch("/api/update",{method:"POST"});var d=await r.json();
+    if(d.ok){msg.innerHTML='<span style="color:#40c463">'+d.msg+"</span>";setTimeout(function(){location.reload()},5000)}
+    else{msg.innerHTML='<span style="color:#f85149">'+d.msg+"</span>";btn.disabled=false;btn.textContent=t("updateBtn")}
+  }catch(e){msg.textContent="Erreur";btn.disabled=false;btn.textContent=t("updateBtn")}
+}
+
 async function checkVersion(){
   var el = document.getElementById("verStatus");
   el.textContent = "...";
@@ -638,13 +652,10 @@ async function checkVersion(){
     var data = await r.json();
     var latest = data.tag || "";
     var current = document.getElementById("verCurrent").textContent.replace(/^v/,"");
-    if (latest === current) {
-      el.innerHTML = '<span style="color:#40c463">'+t("verUpToDate")+' (v'+latest+')</span>';
-    } else if (latest) {
-      el.innerHTML = '<span style="color:#f0c040">'+t("verOutdated")+': v'+latest+'</span>';
-    } else {
-      el.textContent = t("verCheckError");
-    }
+    var btn=document.getElementById("updateBtn"),msg=document.getElementById("updateMsg");
+    if(latest===current){el.innerHTML='<span style="color:#40c463">'+t("verUpToDate")+" (v"+latest+")</span>";btn.classList.add("hidden")}
+    else if(latest){el.innerHTML='<span style="color:#f0c040">'+t("verOutdated")+": v"+latest+"</span>";btn.classList.remove("hidden");btn.textContent=t("updateBtn");msg.textContent=""}
+    else{el.textContent=t("verCheckError");btn.classList.add("hidden")}
   } catch(e) {
     console.error("checkVersion",e);
     el.textContent = t("verCheckError");
