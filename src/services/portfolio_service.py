@@ -43,6 +43,7 @@ CHAINS = {
     "bob":        "explorer.gobob.xyz",
     "zora":       "explorer.zora.energy",
     "worldchain": "worldchain-mainnet.explorer.alchemy.com",
+    "hyperevm":  "www.hyperscan.com",
 }
 
 # Chain → DefiLlama slug (for current price lookups)
@@ -68,6 +69,7 @@ CHAIN_TO_LLAMA = {
     "bob":        "bob",
     "zora":       "zora",
     "worldchain": "wc",         # worldchain = wc on DefiLlama
+    "hyperevm":  "hyperliquid",
 }
 
 # Native coin metadata per chain
@@ -93,6 +95,13 @@ NATIVE_COIN = {
     "bob":        {"name": "Ethereum", "symbol": "ETH"},
     "zora":       {"name": "Ethereum", "symbol": "ETH"},
     "worldchain": {"name": "Ethereum", "symbol": "ETH"},
+    "hyperevm":  {"name": "Hyperliquid", "symbol": "HYPE"},
+}
+
+# Wrapped native token addresses for DefiLlama fallback pricing
+# Used when Blockscout doesn't return a price for the native coin
+NATIVE_WRAPPED = {
+    "hyperevm": "0x5555555555555555555555555555555555555555",  # WHYPE
 }
 
 # ═══════════════════════════════════════════════════════════════════
@@ -435,6 +444,42 @@ async def _compute_portfolio(address: str) -> dict:
             logger.info(
                 f"[TRACE] DefiLlama enriched {enriched}/{len(unpriced_tokens)} unpriced tokens"
             )
+
+    # 3b. Native coin wrapped fallback — when Blockscout gives no price for a native coin,
+    # price it via its wrapped token on DefiLlama (e.g. HYPE ← WHYPE)
+    if NATIVE_WRAPPED:
+        unpriced_natives = []
+        for item in items:
+            if item["usd_price"] <= 0 and item.get("type") == "native" and item["chain"] in NATIVE_WRAPPED:
+                unpriced_natives.append(item)
+
+        if unpriced_natives:
+            # Build queries: (chain, wrapped_address, symbol)
+            native_queries = [
+                (item["chain"], NATIVE_WRAPPED[item["chain"]], item["symbol"])
+                for item in unpriced_natives
+            ]
+            try:
+                native_prices = await _fetch_defillama_current_prices(native_queries)
+                if native_prices:
+                    enriched_native = 0
+                    for item in unpriced_natives:
+                        wrapped_addr = NATIVE_WRAPPED.get(item["chain"], "").lower()
+                        if wrapped_addr and wrapped_addr in native_prices:
+                            new_price = native_prices[wrapped_addr]
+                            if new_price > 0:
+                                item["usd_price"] = new_price
+                                new_usd = item["balance"] * new_price
+                                delta = new_usd - item["usd_value"]
+                                item["usd_value"] = round(new_usd, 2)
+                                item["price_unknown"] = False
+                                total += delta
+                                enriched_native += 1
+                    logger.info(
+                        f"[TRACE] Native wrapped enrich: {enriched_native}/{len(unpriced_natives)}"
+                    )
+            except Exception:
+                logger.warning("[TRACE] Native wrapped price lookup failed")
 
     # 4. Mark remaining unpriced tokens
     still_unpriced = 0

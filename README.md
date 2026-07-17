@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — v2.11.1
+# Crypto Wallet Tracker — v2.11.2
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -8,7 +8,7 @@ Dashboard agrégé, graphiques d'évolution, historique des prix via DefiLlama, 
 
 ## ✨ Fonctionnalités
 
-- 🔗 **21 chaînes EVM** — Ethereum, Base, Optimism, Arbitrum, Polygon, Gnosis, zkSync, Celo, Scroll, Soneium, Ink, Mode, Unichain, Lisk, Linea, Etherlink, Metis, Manta, BOB, Zora, World Chain
+- 🔗 **22 chaînes EVM** — Ethereum, Base, Optimism, Arbitrum, Polygon, Gnosis, zkSync, Celo, Scroll, Soneium, Ink, Mode, Unichain, Lisk, Linea, Etherlink, Metis, Manta, BOB, Zora, World Chain, HyperEVM
 - 🪙 **Solde natif** — ETH/POL/xDAI/CELO/XTZ/METIS récupéré en parallèle des tokens (appel API natif)
 - 💰 **Valorisation USD/€** — temps réel via Blockscout, conversion EUR (Frankfurter)
 - 🦙 **Fallback prix DefiLlama** — si Blockscout ne donne pas de prix, appel batch à l'API gratuite `coins.llama.fi/prices/current`
@@ -56,7 +56,7 @@ Crypto-Wallet-Tracker/
 │   └── services/            # Modules métier
 │       ├── price_service.py   # SYMBOL_TO_CG, DefiLlama/CoinGecko, cache prix
 │       ├── pnl_service.py     # Timeline unifié, reconstruction soldes, PNL
-│       └── portfolio_service.py  # 21 chaînes, natif, fallback prix, spam, staked
+│       └── portfolio_service.py  # 22 chaînes, natif, fallback prix, spam, staked
 ├── public/index.html        # Frontend SPA + Chart.js (~800 lignes)
 ├── Dockerfile
 ├── docker-compose.yml
@@ -124,6 +124,9 @@ Crypto-Wallet-Tracker/
 ---
 
 ## 📋 Changelog
+
+### v2.11.2
+- **HyperEVM** — support de la chaîne HyperEVM (Blockscout hyperscan) avec pricing du coin natif HYPE via son token wrappé WHYPE sur DefiLlama. Note : seules les positions de wallet sont couvertes, pas le DeFi/staking.
 
 ### v2.11.1
 - **Correctif frais de gaz** — valorisation au prix du jeton natif par chaîne (xDAI pour Gnosis, CELO pour Celo, POL pour Polygon, XTZ pour Etherlink, METIS pour Metis, ETH pour Ethereum et L2) au lieu du prix ETH systématique qui surévaluait les frais sur les chaînes non-ETH (ex : ~0,22 xDAI × 2000 $ → ~450 $ au lieu de 0,22 $)
