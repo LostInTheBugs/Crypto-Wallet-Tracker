@@ -227,6 +227,13 @@ app = FastAPI(lifespan=lifespan, title="Crypto Wallet Tracker")
 async def get_db():
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
+        # busy_timeout is PER-CONNECTION in SQLite — without it, any write
+        # colliding with a background rebuild commit fails instantly with
+        # "database is locked" (v2.12.1 fix).
+        try:
+            await db.execute("PRAGMA busy_timeout=10000")
+        except Exception:
+            pass
         yield db
 
 

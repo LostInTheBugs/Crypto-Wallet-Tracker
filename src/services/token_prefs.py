@@ -17,6 +17,18 @@ import aiosqlite
 
 DB_PATH = os.environ.get("DB_PATH", "/data/wallets.db")
 
+
+async def _connect():
+    """Open a connection with busy_timeout set (per-connection pragma) so
+    writes survive a concurrent history-rebuild commit instead of raising
+    'database is locked'."""
+    db = await aiosqlite.connect(DB_PATH)
+    try:
+        await db.execute("PRAGMA busy_timeout=10000")
+    except Exception:
+        pass
+    return db
+
 # ═══════════════════════════════════════════════════════════════════
 # Auto-disable heuristic thresholds (tune here)
 # ═══════════════════════════════════════════════════════════════════
@@ -89,11 +101,14 @@ def classify_token(usd_value, usd_price, balance, confidence) -> tuple[int, str]
 async def load_user_prefs(user_id: int) -> dict:
     """Return {tid: pref_row_dict} for a user. Empty dict on missing table."""
     try:
-        async with aiosqlite.connect(DB_PATH) as db:
+        db = await _connect()
+        try:
             db.row_factory = aiosqlite.Row
             cur = await db.execute(
                 "SELECT * FROM user_token_prefs WHERE user_id=?", (user_id,))
             return {r["tid"]: dict(r) for r in await cur.fetchall()}
+        finally:
+            await db.close()
     except Exception:
         return {}
 
@@ -101,11 +116,14 @@ async def load_user_prefs(user_id: int) -> dict:
 async def get_disabled_tids(user_id: int) -> set:
     """Set of tids the user has disabled (or that were auto-disabled)."""
     try:
-        async with aiosqlite.connect(DB_PATH) as db:
+        db = await _connect()
+        try:
             cur = await db.execute(
                 "SELECT tid FROM user_token_prefs WHERE user_id=? AND enabled=0",
                 (user_id,))
             return {r[0] for r in await cur.fetchall()}
+        finally:
+            await db.close()
     except Exception:
         return set()
 
@@ -119,10 +137,13 @@ async def insert_default_prefs(rows: list) -> None:
     """
     if not rows:
         return
-    async with aiosqlite.connect(DB_PATH) as db:
+    db = await _connect()
+    try:
         await db.executemany(
             "INSERT OR IGNORE INTO user_token_prefs "
             "(user_id, tid, enabled, source, chain, contract_address, symbol, "
             "name, reason, default_enabled) VALUES (?,?,?,?,?,?,?,?,?,?)",
             rows)
         await db.commit()
+    finally:
+        await db.close()

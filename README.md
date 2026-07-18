@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — v2.12.0
+# Crypto Wallet Tracker — v2.12.1
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -125,6 +125,9 @@ Crypto-Wallet-Tracker/
 ---
 
 ## 📋 Changelog
+
+### v2.12.1 — Hotfix « database is locked »
+- **Écritures fiables sous rebuild** — l'ajout manuel d'un token (et tout write API) pouvait échouer en 500 « database is locked » pendant qu'un recalcul d'historique commitait en arrière-plan. `busy_timeout` est désormais appliqué **par connexion** (get_db, prefs, rebuild) et l'écriture de `daily_history` passe par un `executemany` unique (transaction beaucoup plus courte).
 
 ### v2.12.0 — Gestion des tokens (activer/désactiver)
 - **Nouvelle page « 🎛️ Gestion des tokens »** avec deux sous-onglets : **Détectés** (tokens trouvés automatiquement sur les chaînes) et **Ajoutés manuellement** (ajout par chaîne + adresse de contrat).
