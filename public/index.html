@@ -256,7 +256,7 @@ tr.tm-off td{opacity:.45}
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>📦 Version</h2>
-        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.12.9</strong></p>
+        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">2026.07.1</strong></p>
         <p id="verStatus" style="font-size:.85rem"></p>
         <button id="updateBtn" class="hidden" onclick="doUpdate()" style="margin-top:8px;background:#238636;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:.85rem">🔄 Mettre à jour</button>
         <p id="updateMsg" style="margin-top:8px;font-size:.8rem;color:#f0c040"></p>
@@ -1282,9 +1282,14 @@ async function checkVersion(){
     var latest = data.tag || "";
     var current = document.getElementById("verCurrent").textContent.replace(/^v/,"");
     var btn=document.getElementById("updateBtn"),msg=document.getElementById("updateMsg");
-    if(latest===current){el.innerHTML='<span style="color:#40c463">'+t("verUpToDate")+" (v"+latest+")</span>";btn.classList.add("hidden")}
-    else if(latest){el.innerHTML='<span style="color:#f0c040">'+t("verOutdated")+": v"+latest+"</span>";btn.classList.remove("hidden");btn.textContent=t("updateBtn");msg.textContent=""}
-    else{el.textContent=t("verCheckError");btn.classList.add("hidden")}
+    function _cmpVer(a,b){
+      var mca=a.match(/^(\d{4})\.(\d{2})\.(\d+)$/),mcb=b.match(/^(\d{4})\.(\d{2})\.(\d+)$/);
+      if(mca&&mcb){for(var i=1;i<=3;i++){var na=parseInt(mca[i],10),nb=parseInt(mcb[i],10);if(na>nb)return 1;if(na<nb)return -1}return 0}
+      if(mca&&!mcb)return 1;if(!mca&&mcb)return -1;
+      if(a>b)return 1;if(a<b)return -1;return 0}
+    if(!latest){el.textContent=t("verCheckError");btn.classList.add("hidden")}
+    else if(_cmpVer(latest,current)<=0){el.innerHTML='<span style="color:#40c463">'+t("verUpToDate")+" ("+latest+")</span>";btn.classList.add("hidden")}
+    else{el.innerHTML='<span style="color:#f0c040">'+t("verOutdated")+": "+latest+"</span>";btn.classList.remove("hidden");btn.textContent=t("updateBtn");msg.textContent=""}
   } catch(e) {
     console.error("checkVersion",e);
     el.textContent = t("verCheckError");

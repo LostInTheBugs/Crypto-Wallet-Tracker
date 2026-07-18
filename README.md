@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — v2.12.9
+# Crypto Wallet Tracker — 2026.07.1
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -127,6 +127,16 @@ Crypto-Wallet-Tracker/
 ---
 
 ## 📋 Changelog
+
+### 2026.07.1 — Passage au versioning calendaire (AAAA.MM.N)
+
+**Ce qui change :**
+- Le projet passe du **semver** (vX.Y.Z) au **calendar versioning** au format `AAAA.MM.N` (année.mois.numéro).
+- `N` repart à 1 chaque mois (prochaine release de juillet = `2026.07.2`, août = `2026.08.1`, etc.).
+- Les anciens tags semver (`v2.11.x`, `v2.12.x`) restent inchangés. Le nouveau schéma démarre à `2026.07.1`.
+- **Backend** : `GET /api/version/latest` reconnaît les tags CalVer et les compare numériquement par (année, mois, N). Un tag CalVer est toujours considéré plus récent qu'un tag semver.
+- **Frontend** : `checkVersion()` compare désormais correctement les versions CalVer (année → mois → N). Tout format inattendu déclenche un fallback égalité = à jour.
+- L'affichage n'utilise plus de préfixe `v` dans les messages de version.
 
 ### v2.12.9 — Page DeFi : fallback gratuit sans clé Moralis (best-effort on-chain)
 

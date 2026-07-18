@@ -7,7 +7,7 @@ from fastapi import FastAPI, Query, HTTPException, Request, Depends
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from contextlib import asynccontextmanager
-import httpx, asyncio, jwt, bcrypt, aiosqlite, os, datetime, calendar, time as _time, bisect, math, subprocess
+import httpx, asyncio, jwt, bcrypt, aiosqlite, os, datetime, calendar, time as _time, bisect, math, subprocess, re
 
 # Service imports
 import sys, os
@@ -1840,12 +1840,29 @@ async def latest_version():
     try:
         async with httpx.AsyncClient(timeout=10) as c:
             r = await c.get(
-                "https://api.github.com/repos/LostInTheBugs/Crypto-Wallet-Tracker/tags?per_page=1",
+                "https://api.github.com/repos/LostInTheBugs/Crypto-Wallet-Tracker/tags?per_page=30",
                 headers={"Accept": "application/vnd.github+json"})
             if r.status_code == 200:
                 data = r.json()
-                tag = (data[0]["name"] if data else "").lstrip("v")
-                return {"tag": tag}
+                calver_tags = []
+                semver_tags = []
+                for item in data:
+                    name = item["name"]
+                    if re.match(r"^\d{4}\.\d{2}\.\d+$", name):
+                        calver_tags.append(name)
+                    elif re.match(r"^v?\d+\.\d+\.\d+$", name):
+                        semver_tags.append(name.lstrip("v"))
+                # CalVer tags are always more recent than semver
+                if calver_tags:
+                    def _calver_key(t):
+                        p = t.split(".")
+                        return (int(p[0]), int(p[1]), int(p[2]))
+                    calver_tags.sort(key=_calver_key, reverse=True)
+                    return {"tag": calver_tags[0]}
+                elif semver_tags:
+                    from packaging.version import Version
+                    semver_tags.sort(key=lambda t: Version(t), reverse=True)
+                    return {"tag": semver_tags[0]}
     except Exception:
         pass
     return {"tag": ""}
