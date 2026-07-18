@@ -130,56 +130,148 @@ def _is_spam(sym) -> bool:
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Token category detection (staked vs wallet)
+# Token category detection — fine-grained DeFi classification
 # ═══════════════════════════════════════════════════════════════════
+#
+# Categories (stable labels — keep documented):
+#   "lending"   : Aave aTokens (a+base), Compound cTokens (c+base),
+#                 variableDebt/stableDebt tokens
+#   "lp"        : Liquidity pool receipts — DEX LP, gauge tokens,
+#                 Curve, Velodrome/Aerodrome
+#   "staked"    : Liquid staking tokens (LST/LRT) — receipt tokens
+#                 for staked ETH or other base assets
+#   "vault"     : Auto-compounding yield vaults — Beefy (moo*),
+#                 Yearn (yv*), Stargate (s*...), ERC-4626
+#   "synthetic" : Protocol-issued stablecoins / synthetic assets
+#                 (GHO, crvUSD, feUSD, hyUSD, sDAI, sUSDe, etc.)
+#   "wallet"    : Everything else (regular ERC-20 tokens, native coins)
+#
+# Design rules:
+#  • Conservative — when in doubt, return "wallet".
+#  • No false positives: heuristics must not classify a memecoin as DeFi.
+#  • Case-insensitive, None-tolerant (returns "wallet").
+#  • First-match priority: order matters — staked > lending > vault > lp > synthetic.
 
-# Symbols/types that are known staked/receipt tokens
-_STAKED_PREFIXES = ("a", "moo", "s*")        # aUSDT, mooBIFI, S*ETH
-_STAKED_SUFFIXES = ("-gauge", "-lp")          # veloV2-gauge, UNI-V2-LP
-_STAKED_EXACT = {
+# ── STAKED: Liquid staking tokens (LST/LRT) ──────────────────
+# Receipt tokens representing staked ETH (or other base assets).
+_LST_EXACT = frozenset({
     "wsteth", "reth", "wrseth", "ezeth", "weeth", "rseth",
-    "cbeth", "sfrxeth", "susde", "uni-v2",
-}
-# Tokens starting with "a" followed by a known symbol (aave aTokens)
-_KNOWN_BASES = {"usdt", "usdc", "dai", "eth", "weth", "wbtc", "op", "arb", "matic", "pol", "link", "uni", "aave", "crv", "snx"}
+    "cbeth", "sfrxeth", "steth", "ankreth", "lseth",
+    "sweth", "oseth", "rsteth", "msweth", "wbeth",
+    "wsupereth", "reth2", "rsweth",
+})
+
+# ── LENDING: Aave aTokens, Compound cTokens, debt tokens ─────
+# Generic base symbols recognized as lending collateral when prefixed
+# by 'a' (Aave) or 'c' (Compound).
+_KNOWN_BASES = frozenset({
+    "usdt", "usdc", "dai", "eth", "weth", "wbtc", "op", "arb",
+    "matic", "pol", "link", "uni", "aave", "crv", "snx", "wsteth",
+    "reth", "cbeth", "wmatic", "maticx", "cake", "bal", "ldo",
+    "sushi", "1inch", "ens", "mkr", "gno",
+})
+
+# ── LP: DEX liquidity pool tokens ────────────────────────────
+_LP_EXACT = frozenset({"uni-v2", "slp", "cake-lp", "spooky-lp", "joe-lp"})
+_LP_SUFFIXES = ("-lp", "-gauge")
+
+# ── VAULT: Yield vaults (Beefy, Yearn, Stargate, ERC-4626) ───
+_VAULT_EXACT = frozenset({"yvusdc", "yvdai", "yvusdt", "yveth", "yvweth"})
+
+# ── SYNTHETIC: Protocol stablecoins / synthetic assets ────────
+_SYNTHETIC_EXACT = frozenset({
+    "feusd", "hyusd", "susde", "sdai", "gho", "crvusd",
+    "usde", "fdusd",
+})
+
+# ── Known DeFi categories (used for defi_usd aggregate) ──────
+_DEFI_CATEGORIES = frozenset({"lending", "lp", "staked", "vault", "synthetic"})
+
+
+def _is_defi_category(cat: str) -> bool:
+    """Return True if the category string is a DeFi category (not 'wallet')."""
+    return cat in _DEFI_CATEGORIES
 
 
 def _token_category(symbol) -> str:
-    """Classify a token as 'staked' or 'wallet' based on symbol heuristics. Accepts None."""
+    """Classify a token into a fine-grained DeFi category.
+
+    Returns one of: "lending", "lp", "staked", "vault", "synthetic", "wallet".
+    Conservative: when in doubt, returns "wallet".
+    Accepts None.
+    """
     if not symbol or not isinstance(symbol, str):
         return "wallet"
     sym = symbol.lower().strip()
     if not sym:
         return "wallet"
 
-    # Exact matches
-    if sym in _STAKED_EXACT:
+    # ── 1. STAKED: LST/LRT exact matches ──────────────────────
+    if sym in _LST_EXACT:
         return "staked"
 
-    # Suffix matches
-    for sfx in _STAKED_SUFFIXES:
-        if sym.endswith(sfx):
-            return "staked"
-
-    # Prefix: "a" + known symbol → Aave aToken
+    # ── 2. LENDING: aTokens (Aave) ────────────────────────────
+    #   a + known_base → Aave aToken  (e.g. aUSDT, aETH, aWBTC)
     if sym.startswith("a") and len(sym) > 1:
         base = sym[1:]
         if base in _KNOWN_BASES:
-            return "staked"
+            return "lending"
 
-    # Prefix: "moo" → Beefy
-    if sym.startswith("moo") and len(sym) > 4:
-        # Beefy tokens are mooXxxYyy (moo + at least 1 uppercase char)
-        # Avoid matching spam tokens like "MOON"
+    # ── 3. LENDING: cTokens (Compound) ────────────────────────
+    #   c + known_base → Compound cToken (e.g. cUSDT, cETH)
+    if sym.startswith("c") and len(sym) > 1:
+        base = sym[1:]
+        if base in _KNOWN_BASES:
+            return "lending"
+
+    # ── 4. LENDING: debt tokens (Aave variable/stable debt) ──
+    for debt_prefix in ("variabledebt", "stabledebt", "vardebt"):
+        if sym.startswith(debt_prefix) and len(sym) > len(debt_prefix):
+            return "lending"
+
+    # ── 5. VAULT: Beefy (moo…) ─────────────────────────────────
+    #   Guard: require original symbol (case-sensitive) to start with "moo"
+    #   followed by at least one uppercase character → avoids matching "moon".
+    if sym.startswith("moo") and len(sym) >= 4:
         if len(sym) >= 4 and sym[3].isupper():
-            return "staked"
-        # Also match "moo" followed by known pattern (e.g. mooBIFI)
+            return "vault"  # e.g. mooBIFI, mooVeloV2
         if sym.startswith("moobifi") or sym.startswith("moovelo"):
-            return "staked"
+            return "vault"
 
-    # Prefix: "s*" → Stargate
+    # ── 6. VAULT: Yearn (yv…) ──────────────────────────────────
+    if sym.startswith("yv") and len(sym) > 3:
+        return "vault"
+
+    # ── 7. VAULT: Stargate (s*…) ────────────────────────────────
     if sym.startswith("s*"):
-        return "staked"
+        return "vault"
+
+    # ── 8. VAULT: ERC-4626 vaults ───────────────────────────────
+    if sym.startswith("erc") or sym.startswith("v-"):
+        return "vault"
+
+    # ── 9. LP: exact matches ────────────────────────────────────
+    if sym in _LP_EXACT:
+        return "lp"
+
+    # ── 10. LP: suffix matches (-lp, -gauge) ────────────────────
+    for sfx in _LP_SUFFIXES:
+        if sym.endswith(sfx):
+            return "lp"
+
+    # ── 11. LP: Curve tokens (end with "crv" or "-f") ───────────
+    if sym.endswith("crv") and len(sym) > 3:
+        return "lp"
+    if sym.endswith("-f") and len(sym) > 2:
+        return "lp"
+
+    # ── 12. LP: Velodrome/Aerodrome (vamm-* / samm-*) ──────────
+    if sym.startswith("vamm-") or sym.startswith("samm-"):
+        return "lp"
+
+    # ── 13. SYNTHETIC: exact matches ────────────────────────────
+    if sym in _SYNTHETIC_EXACT:
+        return "synthetic"
 
     return "wallet"
 
@@ -529,16 +621,25 @@ async def _compute_portfolio(address: str) -> dict:
     for p in items:
         chain_totals[p["chain"]] = chain_totals.get(p["chain"], 0) + p["usd_value"]
 
-    # 8. Compute staked aggregate
-    staked_usd = sum(
-        p["usd_value"] for p in items if p.get("category") == "staked"
-    )
+    # 8. Compute DeFi aggregates (all DeFi categories, fine-grained)
+    defi_usd = 0.0
+    defi_breakdown = {}  # per-category subtotals
+    for p in items:
+        cat = p.get("category", "wallet")
+        if _is_defi_category(cat):
+            defi_usd += p["usd_value"]
+            defi_breakdown[cat] = defi_breakdown.get(cat, 0) + p["usd_value"]
+
+    # Round breakdown values to 2 decimals
+    defi_breakdown = {k: round(v, 2) for k, v in defi_breakdown.items()}
 
     # 9. Build response
     result = {
         "address": address,
         "total_usd": round(total, 2),
-        "staked_usd": round(staked_usd, 2),
+        "defi_usd": round(defi_usd, 2),
+        "staked_usd": round(defi_usd, 2),  # backward compat — total DeFi
+        "defi_breakdown": defi_breakdown,
         "token_count": len(items),
         "chain_count": len([r for r in results if r["tokens"]]),
         "chains": {

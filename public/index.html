@@ -213,7 +213,7 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>📦 Version</h2>
-        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.11.25</strong></p>
+        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.11.26</strong></p>
         <p id="verStatus" style="font-size:.85rem"></p>
         <button id="updateBtn" class="hidden" onclick="doUpdate()" style="margin-top:8px;background:#238636;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:.85rem">🔄 Mettre à jour</button>
         <p id="updateMsg" style="margin-top:8px;font-size:.8rem;color:#f0c040"></p>
@@ -266,6 +266,18 @@ var T = {
     updateBtn: "🔄 Mettre à jour", updating: "⏳ Mise à jour en cours...",
     verCheckError: "❌ Impossible de vérifier",
     noData: "📭 Aucune donnée",
+    defiTotal: "Total DeFi",
+    defiLending: "Prêts (Lending)",
+    defiLp: "Liquidité (LP)",
+    defiStaked: "Staking (LST)",
+    defiVault: "Vaults / Yield",
+    defiSynthetic: "Synthétiques",
+    defiNone: "Aucune position DeFi",
+    staked: "staké",
+    lending: "prêt",
+    lp: "LP",
+    vault: "vault",
+    synthetic: "synth",
   },
   en: {
     dashboard: "Dashboard", stats: "Statistics", tokens: "Token Details", nfts: "NFTs",
@@ -288,6 +300,18 @@ var T = {
     updateBtn: "🔄 Update now", updating: "⏳ Updating...",
     verCheckError: "❌ Unable to check",
     noData: "📭 No data",
+    defiTotal: "DeFi Total",
+    defiLending: "Lending",
+    defiLp: "Liquidity Pools",
+    defiStaked: "Liquid Staking",
+    defiVault: "Vaults / Yield",
+    defiSynthetic: "Synthetics",
+    defiNone: "No DeFi positions",
+    staked: "staked",
+    lending: "lending",
+    lp: "LP",
+    vault: "vault",
+    synthetic: "synth",
   }
 };
 function t(key) { return (T[LANG] && T[LANG][key]) || key; }
@@ -538,10 +562,10 @@ async function loadAllWallets(force){
   try{
     var promises=wallets.map(function(w){return fetch("/api/portfolio?address="+w.address+(force?"&force=true":"")).then(function(r){return r.json()})});
     var results=await Promise.all(promises);
-    var totalUsd=0,stakedUsd=0,allTokens=[],chainTotals={},chainSet={},allErrors=[];
-    for(var i=0;i<results.length;i++){var d=results[i],w=wallets[i];totalUsd+=d.total_usd||0;stakedUsd+=d.staked_usd||0;for(var j=0;j<d.tokens.length;j++){var t=d.tokens[j];t._wallet=w.label||w.address.slice(0,10)+"...";allTokens.push(t)}for(var c in d.chains){if(d.chains.hasOwnProperty(c)){chainTotals[c]=(chainTotals[c]||0)+d.chains[c];chainSet[c]=true}}if(d.errors)for(var k=0;k<d.errors.length;k++)allErrors.push({wallet:w.label||w.address.slice(0,10)+"...",chain:d.errors[k].chain,error:d.errors[k].error})}
+    var totalUsd=0,defiUsd=0,allTokens=[],chainTotals={},chainSet={},allErrors=[],defiBreakdown={};
+    for(var i=0;i<results.length;i++){var d=results[i],w=wallets[i];totalUsd+=d.total_usd||0;defiUsd+=d.defi_usd||d.staked_usd||0;for(var j=0;j<d.tokens.length;j++){var t=d.tokens[j];t._wallet=w.label||w.address.slice(0,10)+"...";allTokens.push(t)}for(var c in d.chains){if(d.chains.hasOwnProperty(c)){chainTotals[c]=(chainTotals[c]||0)+d.chains[c];chainSet[c]=true}}if(d.errors)for(var k=0;k<d.errors.length;k++)allErrors.push({wallet:w.label||w.address.slice(0,10)+"...",chain:d.errors[k].chain,error:d.errors[k].error});if(d.defi_breakdown)for(var dc in d.defi_breakdown){if(d.defi_breakdown.hasOwnProperty(dc))defiBreakdown[dc]=(defiBreakdown[dc]||0)+d.defi_breakdown[dc]}}
     allTokens.sort(function(a,b){return b.usd_value-a.usd_value});
-    var agg={total_usd:Math.round(totalUsd*100)/100,staked_usd:Math.round(stakedUsd*100)/100,token_count:allTokens.length,chain_count:Object.keys(chainSet).length,chains:chainTotals,tokens:allTokens.slice(0,200),errors:allErrors.slice(0,10)};
+    var agg={total_usd:Math.round(totalUsd*100)/100,defi_usd:Math.round(defiUsd*100)/100,staked_usd:Math.round(defiUsd*100)/100,defi_breakdown:defiBreakdown,token_count:allTokens.length,chain_count:Object.keys(chainSet).length,chains:chainTotals,tokens:allTokens.slice(0,200),errors:allErrors.slice(0,10)};
     pfCacheWrite("ALL",agg);
     if(activeWallet!="ALL")return; // la vue a changé pendant le fetch, ne pas écraser
     renderResult(agg);hideCacheAge();
@@ -555,7 +579,7 @@ function renderResult(d){
     '<div class="stat-card"><div class="label">Tokens</div><div class="value">'+d.token_count+'</div></div>'+
     '<div class="stat-card"><div class="label">Chaînes actives</div><div class="value">'+d.chain_count+'</div></div>'+
     '<div class="stat-card"><div class="label">Wallets</div><div class="value">'+(activeWallet=="ALL"?wallets.length:1)+'</div></div>'+
-    (d.staked_usd>0?'<div class="stat-card" style="border-left:2px solid #40c463"><div class="label">🔒 Staké</div><div class="value" style="color:#40c463">'+fmtCurr(d.staked_usd)+'</div></div>':'');
+    (d.defi_usd>0?'<div class="stat-card" style="border-left:2px solid #40c463"><div class="label">🔒 DeFi</div><div class="value" style="color:#40c463">'+fmtCurr(d.defi_usd)+'</div></div>':'');
   // Also add gas fees card (id stable → pas de doublon quand renderResult est appelé deux fois : cache puis frais)
   fetch("/api/transactions/gas-total").then(function(r){return r.json()}).then(function(gd){
     var old=document.getElementById("gasCard");if(old)old.remove();
@@ -584,10 +608,42 @@ function renderResult(d){
 
 function renderTokenTable(d){
   var sym=currSymbol(),showWallet=activeWallet=="ALL"&&wallets.length>1;
-  var html='<div class="card"><h2>📋 Détail tokens <span style="font-weight:400;font-size:.7rem;color:#6e7681">('+d.token_count+' tokens)</span></h2><table><thead><tr><th>Token</th>'+(showWallet?'<th>Wallet</th>':'')+'<th>Chaîne</th><th>Balance</th><th>Prix</th><th>'+sym+' Valeur</th><th>'+sym+' PNL</th></tr></thead><tbody>';
+  var html='<div class="card">';
+
+  // ── DeFi breakdown section ────────────────────────────────────
+  var brk=d.defi_breakdown||{};
+  var defiKeys=["lending","lp","staked","vault","synthetic"];
+  var defiHasAny=false;
+  for(var di=0;di<defiKeys.length;di++){if(brk[defiKeys[di]]&&brk[defiKeys[di]]>0){defiHasAny=true;break}}
+  if(defiHasAny){
+    var defiLabels={lending:"defiLending",lp:"defiLp",staked:"defiStaked",vault:"defiVault",synthetic:"defiSynthetic"};
+    var defiColors={lending:"#4dabf7",lp:"#da77f2",staked:"#40c463",vault:"#f0c040",synthetic:"#ff922b"};
+    html+='<h2>🔒 '+t('defiTotal')+' <span style="font-weight:400;font-size:.7rem;color:#6e7681">('+(d.defi_usd?fmtCurr(d.defi_usd):fmtCurr(0))+'</span>)</h2>'+
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">';
+    var defiCountByCat={};for(var di=0;di<d.tokens.length;di++){var tc=d.tokens[di].category||"wallet";if(defiKeys.indexOf(tc)!=-1)defiCountByCat[tc]=(defiCountByCat[tc]||0)+1}
+    for(var di=0;di<defiKeys.length;di++){var ck=defiKeys[di];var bv=brk[ck]||0;if(bv>0){
+      var cnt=defiCountByCat[ck]||0;
+      html+='<div style="background:var(--bg);border-left:3px solid '+defiColors[ck]+';border-radius:6px;padding:8px 10px;min-width:130px">'+
+        '<div style="font-size:.7rem;color:#6e7681">'+t(defiLabels[ck])+'</div>'+
+        '<div style="font-weight:700;color:var(--title);font-size:.95rem">'+fmtCurr(bv)+'</div>'+
+        '<div style="font-size:.65rem;color:#6e7681">'+cnt+' token'+(cnt>1?'s':'')+'</div>'+
+      '</div>';
+    }}
+    html+='</div>';
+  } else {
+    html+='<div style="color:#6e7681;font-size:.8rem;margin-bottom:10px">'+t('defiNone')+'</div>';
+  }
+
+  // ── Token table ──────────────────────────────────────────────
+  html+='<h2>📋 Détail tokens <span style="font-weight:400;font-size:.7rem;color:#6e7681">('+d.token_count+' tokens)</span></h2><table><thead><tr><th>Token</th>'+(showWallet?'<th>Wallet</th>':'')+'<th>Chaîne</th><th>Balance</th><th>Prix</th><th>'+sym+' Valeur</th><th>'+sym+' PNL</th></tr></thead><tbody>';
+  var defiCatBadge={lending:'<span style="background:#1a3a5c;color:#4dabf7;font-size:.6rem;padding:1px 5px;border-radius:3px;margin-left:4px">'+t('lending')+'</span>',
+    lp:'<span style="background:#2d1a3a;color:#da77f2;font-size:.6rem;padding:1px 5px;border-radius:3px;margin-left:4px">'+t('lp')+'</span>',
+    staked:'<span style="background:#14532d;color:#4ade80;font-size:.6rem;padding:1px 5px;border-radius:3px;margin-left:4px">'+t('staked')+'</span>',
+    vault:'<span style="background:#3d3520;color:#f0c040;font-size:.6rem;padding:1px 5px;border-radius:3px;margin-left:4px">'+t('vault')+'</span>',
+    synthetic:'<span style="background:#3d2a1a;color:#ff922b;font-size:.6rem;padding:1px 5px;border-radius:3px;margin-left:4px">'+t('synthetic')+'</span>'};
   for(var i=0;i<d.tokens.length;i++){var t=d.tokens[i];var icon=t.icon?'<img class="ti" src="'+esc(t.icon)+'" onerror="this.style.display=\'none\'">':'';var pf=sym+(t.usd_price<0.01?t.usd_price.toFixed(6):t.usd_price.toFixed(4));
     var pnlKnown=(t.pnl!==null&&t.pnl!==undefined);var pnl=pnlKnown?t.pnl:0;var pnlColor=pnlKnown?(pnl>=0?"#40c463":"#f85149"):"#6e7681";var pnlStr=pnlKnown?((pnl>=0?"+":"")+sym+Math.abs(pnl).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})):"—";
-    var catBadge=t.category==="staked"?' <span style="background:#14532d;color:#4ade80;font-size:.6rem;padding:1px 5px;border-radius:3px;margin-left:4px">staked</span>':'';html+='<tr><td>'+icon+'<b>'+esc(t.name)+'</b> <span style="color:#6e7681;font-size:.75rem">'+esc(t.symbol)+'</span>'+catBadge+'</td>'+(showWallet?'<td style="font-size:.75rem;color:#6e7681">'+esc(t._wallet)+'</td>':'')+'<td class="chain">'+t.chain+'</td><td>'+t.balance.toLocaleString()+'</td><td>'+pf+'</td><td class="usd">'+fmtCurr(t.usd_value)+'</td><td class="usd" style="color:'+pnlColor+'">'+pnlStr+'</td></tr>'}
+    var catBadge=defiCatBadge[t.category]||'';html+='<tr><td>'+icon+'<b>'+esc(t.name)+'</b> <span style="color:#6e7681;font-size:.75rem">'+esc(t.symbol)+'</span>'+catBadge+'</td>'+(showWallet?'<td style="font-size:.75rem;color:#6e7681">'+esc(t._wallet)+'</td>':'')+'<td class="chain">'+t.chain+'</td><td>'+t.balance.toLocaleString()+'</td><td>'+pf+'</td><td class="usd">'+fmtCurr(t.usd_value)+'</td><td class="usd" style="color:'+pnlColor+'">'+pnlStr+'</td></tr>'}
   html+='</tbody></table></div>';
   document.getElementById("pageTokens").innerHTML=html;
 }

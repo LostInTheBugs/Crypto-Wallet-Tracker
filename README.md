@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — v2.11.25
+# Crypto Wallet Tracker — v2.11.26
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -12,7 +12,7 @@ Dashboard agrégé, graphiques d'évolution, historique des prix via DefiLlama, 
 - 🪙 **Solde natif** — ETH/POL/xDAI/CELO/XTZ/METIS récupéré en parallèle des tokens (appel API natif)
 - 💰 **Valorisation USD/€** — temps réel via Blockscout, conversion EUR (Frankfurter)
 - 🦙 **Fallback prix DefiLlama** — si Blockscout ne donne pas de prix, appel batch à l'API gratuite `coins.llama.fi/prices/current`
-- 🔒 **Détection tokens stakés** — badge visuel + agrégat `staked_usd` (LST, aTokens, Beefy, Stargate, LP tokens)
+- 🔒 **Détection DeFi best-effort** — catégorisation fine (lending, LP, staked, vault, synthetic) via heuristiques sur les symboles, aucun service tiers, 100 % gratuit. Section DeFi dédiée avec badges colorés et sous-totaux par catégorie
 - 👥 **Comptes utilisateurs** — inscription, connexion, wallets privés (bcrypt + sessions)
 - 📊 **Dashboard** — valeur totale, répartition par chaîne (donut), cartes PNL Total / PNL 24h, mini-graphe, gaz cumulé
 - 📈 **Statistiques** — courbes valeur/coût d'achat, barres PNL journalier (7j/30j/90j/1a/All), filtrable par wallet/token/chaîne
@@ -124,6 +124,12 @@ Crypto-Wallet-Tracker/
 ---
 
 ## 📋 Changelog
+
+### v2.11.26 — DeFi best-effort gratuite
+- **Catégorisation DeFi fine** — détection heuristique de 5 catégories (lending, LP, staked/LST, vault/yield, synthetic) à partir des symboles de tokens, sans aucune API tierce.
+- **Section DeFi dédiée** — dans l'onglet « Détail tokens », encart récapitulatif avec sous-totaux par catégorie et badges colorés (bleu=lending, violet=LP, vert=staked, jaune=vault, orange=synthetic).
+- Carte dashboard : « 🔒 Staké » → « 🔒 DeFi » (agrège toutes les catégories DeFi).
+- Rétro-compatibilité : `staked_usd` toujours présent (égale `defi_usd`), `defi_breakdown` ajouté par catégorie.
 
 ### v2.11.25 — Page NFTs
 - **Nouvelle page NFTs** — grille d'images des NFT (ERC-721 / ERC-1155 / ERC-404) détenus par le(s) wallet(s), agrégée sur toutes les chaînes via l'API Blockscout.
