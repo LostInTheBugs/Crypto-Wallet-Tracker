@@ -141,6 +141,7 @@ tr.tm-off td{opacity:.45}
   <h2>🪙 Tracker</h2>
   <a href="#" class="active" onclick="switchPage('dashboard')" data-page="dashboard">📊 <span>Dashboard</span></a>
   <a href="#" onclick="switchPage('stats')" data-page="stats">📈 <span>Statistiques</span></a>
+  <a href="#" onclick="switchPage('analytics')" data-page="analytics">📊 <span>Analytics</span></a>
   <a href="#" onclick="switchPage('tokens')" data-page="tokens">📋 <span>Détail tokens</span></a>
   <a href="#" onclick="switchPage('defi')" data-page="defi">🏦 <span>DeFi</span></a>
   <a href="#" onclick="switchPage('nfts')" data-page="nfts">🖼️ <span>NFTs</span></a>
@@ -227,6 +228,7 @@ tr.tm-off td{opacity:.45}
     </div>
 
     <div id="pageTokens" class="hidden"></div>
+    <div id="pageAnalytics" class="hidden"></div>
     <div id="pageDefiPos" class="hidden"></div>
     <div id="pageNFTs" class="hidden"></div>
     <div id="pageTxns" class="hidden">
@@ -256,7 +258,7 @@ tr.tm-off td{opacity:.45}
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>📦 Version</h2>
-        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">2026.07.2</strong></p>
+        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">2026.07.3</strong></p>
         <p id="verStatus" style="font-size:.85rem"></p>
         <button id="updateBtn" class="hidden" onclick="doUpdate()" style="margin-top:8px;background:#238636;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:.85rem">🔄 Mettre à jour</button>
         <p id="updateMsg" style="margin-top:8px;font-size:.8rem;color:#f0c040"></p>
@@ -384,6 +386,28 @@ var T = {
     dpRefresh: "Actualiser",
     dpPositions: "position(s)",
     dpFreeMode: "Mode gratuit (on-chain) — ajoute une clé Moralis dans Réglages → Clés API externes pour les récompenses, l'APY et le health factor.",
+    analytics: "Analytics",
+    anLoading: "Chargement des analytics…",
+    anError: "Erreur lors du chargement des analytics",
+    anChange24h: "Variation 24h",
+    anChange7d: "Variation 7 jours",
+    anChange30d: "Variation 30 jours",
+    anByChain: "Répartition par chaîne",
+    anByCategory: "Répartition par catégorie",
+    anByAsset: "Répartition par actif",
+    anPerformers: "Meilleurs / Pires performers",
+    anBest: "Top gagnants",
+    anWorst: "Top perdants",
+    anBenchmark: "Portefeuille vs BTC / ETH",
+    anPortfolio: "Portefeuille",
+    anOthers: "Autres",
+    anNoPerf: "Pas assez d'historique de prix",
+    anToken: "Token",
+    anValue: "Valeur",
+    anChangeCol: "Variation",
+    anCatWallet: "Wallet",
+    anInsufficient: "Historique insuffisant",
+    anR24: "24h", anR7: "7j", anR30: "30j",
   },
   en: {
     dashboard: "Dashboard", stats: "Statistics", tokens: "Token Details", nfts: "NFTs",
@@ -480,6 +504,28 @@ var T = {
     dpRefresh: "Refresh",
     dpPositions: "position(s)",
     dpFreeMode: "Free mode (on-chain) — add a Moralis key in Settings → External API Keys to get rewards, APY and health factor.",
+    analytics: "Analytics",
+    anLoading: "Loading analytics…",
+    anError: "Error while loading analytics",
+    anChange24h: "24h change",
+    anChange7d: "7-day change",
+    anChange30d: "30-day change",
+    anByChain: "Allocation by chain",
+    anByCategory: "Allocation by category",
+    anByAsset: "Allocation by asset",
+    anPerformers: "Best / Worst performers",
+    anBest: "Top gainers",
+    anWorst: "Top losers",
+    anBenchmark: "Portfolio vs BTC / ETH",
+    anPortfolio: "Portfolio",
+    anOthers: "Others",
+    anNoPerf: "Not enough price history",
+    anToken: "Token",
+    anValue: "Value",
+    anChangeCol: "Change",
+    anCatWallet: "Wallet",
+    anInsufficient: "Insufficient history",
+    anR24: "24h", anR7: "7d", anR30: "30d",
   }
 };
 function t(key) { return (T[LANG] && T[LANG][key]) || key; }
@@ -487,7 +533,7 @@ function applyLang() {
   document.getElementById("setLang").value = LANG;
   // Update sidebar
   var links = document.querySelectorAll(".sidebar a");
-  var keys = ["dashboard","stats","tokens","defi","nfts","txns","wallets","settings"];
+  var keys = ["dashboard","stats","analytics","tokens","defi","nfts","txns","wallets","settings"];
   for (var i=0;i<Math.min(links.length,keys.length);i++) {
     var span = links[i].querySelector("span");
     if (span) span.textContent = t(keys[i]);
@@ -523,6 +569,7 @@ function changeLang() {
 var currentPage = "dashboard";
 var authMode="login", wallets=[], activeWallet="ALL", eurRate=null, currency=localStorage.getItem("currency")||"usd";
 var pieChart=null, lineChart=null, miniChart=null, pnlChart=null, lastResult=null, loadingAddr=null, chartRange="all", quickRange="week", pnlRange="30";
+var anRange="7d", anCharts={}, anLastData=null;
 
 // ── Tri des colonnes (v2.12.3) — 100 % côté client ─────────────
 // Un état de tri par table : act (tokens actifs), inact (tokens inactifs),
@@ -591,6 +638,7 @@ function switchPage(page) {
   document.querySelector('[data-page="'+page+'"]').classList.add("active");
   document.getElementById("pageDashboard").classList.toggle("hidden", page!="dashboard");
   document.getElementById("pageStats").classList.toggle("hidden", page!="stats");
+  document.getElementById("pageAnalytics").classList.toggle("hidden", page!="analytics");
   document.getElementById("pageTokens").classList.toggle("hidden", page!="tokens");
   document.getElementById("pageDefiPos").classList.toggle("hidden", page!="defi");
   document.getElementById("pageNFTs").classList.toggle("hidden", page!="nfts");
@@ -599,6 +647,7 @@ function switchPage(page) {
   document.getElementById("pageSettings").classList.toggle("hidden", page!="settings");
   if (page=="dashboard" && lastResult) { renderResult(lastResult); drawMiniChart(); }
   if (page=="stats") { populateFilters(); drawLineChart(); drawPnlChart(); }
+  if (page=="analytics") loadAnalytics();
   if (page=="txns") loadTransactions();
   if (page=="tokens" && lastResult) renderTokenTable(lastResult);
   if (page=="defi") loadDefiPositions();
@@ -1679,6 +1728,136 @@ async function tmDelManual(idx){
     loadManualTokens();
     loadView();
   }catch(e){console.error("tmDelManual",e)}
+}
+
+// ── Analytics (2026.07.3) ─────────────────────────────────
+var AN_CHAIN_COLORS={"ethereum":"#627eea","optimism":"#ff0420","base":"#0052ff","arbitrum":"#28a0f0","polygon":"#8247e5","gnosis":"#04795b","zksync":"#1573fe","celo":"#35d07f","scroll":"#ebc28e","soneium":"#7b3fe4","ink":"#8b5cf6","mode":"#a78bfa","unichain":"#f472b6","lisk":"#2dd4bf","linea":"#34d399","etherlink":"#fbbf24","metis":"#f87171","manta":"#38bdf8","bob":"#fb923c","zora":"#a3e635","worldchain":"#e879f9"};
+var AN_PALETTE=["#4dabf7","#40c463","#f0c040","#f85149","#a371f7","#f78166","#2dd4bf","#e879f9","#fbbf24","#34d399","#f472b6","#8b5cf6","#6e7681"];
+var AN_CAT_COLORS={"wallet":"#4dabf7","lending":"#40c463","staked":"#a371f7","lp":"#f0c040","vault":"#f78166","synthetic":"#e879f9"};
+
+function anCatLabel(k){
+  var map={wallet:t("anCatWallet"),lending:t("defiLending"),staked:t("defiStaked"),lp:t("defiLp"),vault:t("defiVault"),synthetic:t("defiSynthetic")};
+  return map[k]||k;
+}
+function anPct(p){if(p===null||p===undefined||isNaN(p))return"—";return(p>=0?"+":"")+Number(p).toFixed(2)+"%"}
+function anPctColor(p){if(p===null||p===undefined||isNaN(p))return"#6e7681";return p>=0?"#40c463":"#f85149"}
+function anDestroyCharts(){for(var k in anCharts){if(anCharts.hasOwnProperty(k)&&anCharts[k]){try{anCharts[k].destroy()}catch(e){}anCharts[k]=null}}}
+function anSetRange(r,el){anRange=r;loadAnalytics()}
+
+function anChgCard(label,c){
+  var has=c&&typeof c==="object"&&c.abs_usd!==null&&c.abs_usd!==undefined;
+  var inner;
+  if(has){
+    var sign=(c.abs_usd||0)<0?"-":"+";
+    inner='<div class="value" style="color:'+anPctColor(c.pct)+'">'+sign+fmtCurr(Math.abs(c.abs_usd||0))+' <span style="font-size:.72rem">('+esc(anPct(c.pct))+')</span></div>';
+  }else{
+    inner='<div class="value" style="color:#6e7681">—</div><div style="color:#6e7681;font-size:.65rem;margin-top:2px">'+esc(t("anInsufficient"))+'</div>';
+  }
+  return '<div class="stat-card"><div class="label">'+esc(label)+'</div>'+inner+'</div>';
+}
+
+function anPerfRows(list){
+  if(!Array.isArray(list)||!list.length)return '<tr><td colspan="3" style="color:#6e7681;text-align:center;padding:14px">'+esc(t("anNoPerf"))+'</td></tr>';
+  var out="",i;
+  for(i=0;i<list.length;i++){
+    var p=list[i]||{};
+    out+='<tr><td style="font-weight:600">'+esc(p.symbol||"?")+'</td><td>'+fmtCurr(p.usd_value||0)+'</td><td style="color:'+anPctColor(p.pct)+';font-weight:600">'+esc(anPct(p.pct))+'</td></tr>';
+  }
+  return out;
+}
+
+function anDrawDonut(canvasId,chartKey,entries,labelFn,colorFn){
+  if(anCharts[chartKey]){try{anCharts[chartKey].destroy()}catch(e){}anCharts[chartKey]=null}
+  var cv=document.getElementById(canvasId);
+  if(!cv)return;
+  var list=Array.isArray(entries)?entries:[];
+  var labels=[],vals=[],bg=[],i;
+  for(i=0;i<list.length;i++){
+    var en=list[i]||{};
+    var v=Number(en.usd_value||0);
+    if(!(v>0))continue;
+    labels.push(labelFn(en));
+    vals.push(Math.round(toCurr(v)*100)/100);
+    bg.push(colorFn(en,i));
+  }
+  if(!vals.length){if(cv.parentElement)cv.parentElement.innerHTML='<div style="text-align:center;padding:40px;color:#6e7681">'+esc(t("noData"))+'</div>';return}
+  var ctx=cv.getContext("2d");
+  anCharts[chartKey]=new Chart(ctx,{type:"doughnut",data:{labels:labels,datasets:[{data:vals,backgroundColor:bg,borderColor:"#0a0e14",borderWidth:2}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:"right",labels:{color:"#c9d1d9",padding:10,font:{size:10},generateLabels:function(chart){var dd=chart.data;return dd.labels.map(function(l,idx){var v=dd.datasets[0].data[idx];var tot=dd.datasets[0].data.reduce(function(a,b){return a+b},0);var pc=tot>0?Math.round(v/tot*100):0;return{text:l+"  "+pc+"%",fillStyle:dd.datasets[0].backgroundColor[idx],strokeStyle:dd.datasets[0].backgroundColor[idx],fontColor:"#c9d1d9",index:idx}})}}}}}});
+}
+
+async function loadAnalytics(){
+  var el=document.getElementById("pageAnalytics");
+  if(!el)return;
+  anDestroyCharts();
+  if(!wallets.length){el.innerHTML='<div class="card"><h2>📊 Analytics</h2><div class="loading">'+esc(t("noWallet"))+'</div></div>';return}
+  el.innerHTML='<div class="card"><div class="loading">'+esc(t("anLoading"))+'</div></div>';
+  try{
+    var r=await fetch("/api/analytics?address="+encodeURIComponent(activeWallet)+"&range="+encodeURIComponent(anRange));
+    if(!r.ok)throw new Error("HTTP "+r.status);
+    var d=await r.json();
+    if(currentPage!="analytics")return; // la vue a changé pendant le fetch
+    anLastData=d;
+    renderAnalytics(d);
+  }catch(e){console.error("loadAnalytics",e);el.innerHTML='<div class="card"><div class="error">'+esc(t("anError"))+'</div></div>'}
+}
+
+function renderAnalytics(d){
+  var el=document.getElementById("pageAnalytics");
+  if(!el||!d||typeof d!=="object")return;
+  var alloc=d.allocation||{};
+  var chg=d.change||{};
+  var perf=d.performers||{};
+  var html="";
+
+  // En-tête + sélecteur de période
+  html+='<div class="card" style="margin-bottom:16px"><h2>📊 Analytics'+
+    '<span style="display:inline-flex;gap:4px;margin-left:12px">'+
+    '<span class="range-pill'+(anRange=="24h"?" active":"")+'" onclick="anSetRange(\'24h\',this)">'+esc(t("anR24"))+'</span>'+
+    '<span class="range-pill'+(anRange=="7d"?" active":"")+'" onclick="anSetRange(\'7d\',this)">'+esc(t("anR7"))+'</span>'+
+    '<span class="range-pill'+(anRange=="30d"?" active":"")+'" onclick="anSetRange(\'30d\',this)">'+esc(t("anR30"))+'</span>'+
+    '</span></h2>'+
+    '<div class="grid" style="margin-top:10px">'+
+    anChgCard(t("anChange24h"),chg["24h"])+
+    anChgCard(t("anChange7d"),chg["7d"])+
+    anChgCard(t("anChange30d"),chg["30d"])+
+    '</div>';
+
+  // Benchmark (best-effort, seulement si présent)
+  if(d.benchmark&&typeof d.benchmark==="object"){
+    var b=d.benchmark;
+    html+='<div style="margin-top:10px;font-size:.78rem;color:#8b949e">🆚 '+esc(t("anBenchmark"))+' — '+
+      esc(t("anPortfolio"))+': <span style="color:'+anPctColor(b.portfolio_pct)+';font-weight:600">'+esc(anPct(b.portfolio_pct))+'</span>'+
+      ' · BTC: <span style="color:'+anPctColor(b.btc_pct)+';font-weight:600">'+esc(anPct(b.btc_pct))+'</span>'+
+      ' · ETH: <span style="color:'+anPctColor(b.eth_pct)+';font-weight:600">'+esc(anPct(b.eth_pct))+'</span></div>';
+  }
+  html+='</div>';
+
+  // Donuts répartition
+  html+='<div class="row">'+
+    '<div class="card"><h2>⛓️ '+esc(t("anByChain"))+'</h2><div class="chart-wrap" style="height:260px"><canvas id="anChainChart"></canvas></div></div>'+
+    '<div class="card"><h2>🗂️ '+esc(t("anByCategory"))+'</h2><div class="chart-wrap" style="height:260px"><canvas id="anCatChart"></canvas></div></div>'+
+    '</div>'+
+    '<div class="row" style="margin-top:16px">'+
+    '<div class="card"><h2>🪙 '+esc(t("anByAsset"))+'</h2><div class="chart-wrap" style="height:280px"><canvas id="anAssetChart"></canvas></div></div>'+
+    '<div class="card"><h2>🏆 '+esc(t("anPerformers"))+'</h2>'+
+    '<div style="display:flex;gap:18px;flex-wrap:wrap">'+
+    '<div style="flex:1;min-width:220px"><h3 style="color:#40c463;font-size:.8rem;margin:6px 0">▲ '+esc(t("anBest"))+'</h3>'+
+    '<table style="width:100%"><thead><tr><th>'+esc(t("anToken"))+'</th><th>'+esc(t("anValue"))+'</th><th>'+esc(t("anChangeCol"))+'</th></tr></thead><tbody>'+anPerfRows(perf.best)+'</tbody></table></div>'+
+    '<div style="flex:1;min-width:220px"><h3 style="color:#f85149;font-size:.8rem;margin:6px 0">▼ '+esc(t("anWorst"))+'</h3>'+
+    '<table style="width:100%"><thead><tr><th>'+esc(t("anToken"))+'</th><th>'+esc(t("anValue"))+'</th><th>'+esc(t("anChangeCol"))+'</th></tr></thead><tbody>'+anPerfRows(perf.worst)+'</tbody></table></div>'+
+    '</div></div></div>';
+
+  el.innerHTML=html;
+
+  anDrawDonut("anChainChart","chain",alloc.by_chain,
+    function(en){var k=String(en.key||"?");return k.charAt(0).toUpperCase()+k.slice(1)},
+    function(en,i){return AN_CHAIN_COLORS[en.key]||AN_PALETTE[i%AN_PALETTE.length]});
+  anDrawDonut("anCatChart","cat",alloc.by_category,
+    function(en){return anCatLabel(String(en.key||"?"))},
+    function(en,i){return AN_CAT_COLORS[en.key]||AN_PALETTE[i%AN_PALETTE.length]});
+  anDrawDonut("anAssetChart","asset",alloc.by_asset,
+    function(en){return en.symbol==="OTHERS"?t("anOthers"):String(en.symbol||"?")},
+    function(en,i){return en.symbol==="OTHERS"?"#6e7681":AN_PALETTE[i%AN_PALETTE.length]});
 }
 
 // ── Debug Panel ──────────────────────────────────────────

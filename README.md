@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — 2026.07.2
+# Crypto Wallet Tracker — 2026.07.3
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -127,6 +127,13 @@ Crypto-Wallet-Tracker/
 ---
 
 ## 📋 Changelog
+
+### 2026.07.3 — Page Analytics (répartition & performance)
+
+- **Nouvelle page 📊 Analytics** (menu latéral) : vue synthétique de la répartition et de la performance du portefeuille — première release de la roadmap.
+- **Endpoint `GET /api/analytics?address=…&range=24h|7d|30d`** (address = wallet ou `ALL`) : allocation par chaîne / catégorie (wallet, lending, staked, LP, vault, synthetic) / actif (top 12 + « Autres »), variations de la valeur totale sur 24h/7j/30j (agrégat `daily_history`), meilleurs/pires performers par variation de **prix** (neutralise les apports/retraits, spam et poussière ignorés), benchmark best-effort Portefeuille vs BTC/ETH (DefiLlama). Tokens **actifs** uniquement. Défensif : historique insuffisant → `null`/« — », jamais de 500. Cache serveur 300 s par (user, address, range).
+- **UI** : 3 cartes de variation (vert/rouge, « — » si indispo), 3 donuts Chart.js (thème sombre, couleurs chaînes cohérentes avec le dashboard), tableau Top gagnants / Top perdants, sélecteur de période 24h/7j/30j, i18n FR/EN, états vides propres, destruction propre des instances Chart.js au rechargement.
+- Tests : `python3 tests/test_analytics_service.py` (48 assertions) + `node tests/smoke_analytics_2026.07.3.js` (smoke runtime du rendu). Pages Stats/Dashboard/portfolio inchangées (rétro-compat totale).
 
 ### 2026.07.2 — En-tête Cache-Control no-cache sur le SPA (fin des versions périmées en cache navigateur)
 

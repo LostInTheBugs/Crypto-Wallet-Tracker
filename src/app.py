@@ -37,6 +37,11 @@ from services.defi_service import (
     MORALIS_DEFI_CHAINS, normalize_defi_positions, summarize_defi_positions,
     build_best_effort_positions,
 )
+from services.analytics_service import (
+    filter_active_tokens, build_allocation, compute_change_periods,
+    compute_performers, pick_closest, pct_from_price_points,
+    TOLERANCE_DAYS as AN_TOLERANCE_DAYS,
+)
 
 # ── Logging configuration ───────────────────────────────────────
 import logging
@@ -2083,6 +2088,197 @@ async def defi_positions(address: str = Query(...), force: bool = Query(False), 
         data["error"] = " ; ".join(errors[:3])[:300]
     _defi_cache[cache_key] = {"data": data, "ts": now}
     return data
+
+
+# ── Analytics (2026.07.3) ───────────────────────────────────────
+
+_analytics_cache: dict = {}   # (user_id, address_lower, range) -> {"data","ts"}
+_ANALYTICS_CACHE_TTL = 300    # 5 min — cache serveur court par (user, address, range)
+_benchmark_cache: dict = {}   # days -> {"data","ts"} (indépendant de l'utilisateur)
+
+ANALYTICS_RANGES = {"24h": 1, "7d": 7, "30d": 30}
+
+
+async def _fetch_benchmark_pcts(days: int):
+    """Variation % de BTC et ETH sur `days` jours via DefiLlama chart.
+
+    Best-effort : timeout court, toute erreur → None (le bloc benchmark est
+    alors omis proprement de la réponse). Cache 300 s partagé entre users.
+    """
+    now = _time.time()
+    entry = _benchmark_cache.get(days)
+    if entry and (now - entry["ts"]) < _ANALYTICS_CACHE_TTL:
+        return entry["data"]
+    data = None
+    try:
+        start = int(now) - days * 86400 - 43200
+        url = (f"https://coins.llama.fi/chart/coingecko:bitcoin,coingecko:ethereum"
+               f"?start={start}&span={days + 1}&period=1d")
+        async with httpx.AsyncClient(timeout=8) as client:
+            r = await client.get(url)
+        if r.status_code == 200:
+            coins = (r.json() or {}).get("coins") or {}
+            btc = pct_from_price_points((coins.get("coingecko:bitcoin") or {}).get("prices") or [])
+            eth = pct_from_price_points((coins.get("coingecko:ethereum") or {}).get("prices") or [])
+            if btc is not None or eth is not None:
+                data = {"btc_pct": btc, "eth_pct": eth}
+    except Exception as e:
+        logging.getLogger("crypto.analytics").info(f"[ANALYTICS] benchmark indisponible: {e}")
+    _benchmark_cache[days] = {"data": data, "ts": now}
+    return data
+
+
+@app.get("/api/analytics")
+async def analytics(address: str = Query(...), range: str = Query("7d"),
+                    user=Depends(get_current_user)):
+    """Analytics du portefeuille — répartition & performance (2026.07.3).
+
+    • address: adresse 0x… ou "ALL" (agrège tous les wallets de l'utilisateur,
+      même convention que /api/snapshots?wallet=ALL).
+    • range: 24h | 7d | 30d (défaut 7d) — utilisé pour performers + benchmark;
+      le bloc change renvoie TOUJOURS les 3 périodes.
+    • allocation par chaîne / catégorie / actif (top 12 + OTHERS) sur les
+      tokens ACTIFS uniquement (enabled != false).
+    • performers: variation de PRIX (price_history → neutralise les
+      apports/retraits) ; spam et poussière ignorés.
+    • Défensif: données manquantes → null / listes vides, jamais de 500.
+    """
+    _log = logging.getLogger("crypto.analytics")
+    rng = range if range in ANALYTICS_RANGES else "7d"
+    rng_days = ANALYTICS_RANGES[rng]
+
+    if address != "ALL" and not address.startswith("0x"):
+        raise HTTPException(400, "Adresse invalide")
+
+    cache_key = (user["id"], address.lower(), rng)
+    now = _time.time()
+    entry = _analytics_cache.get(cache_key)
+    if entry and (now - entry["ts"]) < _ANALYTICS_CACHE_TTL:
+        return {**entry["data"], "cached": True}
+
+    empty = {
+        "address": address, "range": rng, "total_usd": 0.0,
+        "allocation": {"by_chain": [], "by_category": [], "by_asset": []},
+        "change": {"24h": None, "7d": None, "30d": None},
+        "performers": {"best": [], "worst": []},
+        "cached": False,
+    }
+
+    try:
+        # ── 1. Adresses concernées ────────────────────────────────
+        if address == "ALL":
+            async with aiosqlite.connect(DB_PATH) as db:
+                db.row_factory = aiosqlite.Row
+                cur = await db.execute("SELECT address FROM wallets WHERE user_id=?", (user["id"],))
+                addrs = [r["address"] for r in await cur.fetchall()]
+        else:
+            addrs = [address]
+        if not addrs:
+            return empty
+
+        # ── 2. Portfolios (réutilise _portfolio_cache + prefs user) ─
+        results = await asyncio.gather(
+            *[_get_portfolio_for_defi(user["id"], a) for a in addrs],
+            return_exceptions=True)
+        tokens = []
+        current_total = 0.0
+        pf_errors = 0
+        for res in results:
+            if isinstance(res, Exception) or not isinstance(res, dict):
+                pf_errors += 1
+                continue
+            tokens.extend(filter_active_tokens(res.get("tokens")))
+            current_total += float(res.get("total_usd") or 0)
+
+        allocation = build_allocation(tokens)
+
+        # ── 3. Variations 24h/7j/30j (agrégat daily_history) ──────
+        conditions = ["user_id=?", "token_symbol IS NULL",
+                      "lower(wallet_address) IN (SELECT lower(address) FROM wallets WHERE user_id=?)"]
+        params = [user["id"], user["id"]]
+        if address != "ALL":
+            conditions.append("lower(wallet_address)=lower(?)")
+            params.append(address)
+        agg_rows = []
+        try:
+            async with aiosqlite.connect(DB_PATH) as db:
+                db.row_factory = aiosqlite.Row
+                cur = await db.execute(
+                    f"SELECT date, SUM(value_usd) AS v FROM daily_history "
+                    f"WHERE {' AND '.join(conditions)} GROUP BY date ORDER BY date ASC",
+                    tuple(params))
+                agg_rows = [(r["date"], r["v"] or 0) for r in await cur.fetchall()]
+        except Exception as e:
+            _log.warning(f"[ANALYTICS] daily_history agrégat illisible: {e}")
+        change = compute_change_periods(agg_rows, current_total)
+
+        # ── 4. Performers (prix passés via cache price_history) ───
+        tol = AN_TOLERANCE_DAYS[rng]
+        target_date = (datetime.datetime.utcnow()
+                       - datetime.timedelta(days=rng_days)).strftime("%Y-%m-%d")
+        d_from = (datetime.datetime.utcnow()
+                  - datetime.timedelta(days=rng_days + tol)).strftime("%Y-%m-%d")
+        d_to = (datetime.datetime.utcnow()
+                - datetime.timedelta(days=max(0, rng_days - tol))).strftime("%Y-%m-%d")
+        past_prices = {}
+        syms = sorted({(tk.get("symbol") or "").lower()
+                       for tk in tokens if tk.get("symbol")})
+        if syms:
+            try:
+                async with aiosqlite.connect(DB_PATH) as db:
+                    db.row_factory = aiosqlite.Row
+                    qmarks = ",".join("?" for _ in syms)
+                    cur = await db.execute(
+                        f"SELECT LOWER(token_symbol) AS s, date, price_usd FROM price_history "
+                        f"WHERE LOWER(token_symbol) IN ({qmarks}) AND date BETWEEN ? AND ?",
+                        tuple(syms) + (d_from, d_to))
+                    series: dict = {}
+                    for r in await cur.fetchall():
+                        series.setdefault(r["s"], []).append((r["date"], r["price_usd"] or 0))
+                for s, rows_s in series.items():
+                    p = pick_closest(rows_s, target_date, tol)
+                    if p is not None and p > 0:
+                        past_prices[s] = p
+            except Exception as e:
+                _log.warning(f"[ANALYTICS] price_history illisible: {e}")
+        performers = compute_performers(tokens, past_prices)
+
+        data = {
+            "address": address, "range": rng,
+            "total_usd": round(current_total, 2),
+            "allocation": {
+                "by_chain": allocation["by_chain"],
+                "by_category": allocation["by_category"],
+                "by_asset": allocation["by_asset"],
+            },
+            "change": change,
+            "performers": performers,
+        }
+        if pf_errors:
+            data["partial"] = True
+
+        # ── 5. Benchmark BTC/ETH (best-effort, omis si indisponible) ─
+        bench = await _fetch_benchmark_pcts(rng_days)
+        if bench is not None:
+            chg_rng = change.get(rng)
+            data["benchmark"] = {
+                "portfolio_pct": chg_rng.get("pct") if isinstance(chg_rng, dict) else None,
+                "btc_pct": bench.get("btc_pct"),
+                "eth_pct": bench.get("eth_pct"),
+            }
+
+        _analytics_cache[cache_key] = {"data": data, "ts": now}
+        _log.info(
+            f"[ANALYTICS] user={user['id']} addr={address[:12]} range={rng} "
+            f"total={data['total_usd']} chains={len(allocation['by_chain'])} "
+            f"assets={len(allocation['by_asset'])} best={len(performers['best'])} "
+            f"worst={len(performers['worst'])}")
+        return data
+    except Exception as e:
+        # Jamais de 500 : structure vide + log de l'erreur inattendue
+        import traceback
+        _log.error(f"[ANALYTICS] échec inattendu: {e}\n{traceback.format_exc()}")
+        return empty
 
 
 # ── External API Keys catalogue ─────────────────────────────
