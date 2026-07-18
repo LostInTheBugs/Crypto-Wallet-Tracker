@@ -394,6 +394,22 @@ async def edit_wallet(wallet_id: int, request: Request, user=Depends(get_current
 _portfolio_cache = {}
 
 
+def _invalidate_portfolio_cache(addresses):
+    """v2.12.6 — retire du cache portfolio les entrées des adresses données
+    (comparaison insensible à la casse, même pattern que del_wallet).
+
+    Appelé à la fin d'un rebuild d'historique : le portfolio mis en cache
+    AVANT la fin du rebuild a été calculé avec daily_history vide (PNL par
+    token = None) et serait sinon servi tel quel jusqu'à 1h. Purger l'entrée
+    force le prochain /api/portfolio (même sans force=true) à recalculer
+    avec le cost basis désormais disponible."""
+    wanted = {a.lower() for a in addresses if isinstance(a, str)}
+    if not wanted:
+        return
+    for _k in [k for k in list(_portfolio_cache) if isinstance(k, str) and k.lower() in wanted]:
+        _portfolio_cache.pop(_k, None)
+
+
 # ── Transactions fetch ───────────────────────────────────────────
 
 _import_progress = {}
@@ -531,6 +547,10 @@ async def _fetch_then_rebuild(user_id: int, address: str):
         out_total = dirs.get("out", 0)
         _import_progress[user_id] = {"stage": "enrich", "done": 0, "total": count, "in_done": in_total, "in_total": in_total, "out_done": out_total, "out_total": out_total}
         result = await _rebuild_history(user_id, address, _compute_portfolio)
+        # v2.12.6 — daily_history vient d'être rempli : purge l'entrée de cache
+        # de ce wallet pour que le PNL par token apparaisse au prochain
+        # /api/portfolio sans attendre l'expiration du TTL (1h) ni un force=true.
+        _invalidate_portfolio_cache([address])
         _import_progress[user_id] = {"stage": "done", "done": count, "total": count, "unmapped": result.get("unmapped_tokens", [])}
         # Fetch gas fees after rebuild (non-blocking, fire-and-forget)
         asyncio.create_task(_fetch_gas_for_user(user_id))
@@ -874,6 +894,18 @@ async def _run_history_rebuild(user_id: int):
                     err = stderr.decode()[:200].strip()
                     if err:
                         _rlog.warning(f"rebuild worker stderr: {err}")
+                # v2.12.6 — reconstruction terminée : purge le cache portfolio de
+                # tous les wallets de l'utilisateur pour que le prochain
+                # /api/portfolio (même sans force) recalcule avec le cost basis
+                # désormais présent dans daily_history.
+                try:
+                    async with aiosqlite.connect(DB_PATH) as db:
+                        db.row_factory = aiosqlite.Row
+                        cur = await db.execute("SELECT address FROM wallets WHERE user_id=?", (user_id,))
+                        addrs = [r["address"] for r in await cur.fetchall()]
+                    _invalidate_portfolio_cache(addrs)
+                except Exception as ce:
+                    _rlog.warning(f"portfolio cache invalidation failed: {ce}")
             except Exception as e:
                 _rlog.warning(f"rebuild subprocess failed: {e}")
             if not st["rerun"]:

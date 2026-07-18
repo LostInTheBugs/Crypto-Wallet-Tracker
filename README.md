@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — v2.12.5
+# Crypto Wallet Tracker — v2.12.6
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -125,6 +125,13 @@ Crypto-Wallet-Tracker/
 ---
 
 ## 📋 Changelog
+
+### v2.12.6 — PNL par token visible dès la fin du rebuild (invalidation du cache)
+
+- **Correctif cache périmé** — après l'ajout (ou le ré-ajout) d'un wallet, le premier `/api/portfolio` était calculé et mis en cache AVANT la fin de la reconstruction d'historique (`daily_history` encore vide) : tous les PNL par token restaient à « — » et ce résultat sans PNL était servi depuis le cache pendant jusqu'à 1h.
+- **Invalidation ciblée du cache** — le cache portfolio du wallet est maintenant purgé dès que l'import (`_fetch_then_rebuild`) termine la reconstruction ; le rebuild global (`_run_history_rebuild`, déclenché par un toggle de token, un ajout manuel, etc.) purge le cache de tous les wallets de l'utilisateur à la fin du sous-processus. Comparaison insensible à la casse dans les deux cas.
+- Résultat : le prochain appel `/api/portfolio` (même sans `force=true`) recalcule avec le cost basis désormais disponible — le PNL par token apparaît automatiquement quelques secondes après la fin du rebuild, sans rafraîchissement forcé.
+- Aucun changement du TTL (1h), de la logique de calcul du PNL ni de la forme des réponses.
 
 ### v2.12.5 — Suppression de wallet fiabilisée (plus aucune donnée résiduelle)
 
