@@ -1840,7 +1840,7 @@ async def latest_version():
     try:
         async with httpx.AsyncClient(timeout=10) as c:
             r = await c.get(
-                "https://api.github.com/repos/LostInTheBugs/Crypto-Wallet-Tracker/tags?per_page=30",
+                "https://api.github.com/repos/LostInTheBugs/Crypto-Wallet-Tracker/tags?per_page=100",
                 headers={"Accept": "application/vnd.github+json"})
             if r.status_code == 200:
                 data = r.json()
