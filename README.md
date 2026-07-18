@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — v2.12.4
+# Crypto Wallet Tracker — v2.12.5
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -125,6 +125,12 @@ Crypto-Wallet-Tracker/
 ---
 
 ## 📋 Changelog
+
+### v2.12.5 — Suppression de wallet fiabilisée (plus aucune donnée résiduelle)
+
+- **Cascade insensible à la casse** — `DELETE /api/wallets/{id}` supprime désormais `transactions` et `daily_history` avec `lower(wallet_address)=lower(address)`. L'écart de casse (adresses checksum écrites par le worker de reconstruction vs adresse stockée dans `wallets`) laissait des centaines de milliers de lignes orphelines qui restaient visibles dans Transactions et Statistiques après suppression du wallet.
+- **Défense en profondeur côté lecture** — `GET /api/transactions`, `/api/snapshots`, `/api/snapshots/tokens`, `/api/pnl` et `/api/transactions/gas-total` restreignent maintenant leurs résultats aux wallets réellement présents dans la table `wallets` (`lower(wallet_address) IN (SELECT lower(address) FROM wallets WHERE user_id=?)`). Même si un cascade échouait, aucune donnée d'un wallet supprimé ne peut plus s'afficher ; un compte sans wallet ne voit que du vide. Les filtres `wallet=` de ces endpoints sont eux aussi devenus insensibles à la casse. Formes de réponse inchangées.
+- **Sweep des orphelins au démarrage** — nettoyage idempotent dans le lifespan (après les migrations) : suppression des lignes `daily_history`/`transactions` sans wallet correspondant (comparaison insensible à la casse) et des `snapshots` d'utilisateurs sans aucun wallet. Le nombre de lignes purgées est loggé (`[SWEEP] orphan rows removed: ...`).
 
 ### v2.12.4 — Détection des swaps dans les Transactions
 - **Événements regroupés par transaction** — `GET /api/transactions` regroupe désormais les transferts par `(wallet, chaîne, tx_hash)` et classe chaque événement : **`swap`** (au moins un transfert sortant ET un entrant dans la même transaction — ex. token A vendu contre token B sur un DEX), **`send`** (uniquement sortant) ou **`receive`** (uniquement entrant). Un swap n'apparaît plus comme deux lignes « Envoyé » + « Reçu » séparées mais comme un seul événement « Swap A → B ».

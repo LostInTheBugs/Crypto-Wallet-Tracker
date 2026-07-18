@@ -216,6 +216,29 @@ async def lifespan(app: FastAPI):
         """)
         try: await db.execute("CREATE INDEX IF NOT EXISTS idx_utp_user ON user_token_prefs(user_id)")
         except: pass
+        # v2.12.5 — sweep idempotent des lignes orphelines au démarrage : purge
+        # toute donnée dont le wallet n'existe plus dans wallets (comparaison
+        # insensible à la casse — le worker de reconstruction a pu écrire des
+        # adresses en casse checksum). Protège contre d'anciens cascades ratés.
+        try:
+            cur = await db.execute(
+                "DELETE FROM daily_history WHERE NOT EXISTS ("
+                "SELECT 1 FROM wallets w WHERE w.user_id=daily_history.user_id "
+                "AND lower(w.address)=lower(daily_history.wallet_address))")
+            dh_orphans = cur.rowcount
+            cur = await db.execute(
+                "DELETE FROM transactions WHERE NOT EXISTS ("
+                "SELECT 1 FROM wallets w WHERE w.user_id=transactions.user_id "
+                "AND lower(w.address)=lower(transactions.wallet_address))")
+            tx_orphans = cur.rowcount
+            cur = await db.execute(
+                "DELETE FROM snapshots WHERE user_id NOT IN (SELECT DISTINCT user_id FROM wallets)")
+            sn_orphans = cur.rowcount
+            logging.getLogger("crypto.app").info(
+                "[SWEEP] orphan rows removed: daily_history=%s transactions=%s snapshots=%s",
+                dh_orphans, tx_orphans, sn_orphans)
+        except Exception as e:
+            logging.getLogger("crypto.app").warning("[SWEEP] orphan sweep failed: %s", e)
         await db.commit()
     yield
 
@@ -344,10 +367,16 @@ async def del_wallet(wallet_id: int, user=Depends(get_current_user), db=Depends(
     if not row:
         raise HTTPException(404, "Wallet introuvable")
     address = row["address"]
-    await db.execute("DELETE FROM transactions WHERE wallet_address=? AND user_id=?", (address, user["id"]))
-    await db.execute("DELETE FROM daily_history WHERE wallet_address=? AND user_id=?", (address, user["id"]))
+    # v2.12.5 — cascade INSENSIBLE À LA CASSE. Le worker de reconstruction peut
+    # écrire wallet_address avec une casse (checksum) différente de wallets.address ;
+    # une comparaison exacte laissait des lignes orphelines dans transactions et
+    # daily_history, qui restaient visibles dans Transactions/Statistiques.
+    await db.execute("DELETE FROM transactions WHERE user_id=? AND lower(wallet_address)=lower(?)", (user["id"], address))
+    await db.execute("DELETE FROM daily_history WHERE user_id=? AND lower(wallet_address)=lower(?)", (user["id"], address))
     await db.execute("DELETE FROM snapshots WHERE user_id=?", (user["id"],))
-    _portfolio_cache.pop(address, None)
+    # Purge du cache portfolio, insensible à la casse également.
+    for _k in [k for k in list(_portfolio_cache) if isinstance(k, str) and k.lower() == address.lower()]:
+        _portfolio_cache.pop(_k, None)
     await db.execute("DELETE FROM wallets WHERE id=? AND user_id=?", (wallet_id, user["id"]))
     await db.commit()
     return {"ok": True}
@@ -525,8 +554,12 @@ async def get_transactions(wallet: str = Query(None), chain: str = Query(None), 
     # token/direction/type appliqués APRÈS regroupement pour garder les jambes entières.
     conditions = ["user_id=?"]
     params = [user["id"]]
+    # v2.12.5 — défense en profondeur : ne jamais exposer les lignes d'un wallet
+    # absent de la table wallets (orphelins d'une suppression). Insensible à la casse.
+    conditions.append("lower(wallet_address) IN (SELECT lower(address) FROM wallets WHERE user_id=?)")
+    params.append(user["id"])
     if wallet:
-        conditions.append("wallet_address=?")
+        conditions.append("lower(wallet_address)=lower(?)")
         params.append(wallet)
     if chain:
         conditions.append("chain=?")
@@ -727,15 +760,17 @@ async def fetch_gas_fees(user=Depends(get_current_user)):
 @app.get("/api/transactions/gas-total")
 async def gas_total(user=Depends(get_current_user), db=Depends(get_db),
                     wallet: str = Query(None)):
+    # v2.12.5 — anti-orphelins : ne sommer que le gaz des wallets encore présents.
+    exists_w = "lower(wallet_address) IN (SELECT lower(address) FROM wallets WHERE user_id=?)"
     if wallet:
         cur = await db.execute(
             "SELECT COALESCE(SUM(gas_fee_usd),0) as total "
-            "FROM transactions WHERE user_id=? AND wallet_address=?",
-            (user["id"], wallet))
+            f"FROM transactions WHERE user_id=? AND {exists_w} AND lower(wallet_address)=lower(?)",
+            (user["id"], user["id"], wallet))
     else:
         cur = await db.execute(
             "SELECT COALESCE(SUM(gas_fee_usd),0) as total "
-            "FROM transactions WHERE user_id=?", (user["id"],))
+            f"FROM transactions WHERE user_id=? AND {exists_w}", (user["id"], user["id"]))
     row = await cur.fetchone()
     return {"total_gas_usd": round(row["total"] if row else 0, 2)}
 
@@ -1524,6 +1559,10 @@ async def get_snapshots(token: str = Query(None), wallet: str = Query(None), cha
     """
     conditions = ["user_id=?"]
     params = [user["id"]]
+    # v2.12.5 — défense en profondeur : restreindre aux wallets encore présents
+    # dans la table wallets (aucune donnée d'un wallet supprimé, cascade ou pas).
+    conditions.append("lower(wallet_address) IN (SELECT lower(address) FROM wallets WHERE user_id=?)")
+    params.append(user["id"])
 
     if token:
         conditions.append("LOWER(token_symbol)=?")
@@ -1532,7 +1571,7 @@ async def get_snapshots(token: str = Query(None), wallet: str = Query(None), cha
         conditions.append("token_symbol IS NULL")
 
     if wallet and wallet != "ALL":
-        conditions.append("wallet_address=?")
+        conditions.append("lower(wallet_address)=lower(?)")
         params.append(wallet)
     if chain:
         conditions.append("chain=?")
@@ -1584,8 +1623,10 @@ async def get_snapshots(token: str = Query(None), wallet: str = Query(None), cha
 @app.get("/api/snapshots/tokens")
 async def get_snapshot_tokens(user=Depends(get_current_user), db=Depends(get_db)):
     cur = await db.execute(
-        "SELECT DISTINCT token_symbol FROM daily_history WHERE user_id=? AND token_symbol IS NOT NULL ORDER BY token_symbol",
-        (user["id"],))
+        "SELECT DISTINCT token_symbol FROM daily_history WHERE user_id=? AND token_symbol IS NOT NULL "
+        "AND lower(wallet_address) IN (SELECT lower(address) FROM wallets WHERE user_id=?) "  # v2.12.5 anti-orphelins
+        "ORDER BY token_symbol",
+        (user["id"], user["id"]))
     return [r["token_symbol"] for r in await cur.fetchall()]
 
 
@@ -1661,9 +1702,13 @@ async def get_pnl(wallet: str = Query(None), token: str = Query(None), range: st
     """
     conditions = ["user_id=?"]
     params = [user["id"]]
+    # v2.12.5 — défense en profondeur : ignorer les lignes daily_history dont le
+    # wallet n'existe plus (orphelins), pour ne jamais fausser le PNL.
+    conditions.append("lower(wallet_address) IN (SELECT lower(address) FROM wallets WHERE user_id=?)")
+    params.append(user["id"])
 
     if wallet and wallet != "ALL":
-        conditions.append("wallet_address=?")
+        conditions.append("lower(wallet_address)=lower(?)")
         params.append(wallet)
     if token:
         conditions.append("LOWER(token_symbol)=?")
