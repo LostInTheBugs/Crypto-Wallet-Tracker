@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — 2026.07.1
+# Crypto Wallet Tracker — 2026.07.2
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -127,6 +127,10 @@ Crypto-Wallet-Tracker/
 ---
 
 ## 📋 Changelog
+
+### 2026.07.2 — En-tête Cache-Control no-cache sur le SPA (fin des versions périmées en cache navigateur)
+
+- **Cache-Control: no-cache, must-revalidate** sur la route racine — le navigateur conserve le fichier en cache mais doit revalider à chaque visite via ETag/Last-Modified. 304 si inchangé, nouvelle version dès le déploiement. Adieu les versions périmées servies depuis le cache du navigateur.
 
 ### 2026.07.1 — Passage au versioning calendaire (AAAA.MM.N)
 

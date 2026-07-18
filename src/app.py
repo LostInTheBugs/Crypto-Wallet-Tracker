@@ -5,7 +5,7 @@ Multi-chain via Blockscout API, multi-wallet, user accounts.
 from collections import defaultdict
 from fastapi import FastAPI, Query, HTTPException, Request, Depends
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from contextlib import asynccontextmanager
 import httpx, asyncio, jwt, bcrypt, aiosqlite, os, datetime, calendar, time as _time, bisect, math, subprocess, re
 
@@ -2196,8 +2196,26 @@ async def _validate_api_key(provider: str, api_key: str) -> tuple:
     return True, "Clé enregistrée (validation best-effort)"
 
 @app.get("/")
-async def index():
-    return FileResponse("public/index.html")
+async def index(request: Request):
+    import hashlib, os
+    path = "public/index.html"
+    with open(path, "rb") as f:
+        body = f.read()
+    etag = hashlib.md5(body).hexdigest()
+    # If-None-Match : retour 304 si le navigateur a la version courante
+    raw = (request.headers.get("if-none-match") or "").strip()
+    header_tag = raw.strip('"').strip()
+    if header_tag == etag:
+        return Response(status_code=304, headers={"Cache-Control": "no-cache, must-revalidate", "ETag": f'"{etag}"'})
+    return Response(
+        content=body,
+        media_type="text/html; charset=utf-8",
+        headers={
+            "Cache-Control": "no-cache, must-revalidate",
+            "ETag": f'"{etag}"',
+            "Accept-Ranges": "bytes",
+        }
+    )
 
 
 app.mount("/static", StaticFiles(directory="public"), name="static")
