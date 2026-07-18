@@ -126,7 +126,7 @@ Crypto-Wallet-Tracker/
 
 ## 📋 Changelog
 
-### v2.12.7 — Catalogue des clés API externes (inspiré de Rotki)
+### v2.12.7 — Catalogue des clés API externes
 
 - **Catalogue enrichi** — `GET /api/settings/keys` renvoie désormais un catalogue complet de 7 services externes (CoinGecko, OpenSea, Etherscan, DefiLlama, Alchemy, Moralis, CoinMarketCap) avec ID, nom, catégorie, description, lien d'obtention, statut et clé masquée. Stockage clé-valeur dans `user_api_keys`, PUT/DELETE génériques fonctionnent pour tout fournisseur du catalogue.
 - **Validation best-effort** — CoinGecko et Alchemy conservent leur validation réelle ; les autres fournisseurs sont stockés sans blocage (pass-through). Plus de rejet « Provider inconnu ».
