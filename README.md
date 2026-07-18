@@ -126,6 +126,28 @@ Crypto-Wallet-Tracker/
 
 ---
 
+## 🗺️ Roadmap
+
+### Phase 1 — Fonctionnalites
+- [x] 2026.07.3 — Analytics (repartition & performance)
+- [ ] 2026.07.4 — Export CSV/PDF (holdings, tx, PnL fiscal)
+- [ ] 2026.07.5 — Transactions : approbations, interactions, gaz
+- [ ] 2026.07.6 — Moteur d'alertes + digest
+- [ ] 2026.07.7 — Alertes health-factor / liquidation
+- [ ] 2026.07.8 — Valorisation NFT (prix planchers)
+- [ ] 2026.07.9 — Pricing multi-sources + test des cles
+- [ ] 2026.07.10 — PWA, theme, recherche, watchlist
+- [ ] 2026.07.11 — Consolidation SQLite (ecritures serialisees)
+- [ ] 2026.07.12 — Sauvegardes auto + sante + tests/CI
+- [ ] 2026.07.13 — Durcissement auth & comptes
+
+### Phase 2 — Multi-chaines non-EVM & airdrops
+- [ ] Refactor abstraction multi-provider (prerequis)
+- [ ] Bitcoin (BTC)
+- [ ] Solana
+- [ ] Cosmos / ATOM
+- [ ] Airdrops a claim
+
 ## 📋 Changelog
 
 ### 2026.07.3 — Page Analytics (répartition & performance)
