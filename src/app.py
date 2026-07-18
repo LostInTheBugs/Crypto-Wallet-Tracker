@@ -42,6 +42,11 @@ from services.analytics_service import (
     compute_performers, pick_closest, pct_from_price_points,
     TOLERANCE_DAYS as AN_TOLERANCE_DAYS,
 )
+from services.export_service import (
+    rows_to_csv, aggregate_holdings, build_holdings_rows, build_pnl_rows,
+    build_transaction_rows, build_summary_pdf,
+    HOLDINGS_HEADERS, TRANSACTIONS_HEADERS, PNL_HEADERS,
+)
 
 # ── Logging configuration ───────────────────────────────────────
 import logging
@@ -2279,6 +2284,197 @@ async def analytics(address: str = Query(...), range: str = Query("7d"),
         import traceback
         _log.error(f"[ANALYTICS] échec inattendu: {e}\n{traceback.format_exc()}")
         return empty
+
+
+# ── Export de données — CSV + PDF (2026.07.4) ───────────────────
+
+EXPORT_TX_TYPE_LABELS = {"swap": "Swap", "send": "Envoyé", "receive": "Reçu"}
+
+
+def _export_check_address(address: str):
+    if address != "ALL" and not address.startswith("0x"):
+        raise HTTPException(400, "Adresse invalide")
+
+
+async def _export_addresses(user_id: int, address: str) -> list:
+    """ALL → tous les wallets de l'utilisateur ; sinon [address]."""
+    if address == "ALL":
+        async with aiosqlite.connect(DB_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute("SELECT address FROM wallets WHERE user_id=?", (user_id,))
+            return [r["address"] for r in await cur.fetchall()]
+    return [address]
+
+
+async def _export_portfolio_data(user, address: str) -> dict:
+    """Tokens ACTIFS enrichis (cost_basis/pnl) + agrégats, pour les exports.
+
+    Réutilise le endpoint /api/portfolio (cache 1h, enrichissement PNL
+    per-token, prefs utilisateur) : mêmes chiffres que le dashboard. Un wallet
+    en échec est ignoré (export partiel plutôt que 500)."""
+    addrs = await _export_addresses(user["id"], address)
+    results = await asyncio.gather(
+        *[portfolio(address=a, force=False, user=user) for a in addrs],
+        return_exceptions=True)
+    tokens = []
+    total = 0.0
+    pnl_sum, pnl_seen = 0.0, False
+    cost_sum, cost_seen = 0.0, False
+    wallets_ok = 0
+    for res in results:
+        if isinstance(res, Exception) or not isinstance(res, dict):
+            logging.getLogger("crypto.export").warning(f"[EXPORT] wallet ignoré: {res}")
+            continue
+        wallets_ok += 1
+        tokens.extend(filter_active_tokens(res.get("tokens")))
+        total += float(res.get("total_usd") or 0)
+        tp = res.get("total_pnl")
+        if isinstance(tp, (int, float)) and math.isfinite(tp):
+            pnl_sum += tp
+            pnl_seen = True
+        tc = res.get("total_cost_basis")
+        if isinstance(tc, (int, float)) and math.isfinite(tc):
+            cost_sum += tc
+            cost_seen = True
+    return {
+        "tokens": tokens,
+        "total_usd": round(total, 2),
+        "total_pnl": round(pnl_sum, 2) if pnl_seen else None,
+        "total_cost": round(cost_sum, 2) if cost_seen else None,
+        "wallets_ok": wallets_ok,
+        "wallets_requested": len(addrs),
+    }
+
+
+def _csv_download(text: str, base: str) -> Response:
+    fname = f"{base}_{datetime.datetime.utcnow().strftime('%Y-%m-%d')}.csv"
+    return Response(
+        content=text.encode("utf-8"),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"',
+                 "Cache-Control": "no-store"},
+    )
+
+
+@app.get("/api/export/holdings.csv")
+async def export_holdings_csv(address: str = Query("ALL"), user=Depends(get_current_user)):
+    """Export CSV des holdings (une ligne par token actif, agrégé par
+    symbole+chaîne). Données manquantes → cellules vides, jamais de 500."""
+    _export_check_address(address)
+    rows = []
+    try:
+        pf = await _export_portfolio_data(user, address)
+        rows = build_holdings_rows(aggregate_holdings(pf["tokens"]))
+    except Exception as e:
+        logging.getLogger("crypto.export").error(f"[EXPORT] holdings.csv: {e}")
+    return _csv_download(rows_to_csv(HOLDINGS_HEADERS, rows), "holdings")
+
+
+@app.get("/api/export/transactions.csv")
+async def export_transactions_csv(address: str = Query("ALL"),
+                                  user=Depends(get_current_user), db=Depends(get_db)):
+    """Export CSV des transactions (événements swap/send/receive v2.12.4,
+    regroupés par tx). Wallets existants uniquement (défense v2.12.5)."""
+    _export_check_address(address)
+    rows = []
+    try:
+        conditions = ["user_id=?",
+                      "lower(wallet_address) IN (SELECT lower(address) FROM wallets WHERE user_id=?)"]
+        params = [user["id"], user["id"]]
+        if address != "ALL":
+            conditions.append("lower(wallet_address)=lower(?)")
+            params.append(address)
+        cur = await db.execute(
+            f"SELECT id, wallet_address, token_symbol, token_name, amount, usd_price, usd_value, "
+            f"chain, tx_hash, block_time, direction, log_index, gas_fee_usd, contract_address "
+            f"FROM transactions WHERE {' AND '.join(conditions)} ORDER BY block_time DESC",
+            tuple(params))
+        db_rows = await cur.fetchall()
+        events = group_transaction_events(db_rows)
+        rows = build_transaction_rows(events, EXPORT_TX_TYPE_LABELS)
+    except Exception as e:
+        logging.getLogger("crypto.export").error(f"[EXPORT] transactions.csv: {e}")
+    return _csv_download(rows_to_csv(TRANSACTIONS_HEADERS, rows), "transactions")
+
+
+@app.get("/api/export/pnl.csv")
+async def export_pnl_csv(address: str = Query("ALL"), user=Depends(get_current_user)):
+    """Rapport PnL/fiscal best-effort : coût moyen unitaire, coût total,
+    valeur actuelle et PnL latent par token (même logique que le PNL par
+    token du dashboard). Coût inconnu → cellules vides (pitfall v2.11.10)."""
+    _export_check_address(address)
+    rows = []
+    try:
+        pf = await _export_portfolio_data(user, address)
+        rows = build_pnl_rows(aggregate_holdings(pf["tokens"]))
+    except Exception as e:
+        logging.getLogger("crypto.export").error(f"[EXPORT] pnl.csv: {e}")
+    return _csv_download(rows_to_csv(PNL_HEADERS, rows), "pnl_report")
+
+
+@app.get("/api/export/summary.pdf")
+async def export_summary_pdf(address: str = Query("ALL"), user=Depends(get_current_user)):
+    """PDF de synthèse : valeur totale, PnL, répartition par chaîne et par
+    catégorie (même logique que /api/analytics), top holdings, date de
+    génération. Générateur PDF interne sans dépendance — jamais de 500."""
+    _export_check_address(address)
+    summary: dict = {
+        "generated_at": datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+        "scope_label": address,
+    }
+    try:
+        pf = await _export_portfolio_data(user, address)
+        agg = aggregate_holdings(pf["tokens"])
+        alloc = build_allocation(pf["tokens"])   # réutilise la logique /api/analytics
+        total = pf["total_usd"]
+        pnl_total = pf["total_pnl"]
+        cost_total = pf["total_cost"]
+        if pnl_total is None:
+            known = [a for a in agg if a.get("pnl") is not None]
+            if known:
+                pnl_total = round(sum(a["pnl"] for a in known), 2)
+                cost_total = round(sum(a["cost_basis"] for a in known), 2)
+        top = []
+        for a in agg[:15]:
+            top.append({
+                "symbol": a.get("symbol"), "chain": a.get("chain"),
+                "balance": a.get("balance"), "usd_value": a.get("usd_value"),
+                "pct": (a.get("usd_value") or 0) / total * 100 if total > 0 else 0,
+                "pnl": a.get("pnl"),
+            })
+        if address == "ALL":
+            scope = f"Tous les wallets ({pf['wallets_ok']}/{pf['wallets_requested']})" \
+                if pf["wallets_ok"] != pf["wallets_requested"] \
+                else f"Tous les wallets ({pf['wallets_requested']})"
+        else:
+            scope = address
+        summary.update({
+            "scope_label": scope,
+            "wallet_count": pf["wallets_requested"],
+            "total_usd": total,
+            "pnl_usd": pnl_total,
+            "cost_usd": cost_total,
+            "token_count": len(agg),
+            "chain_count": len(alloc.get("by_chain") or []),
+            "by_chain": alloc.get("by_chain"),
+            "by_category": alloc.get("by_category"),
+            "top_holdings": top,
+        })
+    except Exception as e:
+        logging.getLogger("crypto.export").error(f"[EXPORT] summary.pdf: {e}")
+    try:
+        pdf_bytes = build_summary_pdf(summary)
+    except Exception as e:
+        logging.getLogger("crypto.export").error(f"[EXPORT] génération PDF: {e}")
+        pdf_bytes = build_summary_pdf({"generated_at": summary.get("generated_at"),
+                                       "scope_label": address})
+    fname = f"portfolio_summary_{datetime.datetime.utcnow().strftime('%Y-%m-%d')}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"',
+                 "Cache-Control": "no-store"},
+    )
 
 
 # ── External API Keys catalogue ─────────────────────────────

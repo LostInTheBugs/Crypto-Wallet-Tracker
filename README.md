@@ -150,6 +150,15 @@ Crypto-Wallet-Tracker/
 
 ## 📋 Changelog
 
+### 2026.07.4 — Export CSV/PDF (holdings, transactions, rapport PnL, synthèse)
+
+- **Section ⚙️ Réglages → 📤 Export / Sauvegarde** : 4 boutons de téléchargement (Holdings CSV, Transactions CSV, Rapport PnL CSV, Synthèse PDF), état « Génération… », gestion d'erreurs, respect du wallet actif (adresse ou `ALL`), i18n FR/EN.
+- **Endpoints protégés `GET /api/export/holdings.csv|transactions.csv|pnl.csv|summary.pdf?address=0x…|ALL`** avec en-têtes de téléchargement (`Content-Disposition: attachment`). Tokens **actifs** uniquement, wallets existants uniquement (défense v2.12.5), agrégation par symbole+chaîne en mode `ALL`.
+- **holdings.csv** : token_name, symbol, chain, balance, usd_price, usd_value, category, cost_basis, pnl. **transactions.csv** : événements Envoyé/Reçu/Swap (logique v2.12.4, jambes regroupées par tx), montants signés, gas. **pnl.csv** (rapport fiscal best-effort) : quantité, coût moyen unitaire, coût total, valeur actuelle, PnL latent — même logique de coût que le PNL par token du dashboard ; coût inconnu → cellules vides (jamais de faux « acheté gratuit »).
+- **summary.pdf** : valeur totale, PnL total, répartition par chaîne et par catégorie (logique /api/analytics), top 15 holdings, date de génération — générateur PDF minimaliste interne (PDF 1.4, **zéro dépendance ajoutée**).
+- Robustesse : CSV RFC 4180 (guillemets/virgules/retours ligne échappés), UTF-8, décimales point ; donnée manquante → cellule vide ; toute erreur → export vide avec en-têtes, **jamais de 500**.
+- Tests : `python3 tests/test_export_service.py` (CSV quoting, agrégation, PnL, structure PDF/xref) + `node tests/smoke_export_2026.07.4.js` (smoke runtime du rendu de la section Export).
+
 ### 2026.07.3 — Page Analytics (répartition & performance)
 
 - **Nouvelle page 📊 Analytics** (menu latéral) : vue synthétique de la répartition et de la performance du portefeuille — première release de la roadmap.

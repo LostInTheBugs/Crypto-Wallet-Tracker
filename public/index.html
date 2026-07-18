@@ -258,10 +258,15 @@ tr.tm-off td{opacity:.45}
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>📦 Version</h2>
-        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">2026.07.3</strong></p>
+        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">2026.07.4</strong></p>
         <p id="verStatus" style="font-size:.85rem"></p>
         <button id="updateBtn" class="hidden" onclick="doUpdate()" style="margin-top:8px;background:#238636;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:.85rem">🔄 Mettre à jour</button>
         <p id="updateMsg" style="margin-top:8px;font-size:.8rem;color:#f0c040"></p>
+      </div>
+      <div class="card" style="margin-bottom:16px">
+        <h2 id="exportTitle">📤 Export / Sauvegarde</h2>
+        <p style="font-size:.8rem;color:#6e7681;margin-bottom:12px" id="exportDesc">Téléchargez vos données (CSV / PDF).</p>
+        <div id="exportSection"></div>
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2 id="apiKeysTitle">🔑 Clés API externes</h2>
@@ -366,6 +371,17 @@ var T = {
     apiKeyNotConfigured: "Non configuré",
     apiKeySaved: "✅ Clé enregistrée",
     apiKeyDeleted: "Clé supprimée",
+    exportTitle: "📤 Export / Sauvegarde",
+    expDesc: "Téléchargez vos données (CSV / PDF).",
+    expScope: "Périmètre",
+    expScopeAll: "Tous les wallets",
+    expHoldings: "Holdings (CSV)",
+    expTxns: "Transactions (CSV)",
+    expPnl: "Rapport PnL (CSV)",
+    expPdf: "Synthèse (PDF)",
+    expGenerating: "Génération…",
+    expDone: "Téléchargé",
+    expError: "Échec de l'export",
     defi: "DeFi",
     dpLoading: "Chargement des positions DeFi…",
     dpNoKey: "Ajoute ta clé Moralis dans Réglages → Clés API externes pour afficher tes positions DeFi (lending, emprunts, staking, LP) avec récompenses, health factor et APY.",
@@ -484,6 +500,17 @@ var T = {
     apiKeyNotConfigured: "Not configured",
     apiKeySaved: "✅ Key saved",
     apiKeyDeleted: "Key deleted",
+    exportTitle: "📤 Export / Backup",
+    expDesc: "Download your data (CSV / PDF).",
+    expScope: "Scope",
+    expScopeAll: "All wallets",
+    expHoldings: "Holdings (CSV)",
+    expTxns: "Transactions (CSV)",
+    expPnl: "PnL report (CSV)",
+    expPdf: "Summary (PDF)",
+    expGenerating: "Generating…",
+    expDone: "Downloaded",
+    expError: "Export failed",
     defi: "DeFi",
     dpLoading: "Loading DeFi positions…",
     dpNoKey: "Add your Moralis key in Settings → External API Keys to display your DeFi positions (lending, borrowing, staking, LP) with rewards, health factor and APY.",
@@ -559,6 +586,12 @@ function applyLang() {
   if (akTitle) akTitle.textContent = t("apiKeysTitle");
   var akDesc = document.getElementById("apiKeysDesc");
   if (akDesc) akDesc.textContent = t("apiKeysDesc");
+  // Update Export card (2026.07.4)
+  var exTitle = document.getElementById("exportTitle");
+  if (exTitle) exTitle.textContent = t("exportTitle");
+  var exDesc = document.getElementById("exportDesc");
+  if (exDesc) exDesc.textContent = t("expDesc");
+  renderExportSection();
 }
 function changeLang() {
   LANG = document.getElementById("setLang").value;
@@ -1309,6 +1342,65 @@ function renderSettingsPage(){
   document.getElementById("setCurrency").value = currency;
   checkVersion();
   renderApiKeys();
+  renderExportSection();
+}
+
+// ── Export / Sauvegarde (2026.07.4) ─────────────────────────────
+var EXPORT_KINDS = [
+  {kind:"holdings", icon:"📊", labelKey:"expHoldings", url:"/api/export/holdings.csv"},
+  {kind:"transactions", icon:"📜", labelKey:"expTxns", url:"/api/export/transactions.csv"},
+  {kind:"pnl", icon:"💹", labelKey:"expPnl", url:"/api/export/pnl.csv"},
+  {kind:"pdf", icon:"📄", labelKey:"expPdf", url:"/api/export/summary.pdf"}
+];
+
+function exportScopeLabel(){
+  if(!activeWallet||activeWallet=="ALL")return t("expScopeAll");
+  var w=null;
+  for(var i=0;i<wallets.length;i++){if(wallets[i].address==activeWallet){w=wallets[i];break}}
+  return (w&&w.label)?w.label:(String(activeWallet).slice(0,10)+"...");
+}
+
+function renderExportSection(){
+  var el=document.getElementById("exportSection");
+  if(!el)return;
+  var html='<p style="font-size:.85rem;margin-bottom:10px">'+esc(t("expScope"))+' : <strong>'+esc(exportScopeLabel())+'</strong></p>'+
+    '<div style="display:flex;gap:8px;flex-wrap:wrap">';
+  for(var i=0;i<EXPORT_KINDS.length;i++){
+    var it=EXPORT_KINDS[i];
+    html+='<button class="btn btn-blue" id="expBtn_'+it.kind+'" onclick="doExport(\''+it.kind+'\')">'+it.icon+' '+esc(t(it.labelKey))+'</button>';
+  }
+  html+='</div><div id="expMsg" style="margin-top:10px;font-size:.8rem"></div>';
+  el.innerHTML=html;
+}
+
+async function doExport(kind){
+  var item=null;
+  for(var i=0;i<EXPORT_KINDS.length;i++){if(EXPORT_KINDS[i].kind==kind){item=EXPORT_KINDS[i];break}}
+  if(!item)return;
+  var btn=document.getElementById("expBtn_"+kind),msg=document.getElementById("expMsg");
+  var oldHtml=btn?btn.innerHTML:"";
+  if(btn){btn.disabled=true;btn.innerHTML="⏳ "+esc(t("expGenerating"));}
+  if(msg){msg.textContent="";}
+  try{
+    var addr=(activeWallet&&activeWallet!="ALL")?activeWallet:"ALL";
+    var r=await fetch(item.url+"?address="+encodeURIComponent(addr));
+    if(!r.ok)throw new Error("HTTP "+r.status);
+    var blob=await r.blob();
+    var cd=(r.headers&&r.headers.get)?(r.headers.get("Content-Disposition")||""):"";
+    var fm=cd.match(/filename="?([^";]+)"?/);
+    var fname=fm?fm[1]:(kind+(kind=="pdf"?".pdf":".csv"));
+    var link=document.createElement("a");
+    link.href=URL.createObjectURL(blob);
+    link.download=fname;
+    document.body.appendChild(link);
+    link.click();
+    (function(u,l){setTimeout(function(){try{URL.revokeObjectURL(u);l.remove()}catch(e2){}},3000)})(link.href,link);
+    if(msg){msg.style.color="#3fb950";msg.textContent="✅ "+t("expDone")+" : "+fname;}
+  }catch(e){
+    console.error("doExport",e);
+    if(msg){msg.style.color="#f85149";msg.textContent="❌ "+t("expError")+" ("+(e&&e.message?e.message:e)+")";}
+  }
+  if(btn){btn.disabled=false;btn.innerHTML=oldHtml;}
 }
 
 async function doUpdate(){
