@@ -35,6 +35,7 @@ from services.token_prefs import (
 from services.tx_events import group_transaction_events, filter_events
 from services.defi_service import (
     MORALIS_DEFI_CHAINS, normalize_defi_positions, summarize_defi_positions,
+    build_best_effort_positions,
 )
 
 # ── Logging configuration ───────────────────────────────────────
@@ -1893,14 +1894,10 @@ async def update_application(user=Depends(get_current_user)):
         return {"ok": False, "msg": str(e)[:200]}
 
 
-# ── DeFi positions (Moralis) — v2.12.8 ─────────────────────────
+# ── DeFi positions (Moralis) — v2.12.8 / fallback gratuit v2.12.9 ──
 
 _defi_cache: dict = {}          # (user_id, address_lower) -> {"data": dict, "ts": float}
 _DEFI_CACHE_TTL = 600           # seconds — protects Moralis free-tier quotas
-_EMPTY_DEFI_SUMMARY = {
-    "total_supplied_usd": 0, "total_borrowed_usd": 0,
-    "total_rewards_usd": 0, "net_usd": 0, "positions_count": 0,
-}
 
 
 async def _get_user_moralis_key(user_id: int) -> str:
@@ -1984,37 +1981,86 @@ async def _fetch_moralis_defi_positions(api_key: str, address: str):
     return positions, uniq_errors
 
 
+async def _get_portfolio_for_defi(user_id: int, address: str) -> dict:
+    """Portfolio tokens for the best-effort DeFi fallback (v2.12.9).
+
+    Reuses _portfolio_cache (same keying and 1h TTL as /api/portfolio) so the
+    DeFi page never triggers a duplicate 22-chain Blockscout scan, then applies
+    the per-user token prefs so user-disabled tokens are excluded.
+    """
+    now = _time.time()
+    entry = _portfolio_cache.get(address)
+    if entry and (now - entry["ts"]) < 3600:
+        data = entry["data"]
+    else:
+        data = await _compute_portfolio(address)
+        _portfolio_cache[address] = {"data": data, "ts": now}
+    data = await _apply_user_token_prefs(user_id, data, address)
+    if data.pop("_new_auto_disabled", None):
+        asyncio.create_task(_run_history_rebuild(user_id))
+    return data
+
+
 @app.get("/api/defi/positions")
 async def defi_positions(address: str = Query(...), force: bool = Query(False), user=Depends(get_current_user)):
-    """DeFi positions (lending/borrowing/staking/LP) of a wallet via Moralis.
+    """DeFi positions (lending/borrowing/staking/LP) of a wallet.
 
-    Without a configured Moralis key: HTTP 200 with configured=false so the
-    UI can show a "configure your key" state — never a 5xx.
+    • With a Moralis key: rich positions via Moralis (rewards, APY, health
+      factor) — source:"moralis". Unchanged behaviour.
+    • Without a key (v2.12.9): FREE best-effort positions built from the
+      on-chain Blockscout balances (aTokens, debt tokens, LSTs, LP, vaults) —
+      source:"best-effort", rewards/APY/health factor unavailable (0/null).
+    Never returns a 5xx: any failure degrades to an empty positions list.
     """
     if not address.startswith("0x"):
         raise HTTPException(400, "Adresse invalide")
 
     api_key = await _get_user_moralis_key(user["id"])
-    if not api_key:
-        return {
-            "configured": False,
-            "address": address,
-            "positions": [],
-            "summary": dict(_EMPTY_DEFI_SUMMARY),
-        }
-
     cache_key = (user["id"], address.lower())
     now = _time.time()
     entry = _defi_cache.get(cache_key)
     if not force and entry and (now - entry["ts"]) < _DEFI_CACHE_TTL:
         return {**entry["data"], "cached": True}
 
+    _log = logging.getLogger("crypto.defi")
+
+    if not api_key:
+        # ── Free best-effort fallback from on-chain balances ──────
+        positions, be_error = [], None
+        try:
+            pf = await _get_portfolio_for_defi(user["id"], address)
+            positions = build_best_effort_positions(
+                pf.get("tokens") or [],
+                explorer_hosts=CHAINS,
+                is_spam=_is_spam,
+            )
+        except Exception as e:
+            _log.warning(f"[DEFI] best-effort failed for {address[:12]}...: {e}")
+            be_error = f"best-effort: {str(e)[:120]}"
+        summary = summarize_defi_positions(positions)
+        summary["source"] = "best-effort"
+        data = {
+            "configured": False,
+            "source": "best-effort",
+            "address": address,
+            "positions": positions,
+            "summary": summary,
+        }
+        if be_error:
+            data["error"] = be_error
+        _log.info(f"[DEFI] best-effort address={address[:12]}... positions={len(positions)}")
+        _defi_cache[cache_key] = {"data": data, "ts": now}
+        return data
+
     positions, errors = await _fetch_moralis_defi_positions(api_key, address)
+    summary = summarize_defi_positions(positions)
+    summary["source"] = "moralis"
     data = {
         "configured": True,
+        "source": "moralis",
         "address": address,
         "positions": positions,
-        "summary": summarize_defi_positions(positions),
+        "summary": summary,
     }
     if errors:
         data["error"] = " ; ".join(errors[:3])[:300]

@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — v2.12.8
+# Crypto Wallet Tracker — v2.12.9
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -13,7 +13,7 @@ Dashboard agrégé, graphiques d'évolution, historique des prix via DefiLlama, 
 - 💰 **Valorisation USD/€** — temps réel via Blockscout, conversion EUR (Frankfurter)
 - 🦙 **Fallback prix DefiLlama** — si Blockscout ne donne pas de prix, appel batch à l'API gratuite `coins.llama.fi/prices/current`
 - 🔒 **Détection DeFi best-effort** — catégorisation fine (lending, LP, staked, vault, synthetic) via heuristiques sur les symboles, aucun service tiers, 100 % gratuit. Section DeFi dédiée avec badges colorés et sous-totaux par catégorie
-- 🏦 **Page DeFi (Moralis)** — page dédiée listant les vraies positions DeFi par protocole (lending fourni/emprunté, staking, LP) avec récompenses, health factor, APY, PnL quand disponibles, et lien vers chaque position (dapp ou explorer). Résumé global fourni/emprunté/récompenses/valeur nette. Nécessite une clé API Moralis (gratuite) dans Paramètres → Clés API externes ; sans clé, la page l'explique proprement
+- 🏦 **Page DeFi (Moralis)** — page dédiée listant les vraies positions DeFi par protocole (lending fourni/emprunté, staking, LP) avec récompenses, health factor, APY, PnL quand disponibles, et lien vers chaque position (dapp ou explorer). Résumé global fourni/emprunté/récompenses/valeur nette. Clé API Moralis (gratuite) recommandée dans Paramètres → Clés API externes ; **sans clé, mode gratuit best-effort** : les positions (lending fourni/emprunté, staking, LP, vaults) sont reconstruites depuis les balances on-chain Blockscout — récompenses/APY/health factor indisponibles
 - 🎛️ **Gestion des tokens intégrée** — tout se passe dans l'onglet « Détail tokens » : compteurs actifs/inactifs, interrupteur on/off sur chaque ligne, section repliable des tokens inactifs (badge du motif), formulaire d'ajout manuel. Les tokens sans valeur, le spam, les memecoins illiquides et les prix à faible confiance DefiLlama sont désactivés par défaut ; un token désactivé est exclu des totaux, de la répartition DeFi et de l'historique (effet rétroactif)
 - 👥 **Comptes utilisateurs** — inscription, connexion, wallets privés (bcrypt + sessions)
 - 📊 **Dashboard** — valeur totale, répartition par chaîne (donut), cartes PNL Total / PNL 24h, mini-graphe, gaz cumulé
@@ -127,6 +127,13 @@ Crypto-Wallet-Tracker/
 ---
 
 ## 📋 Changelog
+
+### v2.12.9 — Page DeFi : fallback gratuit sans clé Moralis (best-effort on-chain)
+
+- **Mode gratuit** — sans clé Moralis, la page « 🏦 DeFi » n'affiche plus seulement « configure ta clé » : elle reconstruit des positions DeFi **best-effort** à partir des balances on-chain déjà récupérées gratuitement (Blockscout, via `_compute_portfolio`). Les receipt tokens DeFi sont des ERC-20 comme les autres : aTokens Aave (`aUSDC`, `aEthUSDC`…) et cTokens Compound → *fourni* ; tokens de **dette** Aave (`variableDebt…`, `stableDebt…`) → *emprunté*, compté en **négatif** dans le net ; LST/LRT (wstETH→Lido, rETH→Rocket Pool, cbETH→Coinbase, weETH→Ether.fi, ezETH→Renzo…) → *staking* ; LP (`UNI-V2`, `-lp`, `-gauge`, `vAMM-`/`sAMM-`, `*CRV`) → *liquidité* (« DEX / LP ») ; vaults Beefy (`moo…`), Yearn (`yv…`), Stargate (`S*…`), sDAI/sUSDe → *vault*. Détection **conservatrice** (dans le doute, un token n'est PAS une position), spam et tokens désactivés/sans valeur ignorés.
+- **Réponse API** — `GET /api/defi/positions` renvoie toujours un champ `source` : `"moralis"` (clé configurée, comportement riche **inchangé**) ou `"best-effort"` (`configured:false` mais positions + summary remplis). Regroupement par protocole inféré + chaîne, `net_usd = fourni − emprunté`, lien explorer Blockscout du contrat de chaque position. **Jamais de valeur inventée** : `rewards` vides, `rewards_usd: 0`, `apy`/`health_factor`/`pnl` à `null` (indisponibles gratuitement). Réutilise le cache portfolio (1 h) + cache DeFi 600 s — aucun appel réseau supplémentaire. Jamais de 500 : tout échec dégrade en liste vide.
+- **UI** — bandeau discret « 🆓 Mode gratuit (on-chain) — ajoute une clé Moralis dans Réglages → Clés API externes pour les récompenses, l'APY et le health factor » avec lien vers les Réglages ; carte Récompenses du résumé affichée « — » ; health factor/APY/PnL masqués par position ; « Aucune position DeFi détectée » si rien n'est trouvé. Avec clé Moralis : rendu strictement identique à v2.12.8. i18n FR/EN, `esc()` partout.
+- **Builder pur** — `build_best_effort_positions()` + `classify_best_effort_token()` dans `src/services/defi_service.py` (stdlib only). Tests : `python3 tests/test_defi_best_effort.py` (56 assertions : classification aToken/infix v3/debt/LST/cToken/vault/LP, faux positifs refusés — AAVE, ARB, MOON, CAKE —, net négatif dette seule, spam/désactivés/valeur nulle ignorés, summary, garbage) et `node tests/smoke_defi_free_v2.12.9.js` (34 assertions : bandeau, rewards « — », métriques masquées, moralis inchangé, CTA rétro-compatible, multi-wallets mixte, XSS, i18n EN).
 
 ### v2.12.8 — Page DeFi dédiée (positions réelles via Moralis)
 

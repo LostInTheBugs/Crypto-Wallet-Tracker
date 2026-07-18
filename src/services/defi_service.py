@@ -231,3 +231,261 @@ def summarize_defi_positions(positions):
         "net_usd": round(total_supplied - total_borrowed + total_rewards, 2),
         "positions_count": len(positions or []),
     }
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Best-effort DeFi positions (v2.12.9) — FREE fallback without Moralis
+# ═══════════════════════════════════════════════════════════════════
+#
+# Built from the wallet's on-chain ERC-20 balances (Blockscout, free):
+# DeFi receipt tokens (aTokens, cTokens, LSTs, LP, vault shares) and Aave
+# debt tokens ARE regular ERC-20 balances, so a conservative symbol-based
+# classification reconstructs supplied/borrowed/staking positions.
+#
+# Hard limits of the free mode (by design — never invented):
+#   rewards = [] / rewards_usd = 0, apy = None, health_factor = None,
+#   pnl = None. Only Moralis provides those.
+#
+# Design rules (same spirit as portfolio_service._token_category):
+#   • Conservative: when in doubt, a token is NOT a DeFi position.
+#   • Pure stdlib — unit-tested by tests/test_defi_best_effort.py.
+
+BEST_EFFORT_SOURCE = "best-effort"
+
+# ── STAKING: LST/LRT receipt tokens → inferred protocol ─────────────
+_BE_LST_PROTOCOLS = {
+    "steth":     "Lido",
+    "wsteth":    "Lido",
+    "reth":      "Rocket Pool",
+    "reth2":     "StakeWise",
+    "oseth":     "StakeWise",
+    "cbeth":     "Coinbase",
+    "wbeth":     "Binance",
+    "weeth":     "Ether.fi",
+    "eeth":      "Ether.fi",
+    "ezeth":     "Renzo",
+    "rseth":     "Kelp DAO",
+    "wrseth":    "Kelp DAO",
+    "sfrxeth":   "Frax",
+    "frxeth":    "Frax",
+    "ankreth":   "Ankr",
+    "sweth":     "Swell",
+    "rsweth":    "Swell",
+    "lseth":     "Liquid Collective",
+    "rsteth":    "Autre DeFi",
+    "msweth":    "Autre DeFi",
+    "wsupereth": "Autre DeFi",
+}
+
+# ── Deposit receipts with a known issuer (type vault) ────────────────
+_BE_RECEIPT_PROTOCOLS = {
+    "sdai":  "Spark",
+    "susds": "Sky",
+    "susde": "Ethena",
+}
+
+# ── LENDING: base symbols recognized behind a/c prefixes ─────────────
+_BE_KNOWN_BASES = frozenset({
+    "usdt", "usdc", "usdc.e", "usdbc", "dai", "eth", "weth", "wbtc", "btc",
+    "op", "arb", "matic", "pol", "link", "uni", "aave", "crv", "snx",
+    "wsteth", "steth", "reth", "cbeth", "wmatic", "maticx", "cake", "bal",
+    "ldo", "sushi", "1inch", "ens", "mkr", "gno", "eurs", "lusd", "gusd",
+    "frax", "usde", "gho", "ink", "xdai", "wxdai", "avax", "wavax",
+})
+
+# Aave v3 aTokens carry a chain infix: aEthUSDC, aOptWETH, aArbUSDC,
+# aBasUSDbC, aPolWMATIC, aGnowstETH… → "a" + infix + known base.
+_BE_AAVE_V3_INFIXES = frozenset({
+    "eth", "opt", "arb", "bas", "pol", "gno", "ava", "avax", "scr",
+    "lin", "era", "zk", "met", "cel", "son", "ink", "bnb", "ftm", "wld",
+})
+
+# ── LP: DEX liquidity pool tokens ────────────────────────────────────
+_BE_LP_EXACT = frozenset({"uni-v2", "slp", "cake-lp", "spooky-lp", "joe-lp"})
+_BE_LP_SUFFIXES = ("-lp", "-gauge")
+_BE_LP_PREFIXES = ("vamm-", "samm-")
+
+_BE_DEBT_AAVE_PREFIXES = ("variabledebt", "stabledebt", "vardebt")
+
+
+def _be_base_match(rest):
+    """rest (after the a/c prefix) is a known base symbol? (exact)."""
+    return rest in _BE_KNOWN_BASES
+
+
+def classify_best_effort_token(symbol):
+    """Conservative DeFi classification of ONE wallet token symbol.
+
+    Returns None (not a DeFi position — the default) or a dict:
+      {"bucket": "supplied"|"borrowed", "type": "lending"|"staking"|
+       "liquidity"|"vault", "protocol": "<inferred protocol>"}
+    """
+    if not symbol or not isinstance(symbol, str):
+        return None
+    sym = symbol.lower().strip()
+    if not sym:
+        return None
+
+    # 1. BORROWED — Aave debt tokens held as ERC-20 balances
+    #    (variableDebtEthUSDC, stableDebtPolWMATIC, …)
+    for pfx in _BE_DEBT_AAVE_PREFIXES:
+        if sym.startswith(pfx) and len(sym) > len(pfx):
+            return {"bucket": "borrowed", "type": "lending", "protocol": "Aave"}
+    if sym.startswith("debt") and len(sym) > 4:
+        return {"bucket": "borrowed", "type": "lending", "protocol": "Autre DeFi"}
+
+    # 2. STAKING — LST/LRT exact matches
+    if sym in _BE_LST_PROTOCOLS:
+        return {"bucket": "supplied", "type": "staking", "protocol": _BE_LST_PROTOCOLS[sym]}
+
+    # 3. VAULT — known deposit receipts (sDAI, sUSDe, …)
+    if sym in _BE_RECEIPT_PROTOCOLS:
+        return {"bucket": "supplied", "type": "vault", "protocol": _BE_RECEIPT_PROTOCOLS[sym]}
+
+    # 4. LENDING supplied — Aave aTokens
+    if sym.startswith("a") and len(sym) > 1:
+        rest = sym[1:]
+        if _be_base_match(rest):
+            return {"bucket": "supplied", "type": "lending", "protocol": "Aave"}
+        # Aave v3 chain infix: a + infix + base (aEthUSDC → a|eth|usdc)
+        for base in _BE_KNOWN_BASES:
+            if rest.endswith(base):
+                infix = rest[: len(rest) - len(base)]
+                if infix and infix in _BE_AAVE_V3_INFIXES:
+                    return {"bucket": "supplied", "type": "lending", "protocol": "Aave"}
+
+    # 5. LENDING supplied — Compound cTokens (cUSDC, cDAI, cUSDCv3)
+    if sym.startswith("c") and len(sym) > 1:
+        rest = sym[1:]
+        if _be_base_match(rest):
+            return {"bucket": "supplied", "type": "lending", "protocol": "Compound"}
+        if rest.endswith("v3") and _be_base_match(rest[:-2]):
+            return {"bucket": "supplied", "type": "lending", "protocol": "Compound"}
+
+    # 6. VAULT — Beefy (moo + uppercase on the ORIGINAL symbol, pitfall 121)
+    if sym.startswith("moo") and len(sym) > 4:
+        orig = symbol.strip()
+        if (len(orig) > 3 and orig[3].isupper()) or sym.startswith(("moobifi", "moovelo")):
+            return {"bucket": "supplied", "type": "vault", "protocol": "Beefy"}
+
+    # 7. VAULT — Yearn (yv…)
+    if sym.startswith("yv") and len(sym) > 3:
+        return {"bucket": "supplied", "type": "vault", "protocol": "Yearn"}
+
+    # 8. VAULT — Stargate (literal S*USDC style symbols)
+    if sym.startswith("s*") and len(sym) > 2:
+        return {"bucket": "supplied", "type": "vault", "protocol": "Stargate"}
+
+    # 9. LIQUIDITY — LP / gauge / Curve / Velodrome-Aerodrome
+    if sym in _BE_LP_EXACT:
+        return {"bucket": "supplied", "type": "liquidity", "protocol": "DEX / LP"}
+    for sfx in _BE_LP_SUFFIXES:
+        if sym.endswith(sfx) and len(sym) > len(sfx):
+            return {"bucket": "supplied", "type": "liquidity", "protocol": "DEX / LP"}
+    for pfx in _BE_LP_PREFIXES:
+        if sym.startswith(pfx) and len(sym) > len(pfx):
+            return {"bucket": "supplied", "type": "liquidity", "protocol": "DEX / LP"}
+    if sym.endswith("crv") and len(sym) > 3:
+        return {"bucket": "supplied", "type": "liquidity", "protocol": "DEX / LP"}
+
+    return None
+
+
+def _be_slug(name):
+    """Protocol display name → stable protocol_id slug."""
+    out = []
+    prev_dash = False
+    for ch in str(name or "").lower():
+        if ch.isalnum():
+            out.append(ch)
+            prev_dash = False
+        elif not prev_dash:
+            out.append("-")
+            prev_dash = True
+    return "".join(out).strip("-") or "defi"
+
+
+def build_best_effort_positions(tokens, explorer_hosts=None, is_spam=None):
+    """Wallet tokens (from _compute_portfolio) → best-effort DeFi positions.
+
+    tokens: list of dicts with symbol / balance / usd_value / usd_price /
+            contract_address / chain (extra keys ignored). Tokens disabled by
+            the user (enabled == False), spam (is_spam callable) and tokens
+            with no positive USD value are skipped — conservative by design.
+    explorer_hosts: optional {chain: blockscout_host} used to build the
+            explorer link of the first contract of each position.
+    Returns positions in the same shape as normalize_defi_position, with
+    rewards empty and pnl/health_factor/apy = None (unavailable for free).
+    """
+    groups = {}   # (protocol, chain, type) -> {"supplied": [...], "borrowed": [...], "contracts": [...]}
+    order = []    # deterministic insertion order
+
+    for tk in tokens or []:
+        if not isinstance(tk, dict):
+            continue
+        if tk.get("enabled") is False:      # user-disabled token
+            continue
+        symbol = tk.get("symbol")
+        if callable(is_spam):
+            try:
+                if is_spam(symbol):
+                    continue
+            except Exception:
+                pass
+        usd_value = _f(tk.get("usd_value"))
+        if usd_value <= 0:                  # ignore worthless/unpriced balances
+            continue
+        cls = classify_best_effort_token(symbol)
+        if cls is None:
+            continue
+
+        chain = str(tk.get("chain") or "").strip().lower()
+        key = (cls["protocol"], chain, cls["type"])
+        if key not in groups:
+            groups[key] = {"supplied": [], "borrowed": [], "contracts": []}
+            order.append(key)
+        grp = groups[key]
+        grp[cls["bucket"]].append({
+            "symbol": str(symbol)[:32],
+            "amount": round(_f(tk.get("balance")), 8),
+            "usd_value": round(usd_value, 2),
+        })
+        contract = str(tk.get("contract_address") or "").strip()
+        if contract:
+            grp["contracts"].append(contract)
+
+    positions = []
+    for key in order:
+        protocol, chain, ptype = key
+        grp = groups[key]
+        supplied_usd = round(sum(x["usd_value"] for x in grp["supplied"]), 2)
+        borrowed_usd = round(sum(x["usd_value"] for x in grp["borrowed"]), 2)
+
+        link = None
+        host = (explorer_hosts or {}).get(chain)
+        if host and grp["contracts"]:
+            link = "https://" + str(host).strip().strip("/") + "/address/" + grp["contracts"][0]
+
+        positions.append({
+            "protocol": protocol,
+            "protocol_id": _be_slug(protocol),
+            "protocol_url": None,
+            "protocol_logo": None,
+            "chain": chain,
+            "type": ptype,
+            "supplied": grp["supplied"],
+            "borrowed": grp["borrowed"],
+            "rewards": [],                      # unavailable in free mode
+            "supplied_usd": supplied_usd,
+            "borrowed_usd": borrowed_usd,
+            "rewards_usd": 0.0,                 # never invented
+            "net_usd": round(supplied_usd - borrowed_usd, 2),  # debt counts negative
+            "pnl": None,
+            "health_factor": None,
+            "apy": None,
+            "link": link,
+            "source": BEST_EFFORT_SOURCE,
+        })
+
+    positions.sort(key=lambda p: p["net_usd"], reverse=True)
+    return positions

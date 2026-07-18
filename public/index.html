@@ -256,7 +256,7 @@ tr.tm-off td{opacity:.45}
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>📦 Version</h2>
-        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.12.8</strong></p>
+        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.12.9</strong></p>
         <p id="verStatus" style="font-size:.85rem"></p>
         <button id="updateBtn" class="hidden" onclick="doUpdate()" style="margin-top:8px;background:#238636;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:.85rem">🔄 Mettre à jour</button>
         <p id="updateMsg" style="margin-top:8px;font-size:.8rem;color:#f0c040"></p>
@@ -383,6 +383,7 @@ var T = {
     dpView: "Voir la position",
     dpRefresh: "Actualiser",
     dpPositions: "position(s)",
+    dpFreeMode: "Mode gratuit (on-chain) — ajoute une clé Moralis dans Réglages → Clés API externes pour les récompenses, l'APY et le health factor.",
   },
   en: {
     dashboard: "Dashboard", stats: "Statistics", tokens: "Token Details", nfts: "NFTs",
@@ -478,6 +479,7 @@ var T = {
     dpView: "View position",
     dpRefresh: "Refresh",
     dpPositions: "position(s)",
+    dpFreeMode: "Free mode (on-chain) — add a Moralis key in Settings → External API Keys to get rewards, APY and health factor.",
   }
 };
 function t(key) { return (T[LANG] && T[LANG][key]) || key; }
@@ -988,7 +990,7 @@ async function loadNFTs(){
   }catch(e){console.error("loadNFTs",e);el.innerHTML='<div class="card"><div class="error">Erreur de chargement des NFTs</div></div>'}
 }
 
-// ── Page DeFi — positions via Moralis (v2.12.8) ───────────────
+// ── Page DeFi — positions via Moralis (v2.12.8) + mode gratuit best-effort (v2.12.9) ──
 // PIEGE v2.11.26 : jamais de variable locale nommée t/esc/fmtCurr/fetch ici.
 function dpAmt(v){
   var n=Number(v);
@@ -1039,10 +1041,11 @@ function renderDefiPositions(results){
   for(i=0;i<(results||[]).length;i++){var rr=results[i];if(rr&&typeof rr==="object"&&rr.summary)valid.push(rr)}
   if(!valid.length){el.innerHTML='<div class="card"><div class="error">'+esc(t("dpError"))+'</div></div>';return}
 
-  var configured=false,allPos=[],errs=[],sup=0,bor=0,rew=0;
+  var configured=false,anyBE=false,allPos=[],errs=[],sup=0,bor=0,rew=0;
   for(i=0;i<valid.length;i++){
     var res=valid[i];
     if(res.configured)configured=true;
+    if(res.source==="best-effort")anyBE=true;
     var ps=Array.isArray(res.positions)?res.positions:[];
     for(j=0;j<ps.length;j++)allPos.push(ps[j]);
     var sm=res.summary||{};
@@ -1050,8 +1053,8 @@ function renderDefiPositions(results){
     if(res.error&&errs.indexOf(res.error)<0)errs.push(res.error);
   }
 
-  // Etat « pas de clé Moralis » — CTA vers Réglages
-  if(!configured){
+  // Etat « pas de clé Moralis » SANS fallback best-effort (vieux backend) — CTA
+  if(!configured&&!anyBE){
     el.innerHTML='<div class="card" style="text-align:center;padding:40px 24px">'+
       '<div style="font-size:2.2rem;margin-bottom:8px">🏦</div>'+
       '<h2 style="justify-content:center">DeFi</h2>'+
@@ -1061,10 +1064,17 @@ function renderDefiPositions(results){
   }
 
   var net=sup-bor+rew;
-  var html='<div class="grid">'+
+  var html="";
+  // Mode gratuit (best-effort, v2.12.9) — bandeau discret + lien vers les clés
+  if(anyBE){
+    html+='<div style="background:#0f1a26;border:1px solid #1f6feb;border-radius:8px;padding:8px 14px;margin-bottom:12px;font-size:.75rem;color:#79b8ff;display:flex;align-items:center;gap:10px;flex-wrap:wrap">'+
+      '<span>🆓 '+esc(t("dpFreeMode"))+'</span>'+
+      '<a href="#" onclick="switchPage(\'settings\');return false" style="color:var(--accent);font-weight:600;white-space:nowrap">🔑 '+esc(t("dpGoSettings"))+'</a></div>';
+  }
+  html+='<div class="grid">'+
     '<div class="stat-card"><div class="label">'+esc(t("dpTotalSupplied"))+'</div><div class="value">'+fmtCurr(sup)+'</div></div>'+
     '<div class="stat-card"><div class="label">'+esc(t("dpTotalBorrowed"))+'</div><div class="value" style="color:#f85149">'+fmtCurr(bor)+'</div></div>'+
-    '<div class="stat-card"><div class="label">'+esc(t("dpTotalRewards"))+'</div><div class="value" style="color:#40c463">'+fmtCurr(rew)+'</div></div>'+
+    '<div class="stat-card"><div class="label">'+esc(t("dpTotalRewards"))+'</div><div class="value" style="color:'+(anyBE?'#6e7681':'#40c463')+'">'+(anyBE?'—':fmtCurr(rew))+'</div></div>'+
     '<div class="stat-card" style="border-left:2px solid #4dabf7"><div class="label">'+esc(t("dpNetValue"))+'</div><div class="value" style="color:#4dabf7">'+fmtCurr(net)+'</div></div></div>';
 
   if(errs.length)html+='<div style="background:#332200;border:1px solid #f0c040;border-radius:8px;padding:8px 14px;margin-bottom:12px;font-size:.75rem;color:#f0c040">⚠️ '+esc(errs.join(" ; ").slice(0,300))+'</div>';
