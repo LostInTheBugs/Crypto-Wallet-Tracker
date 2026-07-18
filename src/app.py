@@ -32,6 +32,7 @@ from services.token_prefs import (
     token_tid, classify_token, load_user_prefs, get_disabled_tids,
     insert_default_prefs, reclassify_prefs,
 )
+from services.tx_events import group_transaction_events, filter_events
 
 # ── Logging configuration ───────────────────────────────────────
 import logging
@@ -515,8 +516,13 @@ async def import_progress(user=Depends(get_current_user)):
 
 @app.get("/api/transactions")
 async def get_transactions(wallet: str = Query(None), chain: str = Query(None), token: str = Query(None),
-                           direction: str = Query(None), limit: int = Query(100), offset: int = Query(0),
+                           direction: str = Query(None), event_type: str = Query(None, alias="type"),
+                           limit: int = Query(100), offset: int = Query(0),
                            user=Depends(get_current_user), db=Depends(get_db)):
+    # v2.12.4 — événements regroupés par (wallet, chain, tx_hash) : swap/send/receive.
+    # Le REGROUPEMENT se fait AVANT la pagination (sinon les deux jambes d'un swap
+    # peuvent tomber sur deux pages différentes). Filtres wallet/chain en SQL ;
+    # token/direction/type appliqués APRÈS regroupement pour garder les jambes entières.
     conditions = ["user_id=?"]
     params = [user["id"]]
     if wallet:
@@ -525,31 +531,25 @@ async def get_transactions(wallet: str = Query(None), chain: str = Query(None), 
     if chain:
         conditions.append("chain=?")
         params.append(chain)
-    if token:
-        conditions.append("LOWER(token_symbol)=?")
-        params.append(token.lower())
-    if direction and direction in ("in", "out"):
-        conditions.append("direction=?")
-        params.append(direction)
     where = " AND ".join(conditions)
-    # Count total
-    total_cur = await db.execute(f"SELECT COUNT(*) FROM transactions WHERE {where}", tuple(params))
-    total = (await total_cur.fetchone())[0]
-    # Fetch page
     cur = await db.execute(
-        f"SELECT id, wallet_address, token_symbol, token_name, amount, usd_price, usd_value, chain, tx_hash, block_time, direction, log_index, gas_fee_usd FROM transactions WHERE {where} ORDER BY block_time DESC LIMIT ? OFFSET ?",
-        tuple(params + [limit, offset]))
+        f"SELECT id, wallet_address, token_symbol, token_name, amount, usd_price, usd_value, chain, tx_hash, block_time, direction, log_index, gas_fee_usd, contract_address FROM transactions WHERE {where} ORDER BY block_time DESC",
+        tuple(params))
     rows = await cur.fetchall()
-    items = [{
-        "id": r["id"], "wallet_address": r["wallet_address"], "token_symbol": r["token_symbol"],
-        "token_name": r["token_name"], "amount": r["amount"], "usd_price": r["usd_price"],
-        "usd_value": r["usd_value"], "chain": r["chain"], "tx_hash": r["tx_hash"],
-        "block_time": r["block_time"], "direction": r["direction"], "log_index": r["log_index"],
-        "gas_fee_usd": r["gas_fee_usd"],
-        "wallet_label": _wallet_labels.get(r["wallet_address"], ""),
-        "explorer_url": f"https://{CHAINS[r['chain']]}/tx/{r['tx_hash']}" if r["tx_hash"] and CHAINS.get(r["chain"]) else ""
-    } for r in rows]
-    return {"total": total, "items": items}
+
+    events = group_transaction_events(rows)
+    events = filter_events(events, token=token, direction=direction)
+    counts = {"swap": 0, "send": 0, "receive": 0}
+    for ev in events:
+        counts[ev["type"]] = counts.get(ev["type"], 0) + 1
+    events = filter_events(events, event_type=event_type)
+
+    total = len(events)
+    page = events[offset:offset + limit]
+    for ev in page:
+        ev["wallet_label"] = _wallet_labels.get(ev["wallet_address"], "")
+        ev["explorer_url"] = f"https://{CHAINS[ev['chain']]}/tx/{ev['tx_hash']}" if ev["tx_hash"] and CHAINS.get(ev["chain"]) else ""
+    return {"total": total, "items": page, "counts": counts}
 
 
 # ── Gas fee constants ─────────────────────────────────────────────

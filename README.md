@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — v2.12.3
+# Crypto Wallet Tracker — v2.12.4
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -17,7 +17,7 @@ Dashboard agrégé, graphiques d'évolution, historique des prix via DefiLlama, 
 - 👥 **Comptes utilisateurs** — inscription, connexion, wallets privés (bcrypt + sessions)
 - 📊 **Dashboard** — valeur totale, répartition par chaîne (donut), cartes PNL Total / PNL 24h, mini-graphe, gaz cumulé
 - 📈 **Statistiques** — courbes valeur/coût d'achat, barres PNL journalier (7j/30j/90j/1a/All), filtrable par wallet/token/chaîne
-- 📜 **Transactions** — tableau paginé, filtrable par wallet/chaîne/direction, colonnes prix/valeur/gaz
+- 📜 **Transactions** — événements regroupés par transaction (Swap / Envoyé / Reçu), tableau paginé, filtrable par wallet/chaîne/type, colonnes prix/valeur/gaz
 - 📋 **Détail tokens** — balance, prix, valeur et **PNL par token** (vert/rouge)
 - 🔙 **Historique des prix** — DefiLlama (gratuit, sans clé API) + cache SQLite, fallback CoinGecko optionnel
 - 🧮 **PNL calculé** — coût moyen pondéré, soldes reconstruits par date, PNL journalier
@@ -125,6 +125,13 @@ Crypto-Wallet-Tracker/
 ---
 
 ## 📋 Changelog
+
+### v2.12.4 — Détection des swaps dans les Transactions
+- **Événements regroupés par transaction** — `GET /api/transactions` regroupe désormais les transferts par `(wallet, chaîne, tx_hash)` et classe chaque événement : **`swap`** (au moins un transfert sortant ET un entrant dans la même transaction — ex. token A vendu contre token B sur un DEX), **`send`** (uniquement sortant) ou **`receive`** (uniquement entrant). Un swap n'apparaît plus comme deux lignes « Envoyé » + « Reçu » séparées mais comme un seul événement « Swap A → B ».
+- **Jambes exposées** — chaque événement porte ses jambes (`sent`/`received` : symbole, quantité, valeur, contrat), un résumé pour l'affichage (`sent_symbol`/`sent_amount`, `recv_symbol`/`recv_amount` = jambes principales par valeur USD), la date la plus récente, le **gaz compté une seule fois par transaction**, et la valeur USD de l'échange (max des deux côtés — pas de double comptage).
+- **Pagination correcte** — le regroupement est effectué **avant** la pagination : les deux jambes d'un swap ne peuvent plus tomber sur deux pages différentes ; `total` compte des événements.
+- **UI** — badge violet distinct « 🔄 Swap » dans la colonne Sens, colonne Token affichant l'échange `A → B`, quantités signées `-X / +Y` (rouge/vert), nombre de jambes indiqué discrètement pour les swaps multi-jambes, infobulle listant toutes les jambes. Filtre « Sens » enrichi d'une option **Swap** (paramètre `type=swap|send|receive`, l'ancien `direction=in|out` reste supporté). Tri par colonne (v2.12.3) inchangé et opérationnel sur les événements, y compris par type/date/valeur. i18n FR/EN.
+- **Aucune migration** — le regroupement se fait à la lecture, les données existantes fonctionnent telles quelles. Nouveau module pur `src/services/tx_events.py` + tests (`tests/test_swap_grouping.py`, `tests/smoke_swap_v2.12.4.js`).
 
 ### v2.12.3 — Colonnes triables (Détail tokens & Transactions)
 - **Tri par clic sur les en-têtes** — 100 % côté client (aucun appel API supplémentaire) : un clic trie la colonne, un second clic inverse le sens ; flèche ▲/▼ sur la colonne active. Le choix de tri est conservé (localStorage) et réappliqué à chaque rafraîchissement des données.

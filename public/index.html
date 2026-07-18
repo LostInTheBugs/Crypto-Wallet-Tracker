@@ -203,7 +203,7 @@ tr.tm-off td{opacity:.45}
         <span style="display:inline-flex;gap:6px;margin-left:12px;align-items:center">
           <select id="txnWallet" onchange="loadTransactions()" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:2px 6px;border-radius:4px;font-size:.65rem"><option value="">Tous wallets</option></select>
           <select id="txnChain" onchange="loadTransactions()" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:2px 6px;border-radius:4px;font-size:.65rem"><option value="">Toutes chaînes</option></select>
-          <select id="txnDir" onchange="loadTransactions()" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:2px 6px;border-radius:4px;font-size:.65rem"><option value="">Tout</option><option value="in">Entrant</option><option value="out">Sortant</option></select>
+          <select id="txnDir" onchange="loadTransactions()" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:2px 6px;border-radius:4px;font-size:.65rem"><option value="">Tout</option><option value="receive">Entrant</option><option value="send">Sortant</option><option value="swap">Swap</option></select>
         </span>
       </h2><div id="txnContent" style="overflow-x:auto"></div></div>
     </div>
@@ -225,7 +225,7 @@ tr.tm-off td{opacity:.45}
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>📦 Version</h2>
-        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.12.3</strong></p>
+        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.12.4</strong></p>
         <p id="verStatus" style="font-size:.85rem"></p>
         <button id="updateBtn" class="hidden" onclick="doUpdate()" style="margin-top:8px;background:#238636;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:.85rem">🔄 Mettre à jour</button>
         <p id="updateMsg" style="margin-top:8px;font-size:.8rem;color:#f0c040"></p>
@@ -278,6 +278,8 @@ var T = {
     updateBtn: "🔄 Mettre à jour", updating: "⏳ Mise à jour en cours...",
     verCheckError: "❌ Impossible de vérifier",
     noData: "📭 Aucune donnée",
+    swap: "Swap", received: "Reçu", sentLbl: "Envoyé", legsLbl: "jambes",
+    dirAll: "Tout", dirIn: "Entrant", dirOut: "Sortant", dirSwap: "Swap",
     defiTotal: "Total DeFi",
     defiLending: "Prêts (Lending)",
     defiLp: "Liquidité (LP)",
@@ -342,6 +344,8 @@ var T = {
     updateBtn: "🔄 Update now", updating: "⏳ Updating...",
     verCheckError: "❌ Unable to check",
     noData: "📭 No data",
+    swap: "Swap", received: "Received", sentLbl: "Sent", legsLbl: "legs",
+    dirAll: "All", dirIn: "Incoming", dirOut: "Outgoing", dirSwap: "Swap",
     defiTotal: "DeFi Total",
     defiLending: "Lending",
     defiLp: "Liquidity Pools",
@@ -397,6 +401,14 @@ function applyLang() {
     if (span) span.textContent = t(keys[i]);
   }
   document.getElementById("btnLogout").textContent = t("logout");
+  // Options du filtre Sens de la page Transactions (v2.12.4)
+  var dsel = document.getElementById("txnDir");
+  if (dsel && dsel.options && dsel.options.length >= 4) {
+    dsel.options[0].text = t("dirAll");
+    dsel.options[1].text = t("dirIn");
+    dsel.options[2].text = t("dirOut");
+    dsel.options[3].text = t("dirSwap");
+  }
   // Update auth page
   document.getElementById("authUser").placeholder = t("username");
   document.getElementById("authPass").placeholder = t("password");
@@ -1188,7 +1200,7 @@ async function loadTransactions(page){
   var params=["limit=100","offset="+(page*100)];
   if(wallet)params.push("wallet="+wallet);
   if(chain)params.push("chain="+chain);
-  if(dir)params.push("direction="+dir);
+  if(dir)params.push("type="+dir); // v2.12.4: receive|send|swap (événements regroupés)
   try{
     var r=await fetch("/api/transactions?"+params.join("&"));
     var d=await r.json();
@@ -1203,6 +1215,8 @@ async function loadTransactions(page){
 
 // Rend la page de transactions courante (txnData) avec tri côté client.
 // Variable de boucle nommée `tx` — JAMAIS `t` (masquerait la fonction i18n t()).
+// Quantité de token lisible (helper dédié — ne pas nommer t/esc/fmtCurr, cf. pitfalls).
+function fmtAmt(n){n=Number(n);if(!isFinite(n))n=0;return n.toLocaleString(undefined,{maximumFractionDigits:6})}
 function renderTxnTable(){
   if(!txnData)return;
   var sym=currSymbol(),page=txnData.page||0;
@@ -1221,20 +1235,40 @@ function renderTxnTable(){
   for(var i=0;i<items.length;i++){
     var tx=items[i];var date=tx.block_time?tx.block_time.slice(0,16).replace("T"," "):"-";
     var short=tx.wallet_address.slice(0,6)+"..."+tx.wallet_address.slice(-4);
-    var dirIcon=tx.direction=="in"?"📥":"📤";var dirColor=tx.direction=="in"?"#40c463":"#f85149";
-    var dirLabel=tx.direction=="in"?"Reçu":"Envoyé";var dirTitle=tx.direction=="in"?"Entrant (reçu)":"Sortant (envoyé)";
+    // v2.12.4 — événements regroupés : type swap|send|receive (direction rétro-compat in|out|swap)
+    var isSwap=(tx.type==="swap"||tx.direction==="swap");
     var explorerLink=tx.explorer_url?'<a href="'+tx.explorer_url+'" target="_blank" rel="noopener" title="Voir sur l&apos;explorateur">🔗</a>':'-';
     var val=sym+(Math.abs(tx.usd_value||0)).toFixed(2);
     var gas=tx.gas_fee_usd?sym+tx.gas_fee_usd.toFixed(2):"-";
+    var tokCell,qtyCell,sensCell;
+    if(isSwap){
+      var legsNote=(tx.legs&&tx.legs>2)?' <span style="color:#6e7681;font-size:.65rem">('+tx.legs+' '+t("legsLbl")+')</span>':'';
+      tokCell='<span style="color:#f85149"><b>'+esc(tx.sent_symbol)+'</b></span> <span style="color:#6e7681">→</span> <span style="color:#40c463"><b>'+esc(tx.recv_symbol)+'</b></span>'+legsNote;
+      qtyCell='<span style="color:#f85149;white-space:nowrap">-'+fmtAmt(tx.sent_amount)+'</span><span style="color:#6e7681"> / </span><span style="color:#40c463;white-space:nowrap">+'+fmtAmt(tx.recv_amount)+'</span>';
+      var stitle=[],rtitle=[];
+      var sarr=tx.sent||[],rarr=tx.received||[];
+      for(var s1=0;s1<sarr.length;s1++){stitle.push("-"+fmtAmt(sarr[s1].amount)+" "+sarr[s1].symbol)}
+      for(var r1=0;r1<rarr.length;r1++){rtitle.push("+"+fmtAmt(rarr[r1].amount)+" "+rarr[r1].symbol)}
+      var swapTitle=esc(stitle.join(", ")+" → "+rtitle.join(", "));
+      sensCell='<td style="font-size:.75rem" title="'+swapTitle+'"><span style="background:rgba(163,113,247,.15);border:1px solid #a371f7;color:#a371f7;border-radius:10px;padding:1px 7px;font-size:.7rem;white-space:nowrap">🔄 '+t("swap")+'</span></td>';
+    }else{
+      var isIn=(tx.direction==="in"||tx.type==="receive");
+      var dirIcon=isIn?"📥":"📤";var dirColor=isIn?"#40c463":"#f85149";
+      var dirLabel=isIn?t("received"):t("sentLbl");var dirTitle=isIn?t("dirIn"):t("dirOut");
+      tokCell='<b>'+esc(tx.token_symbol)+'</b> <span style="color:#6e7681;font-size:.7rem">'+esc(tx.token_name)+'</span>';
+      if(tx.legs&&tx.legs>1)tokCell+=' <span style="color:#6e7681;font-size:.65rem">('+tx.legs+' '+t("legsLbl")+')</span>';
+      qtyCell=fmtAmt(tx.amount);
+      sensCell='<td style="font-size:.75rem;color:'+dirColor+'" title="'+dirTitle+'">'+dirIcon+' <span style="font-size:.7rem">'+dirLabel+'</span></td>';
+    }
     html+='<tr><td style="font-size:.75rem;white-space:nowrap">'+date+'</td>'+
       '<td style="font-size:.75rem;color:#6e7681">'+short+'</td>'+
-      '<td><b>'+esc(tx.token_symbol)+'</b> <span style="color:#6e7681;font-size:.7rem">'+esc(tx.token_name)+'</span></td>'+
+      '<td>'+tokCell+'</td>'+
       '<td class="chain">'+tx.chain+'</td>'+
-      '<td>'+tx.amount.toLocaleString(undefined,{maximumFractionDigits:6})+'</td>'+
+      '<td>'+qtyCell+'</td>'+
       '<td style="font-size:.8rem">'+(tx.usd_price?sym+tx.usd_price.toFixed(4):"-")+'</td>'+
       '<td class="usd">'+val+'</td>'+
       '<td style="font-size:.8rem;color:#6e7681">'+gas+'</td>'+
-      '<td style="font-size:.75rem;color:'+dirColor+'" title="'+dirTitle+'">'+dirIcon+' <span style="font-size:.7rem">'+dirLabel+'</span></td>'+
+      sensCell+
       '<td>'+explorerLink+'</td></tr>';
   }
   html+='</tbody></table>';
