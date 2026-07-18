@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — v2.12.2
+# Crypto Wallet Tracker — v2.12.3
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -125,6 +125,12 @@ Crypto-Wallet-Tracker/
 ---
 
 ## 📋 Changelog
+
+### v2.12.3 — Colonnes triables (Détail tokens & Transactions)
+- **Tri par clic sur les en-têtes** — 100 % côté client (aucun appel API supplémentaire) : un clic trie la colonne, un second clic inverse le sens ; flèche ▲/▼ sur la colonne active. Le choix de tri est conservé (localStorage) et réappliqué à chaque rafraîchissement des données.
+- **Détail tokens** — tokens actifs triables par Token, Chaîne, Balance, Prix, Valeur et PNL ; tokens inactifs triables par Token, Chaîne, Balance, Valeur et Motif. Tri par défaut inchangé : Valeur décroissante.
+- **Transactions** — triables par Date, Token, Chaîne, Qté, Prix, Valeur, Gaz et Sens. Tri par défaut inchangé : Date décroissante.
+- **Tri robuste** — les colonnes numériques sont comparées comme des nombres (jamais comme du texte), les dates chronologiquement, et les valeurs inconnues (ex. PNL « — ») sont toujours renvoyées en fin de liste quel que soit le sens.
 
 ### v2.12.2 — Gestion des tokens fusionnée dans « Détail tokens »
 - **Un seul onglet** — la page « Gestion tokens » disparaît (menu + page dédiée) ; tout est désormais dans « 📋 Détail tokens » : cartes DeFi + compteurs « X actifs / Y inactifs », tableau des tokens actifs avec un interrupteur on/off par ligne, section repliable « Tokens inactifs (N) » (fermée par défaut, plafonnée à 100 lignes avec bouton « Voir tout »), et formulaire « Ajouter un token manuellement » avec la liste des tokens manuels (interrupteur + suppression) en bas de page.

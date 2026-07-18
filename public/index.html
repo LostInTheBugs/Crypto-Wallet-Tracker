@@ -225,7 +225,7 @@ tr.tm-off td{opacity:.45}
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>📦 Version</h2>
-        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.12.2</strong></p>
+        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.12.3</strong></p>
         <p id="verStatus" style="font-size:.85rem"></p>
         <button id="updateBtn" class="hidden" onclick="doUpdate()" style="margin-top:8px;background:#238636;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:.85rem">🔄 Mettre à jour</button>
         <p id="updateMsg" style="margin-top:8px;font-size:.8rem;color:#f0c040"></p>
@@ -414,6 +414,67 @@ function changeLang() {
 var currentPage = "dashboard";
 var authMode="login", wallets=[], activeWallet="ALL", eurRate=null, currency=localStorage.getItem("currency")||"usd";
 var pieChart=null, lineChart=null, miniChart=null, pnlChart=null, lastResult=null, loadingAddr=null, chartRange="all", quickRange="week", pnlRange="30";
+
+// ── Tri des colonnes (v2.12.3) — 100 % côté client ─────────────
+// Un état de tri par table : act (tokens actifs), inact (tokens inactifs),
+// txn (transactions). dir: 1 = ascendant, -1 = descendant.
+// Défauts inchangés : tokens par Valeur desc, transactions par Date desc.
+var SORT_DEFAULTS={act:{key:"usd_value",dir:-1,type:"num"},inact:{key:"usd_value",dir:-1,type:"num"},txn:{key:"block_time",dir:-1,type:"date"}};
+var sortState=JSON.parse(JSON.stringify(SORT_DEFAULTS));
+var txnData=null; // dernière page de transactions chargée {items,total,page}
+try{
+  var _ssRaw=JSON.parse(localStorage.getItem("sortState_v1")||"null");
+  if(_ssRaw){["act","inact","txn"].forEach(function(k){
+    var s=_ssRaw[k];
+    if(s&&typeof s.key=="string"&&(s.dir===1||s.dir===-1)&&["num","str","date"].indexOf(s.type)!=-1)sortState[k]=s;
+  })}
+}catch(e){}
+
+// Tri générique, ne mute pas le tableau d'origine.
+// null/undefined/"" (et NaN en numérique) vont TOUJOURS en fin de liste,
+// quel que soit le sens (ex. PNL inconnu «—»).
+function sortRows(arr,key,dir,type){
+  var out=(arr||[]).slice();
+  out.sort(function(a,b){
+    var va=(key==="name")?(a.name||a.symbol):a[key];
+    var vb=(key==="name")?(b.name||b.symbol):b[key];
+    var ma=(va===null||va===undefined||va===""),mb=(vb===null||vb===undefined||vb==="");
+    if(ma&&mb)return 0;
+    if(ma)return 1;
+    if(mb)return -1;
+    if(type==="num"){
+      var na=Number(va),nb=Number(vb),fa=isFinite(na),fb=isFinite(nb);
+      if(!fa&&!fb)return 0;if(!fa)return 1;if(!fb)return -1;
+      return (na-nb)*dir;
+    }
+    if(type==="date"){
+      var da=Date.parse(va),db=Date.parse(vb);
+      if(!isNaN(da)&&!isNaN(db))return (da-db)*dir;
+      va=String(va);vb=String(vb);
+      return va<vb?-dir:(va>vb?dir:0);
+    }
+    return String(va).toLowerCase().localeCompare(String(vb).toLowerCase())*dir;
+  });
+  return out;
+}
+
+// Clic sur un en-tête : même colonne → inverse le sens ; nouvelle colonne →
+// asc pour texte, desc pour nombres/dates. Persisté en localStorage.
+function sortBy(table,key,type){
+  var st=sortState[table];
+  if(st&&st.key===key){st.dir=-st.dir;st.type=type}
+  else sortState[table]={key:key,dir:(type==="str"?1:-1),type:type};
+  try{localStorage.setItem("sortState_v1",JSON.stringify(sortState))}catch(e){}
+  if(table==="txn")renderTxnTable();
+  else if(lastResult)renderTokenTable(lastResult);
+}
+
+// Génère un <th> cliquable avec flèche ▲/▼ sur la colonne active.
+function sortTh(table,key,type,label){
+  var st=sortState[table];
+  var arrow=(st&&st.key===key)?(st.dir===1?" ▲":" ▼"):"";
+  return '<th style="cursor:pointer;user-select:none;white-space:nowrap" title="Trier" onclick="sortBy(\''+table+'\',\''+key+'\',\''+type+'\')">'+label+arrow+'</th>';
+}
 
 function switchPage(page) {
   currentPage = page;
@@ -689,6 +750,9 @@ function renderTokenTable(d){
   // Split active / inactive (a token is active unless enabled===false)
   var actArr=[],inactArr=[];
   for(var si=0;si<toks.length;si++){var stk=toks[si];if(stk.enabled===false)inactArr.push(stk);else actArr.push(stk)}
+  // Tri côté client (v2.12.3) — défaut : Valeur décroissante (ordre API inchangé)
+  actArr=sortRows(actArr,sortState.act.key,sortState.act.dir,sortState.act.type);
+  inactArr=sortRows(inactArr,sortState.inact.key,sortState.inact.dir,sortState.inact.type);
   var nAct=(d.active_count!=null)?d.active_count:actArr.length;
   var nInact=(d.inactive_count!=null)?d.inactive_count:inactArr.length;
   var html='<div class="card">';
@@ -732,7 +796,7 @@ function renderTokenTable(d){
   if(!actArr.length){
     html+='<div class="loading">'+t("tokNoActive")+'</div>';
   } else {
-    html+='<table><thead><tr><th>Token</th>'+(showWallet?'<th>Wallet</th>':'')+'<th>'+t("tmChainCol")+'</th><th>'+t("tmBalance")+'</th><th>'+t("tmPrice")+'</th><th>'+sym+' '+t("tmValue")+'</th><th>'+sym+' PNL</th><th>'+t("tmActive")+'</th></tr></thead><tbody>';
+    html+='<table><thead><tr>'+sortTh("act","name","str","Token")+(showWallet?'<th>Wallet</th>':'')+sortTh("act","chain","str",t("tmChainCol"))+sortTh("act","balance","num",t("tmBalance"))+sortTh("act","usd_price","num",t("tmPrice"))+sortTh("act","usd_value","num",sym+' '+t("tmValue"))+sortTh("act","pnl","num",sym+' PNL')+'<th>'+t("tmActive")+'</th></tr></thead><tbody>';
     for(var i=0;i<actArr.length;i++){var tk=actArr[i];var icon=tk.icon?'<img class="ti" src="'+esc(tk.icon)+'" onerror="this.style.display=\'none\'">':'';var pf=sym+((tk.usd_price||0)<0.01?(tk.usd_price||0).toFixed(6):(tk.usd_price||0).toFixed(4));
       var pnlKnown=(tk.pnl!==null&&tk.pnl!==undefined);var pnl=pnlKnown?tk.pnl:0;var pnlColor=pnlKnown?(pnl>=0?"#40c463":"#f85149"):"#6e7681";var pnlStr=pnlKnown?((pnl>=0?"+":"")+sym+Math.abs(pnl).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})):"—";
       var catBadge=defiCatBadge[tk.category]||'';
@@ -749,7 +813,7 @@ function renderTokenTable(d){
     html+='<div class="card" style="margin-top:16px"><details'+(tokInactOpen?' open':'')+' ontoggle="tokInactOpen=this.open">'+
       '<summary style="cursor:pointer;font-size:.95rem;font-weight:700;color:var(--title)">💤 '+t("tokInactiveTitle")+' ('+nInact+')</summary>'+
       '<p style="font-size:.75rem;color:#6e7681;margin:8px 0 10px">'+t("tmHint")+'</p>';
-    html+='<div style="overflow-x:auto"><table><thead><tr><th>Token</th><th>'+t("tmChainCol")+'</th><th>'+t("tmBalance")+'</th><th>'+sym+' '+t("tmValue")+'</th><th>'+t("tmReason")+'</th><th>'+t("tmActive")+'</th></tr></thead><tbody>';
+    html+='<div style="overflow-x:auto"><table><thead><tr>'+sortTh("inact","name","str","Token")+sortTh("inact","chain","str",t("tmChainCol"))+sortTh("inact","balance","num",t("tmBalance"))+sortTh("inact","usd_value","num",sym+' '+t("tmValue"))+sortTh("inact","reason","str",t("tmReason"))+'<th>'+t("tmActive")+'</th></tr></thead><tbody>';
     for(var ii=0;ii<shown.length;ii++){var itk=shown[ii];
       var motif=tmReasonLabel(itk.reason)||t("tmDisabledBadge");
       html+='<tr class="tm-off"><td><b>'+esc(itk.name||itk.symbol)+'</b> <span style="color:#6e7681;font-size:.75rem">'+esc(itk.symbol)+'</span></td>'+
@@ -1127,39 +1191,59 @@ async function loadTransactions(page){
   if(dir)params.push("direction="+dir);
   try{
     var r=await fetch("/api/transactions?"+params.join("&"));
-    var d=await r.json();var sym=currSymbol();
-    var html='<table><thead><tr><th>Date</th><th>Wallet</th><th>Token</th><th>Chaîne</th><th>Qté</th><th>Prix</th><th>'+sym+' Valeur</th><th>⛽</th><th>Sens</th><th>🔗</th></tr></thead><tbody>';
-    for(var i=0;i<d.items.length;i++){
-      var t=d.items[i];var date=t.block_time?t.block_time.slice(0,16).replace("T"," "):"-";
-      var short=t.wallet_address.slice(0,6)+"..."+t.wallet_address.slice(-4);
-      var dirIcon=t.direction=="in"?"📥":"📤";var dirColor=t.direction=="in"?"#40c463":"#f85149";
-      var dirLabel=t.direction=="in"?"Reçu":"Envoyé";var dirTitle=t.direction=="in"?"Entrant (reçu)":"Sortant (envoyé)";
-      var explorerLink=t.explorer_url?'<a href="'+t.explorer_url+'" target="_blank" rel="noopener" title="Voir sur l&apos;explorateur">🔗</a>':'-';
-      var val=sym+(Math.abs(t.usd_value||0)).toFixed(2);
-      var gas=t.gas_fee_usd?sym+t.gas_fee_usd.toFixed(2):"-";
-      html+='<tr><td style="font-size:.75rem;white-space:nowrap">'+date+'</td>'+
-        '<td style="font-size:.75rem;color:#6e7681">'+short+'</td>'+
-        '<td><b>'+esc(t.token_symbol)+'</b> <span style="color:#6e7681;font-size:.7rem">'+esc(t.token_name)+'</span></td>'+
-        '<td class="chain">'+t.chain+'</td>'+
-        '<td>'+t.amount.toLocaleString(undefined,{maximumFractionDigits:6})+'</td>'+
-        '<td style="font-size:.8rem">'+(t.usd_price?sym+t.usd_price.toFixed(4):"-")+'</td>'+
-        '<td class="usd">'+val+'</td>'+
-        '<td style="font-size:.8rem;color:#6e7681">'+gas+'</td>'+
-        '<td style="font-size:.75rem;color:'+dirColor+'" title="'+dirTitle+'">'+dirIcon+' <span style="font-size:.7rem">'+dirLabel+'</span></td>'+
-        '<td>'+explorerLink+'</td></tr>';
-    }
-    html+='</tbody></table>';
-    var totalPages=Math.ceil(d.total/100);
-    html+='<div style="margin-top:12px;display:flex;gap:8px;justify-content:center">';
-    for(var p=0;p<Math.min(totalPages,20);p++){html+='<button class="btn'+(p==page?' btn-blue':'')+'" onclick="loadTransactions('+p+')" style="font-size:.7rem;padding:2px 8px">'+(p+1)+'</button>'}
-    if(totalPages>20)html+='<span style="color:#6e7681;font-size:.7rem">...'+totalPages+' pages</span>';
-    html+='</div>';
-    document.getElementById("txnContent").innerHTML=html;
+    var d=await r.json();
+    txnData={items:d.items||[],total:d.total||0,page:page};
+    renderTxnTable(); // le tri courant (sortState.txn) est réappliqué à chaque rafraîchissement
     if(!chain){
-      var chains=[];for(var j=0;j<d.items.length;j++){if(chains.indexOf(d.items[j].chain)===-1)chains.push(d.items[j].chain)}
+      var chains=[];for(var j=0;j<txnData.items.length;j++){if(chains.indexOf(txnData.items[j].chain)===-1)chains.push(txnData.items[j].chain)}
       var csel=document.getElementById("txnChain");if(csel.options.length<=1){chains.forEach(function(c){csel.innerHTML+='<option value="'+c+'">'+c+'</option>'})}
     }
   }catch(e){console.error("loadTransactions",e);document.getElementById("txnContent").innerHTML='<div class="error">Erreur</div>'}
+}
+
+// Rend la page de transactions courante (txnData) avec tri côté client.
+// Variable de boucle nommée `tx` — JAMAIS `t` (masquerait la fonction i18n t()).
+function renderTxnTable(){
+  if(!txnData)return;
+  var sym=currSymbol(),page=txnData.page||0;
+  var items=sortRows(txnData.items,sortState.txn.key,sortState.txn.dir,sortState.txn.type);
+  var html='<table><thead><tr>'+
+    sortTh("txn","block_time","date","Date")+
+    '<th>Wallet</th>'+
+    sortTh("txn","token_symbol","str","Token")+
+    sortTh("txn","chain","str","Chaîne")+
+    sortTh("txn","amount","num","Qté")+
+    sortTh("txn","usd_price","num","Prix")+
+    sortTh("txn","usd_value","num",sym+' Valeur')+
+    sortTh("txn","gas_fee_usd","num","⛽")+
+    sortTh("txn","direction","str","Sens")+
+    '<th>🔗</th></tr></thead><tbody>';
+  for(var i=0;i<items.length;i++){
+    var tx=items[i];var date=tx.block_time?tx.block_time.slice(0,16).replace("T"," "):"-";
+    var short=tx.wallet_address.slice(0,6)+"..."+tx.wallet_address.slice(-4);
+    var dirIcon=tx.direction=="in"?"📥":"📤";var dirColor=tx.direction=="in"?"#40c463":"#f85149";
+    var dirLabel=tx.direction=="in"?"Reçu":"Envoyé";var dirTitle=tx.direction=="in"?"Entrant (reçu)":"Sortant (envoyé)";
+    var explorerLink=tx.explorer_url?'<a href="'+tx.explorer_url+'" target="_blank" rel="noopener" title="Voir sur l&apos;explorateur">🔗</a>':'-';
+    var val=sym+(Math.abs(tx.usd_value||0)).toFixed(2);
+    var gas=tx.gas_fee_usd?sym+tx.gas_fee_usd.toFixed(2):"-";
+    html+='<tr><td style="font-size:.75rem;white-space:nowrap">'+date+'</td>'+
+      '<td style="font-size:.75rem;color:#6e7681">'+short+'</td>'+
+      '<td><b>'+esc(tx.token_symbol)+'</b> <span style="color:#6e7681;font-size:.7rem">'+esc(tx.token_name)+'</span></td>'+
+      '<td class="chain">'+tx.chain+'</td>'+
+      '<td>'+tx.amount.toLocaleString(undefined,{maximumFractionDigits:6})+'</td>'+
+      '<td style="font-size:.8rem">'+(tx.usd_price?sym+tx.usd_price.toFixed(4):"-")+'</td>'+
+      '<td class="usd">'+val+'</td>'+
+      '<td style="font-size:.8rem;color:#6e7681">'+gas+'</td>'+
+      '<td style="font-size:.75rem;color:'+dirColor+'" title="'+dirTitle+'">'+dirIcon+' <span style="font-size:.7rem">'+dirLabel+'</span></td>'+
+      '<td>'+explorerLink+'</td></tr>';
+  }
+  html+='</tbody></table>';
+  var totalPages=Math.ceil(txnData.total/100);
+  html+='<div style="margin-top:12px;display:flex;gap:8px;justify-content:center">';
+  for(var p=0;p<Math.min(totalPages,20);p++){html+='<button class="btn'+(p==page?' btn-blue':'')+'" onclick="loadTransactions('+p+')" style="font-size:.7rem;padding:2px 8px">'+(p+1)+'</button>'}
+  if(totalPages>20)html+='<span style="color:#6e7681;font-size:.7rem">...'+totalPages+' pages</span>';
+  html+='</div>';
+  document.getElementById("txnContent").innerHTML=html;
 }
 
 // ── Token management (merged into Détail tokens — v2.12.2) ─
