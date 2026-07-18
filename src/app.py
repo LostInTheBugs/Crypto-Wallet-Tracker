@@ -33,6 +33,9 @@ from services.token_prefs import (
     insert_default_prefs, reclassify_prefs,
 )
 from services.tx_events import group_transaction_events, filter_events
+from services.defi_service import (
+    MORALIS_DEFI_CHAINS, normalize_defi_positions, summarize_defi_positions,
+)
 
 # ── Logging configuration ───────────────────────────────────────
 import logging
@@ -1890,6 +1893,135 @@ async def update_application(user=Depends(get_current_user)):
         return {"ok": False, "msg": str(e)[:200]}
 
 
+# ── DeFi positions (Moralis) — v2.12.8 ─────────────────────────
+
+_defi_cache: dict = {}          # (user_id, address_lower) -> {"data": dict, "ts": float}
+_DEFI_CACHE_TTL = 600           # seconds — protects Moralis free-tier quotas
+_EMPTY_DEFI_SUMMARY = {
+    "total_supplied_usd": 0, "total_borrowed_usd": 0,
+    "total_rewards_usd": 0, "net_usd": 0, "positions_count": 0,
+}
+
+
+async def _get_user_moralis_key(user_id: int) -> str:
+    """Get Moralis API key for user, fallback to env var (same pattern as CoinGecko)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT api_key FROM user_api_keys WHERE user_id=? AND provider='moralis'", (user_id,))
+        row = await cur.fetchone()
+    if row:
+        return row["api_key"]
+    return os.environ.get("MORALIS_API_KEY", "")
+
+
+def _invalidate_defi_cache(user_id: int):
+    """Drop cached DeFi responses for one user (key added/changed/removed)."""
+    for _k in [k for k in list(_defi_cache) if isinstance(k, tuple) and k and k[0] == user_id]:
+        _defi_cache.pop(_k, None)
+
+
+async def _fetch_moralis_defi_positions(api_key: str, address: str):
+    """Query Moralis DeFi positions for `address` on every supported chain.
+
+    One GET per chain (the endpoint takes a single ?chain=), all in parallel.
+    Fully defensive: any per-chain failure (HTTP != 200, timeout, bad JSON)
+    is recorded as a readable error string and never raises.
+    Returns (positions, errors).
+    """
+    _log = logging.getLogger("crypto.defi")
+    base = "https://deep-index.moralis.io/api/v2.2"
+    headers = {"X-API-Key": api_key, "Accept": "application/json"}
+
+    async def one_chain(client, chain):
+        try:
+            r = await client.get(
+                f"{base}/wallets/{address}/defi/positions",
+                params={"chain": chain}, headers=headers)
+            if r.status_code == 200:
+                try:
+                    payload = r.json()
+                except Exception:
+                    return [], f"{chain}: réponse JSON invalide"
+                return normalize_defi_positions(payload, chain=chain), None
+            if r.status_code == 401:
+                return [], "Moralis: clé API invalide ou expirée (401)"
+            if r.status_code == 429:
+                return [], f"{chain}: quota Moralis dépassé (429)"
+            # 400 = chaîne non supportée pour cette route → silencieux
+            if r.status_code == 400:
+                _log.debug(f"[DEFI] chain={chain} not supported (400)")
+                return [], None
+            return [], f"{chain}: HTTP {r.status_code}"
+        except Exception as e:
+            return [], f"{chain}: {str(e)[:80]}"
+
+    positions, errors = [], []
+    try:
+        async with httpx.AsyncClient(timeout=25, follow_redirects=True) as client:
+            results = await asyncio.gather(
+                *[one_chain(client, c) for c in MORALIS_DEFI_CHAINS],
+                return_exceptions=True)
+    except Exception as e:
+        return [], [f"Moralis: {str(e)[:120]}"]
+
+    for res in results:
+        if isinstance(res, BaseException):
+            errors.append(str(res)[:80])
+            continue
+        chain_positions, err = res
+        positions.extend(chain_positions or [])
+        if err:
+            errors.append(err)
+
+    # Dedupe error strings (an invalid key repeats once per chain)
+    seen = set()
+    uniq_errors = []
+    for e in errors:
+        if e not in seen:
+            seen.add(e)
+            uniq_errors.append(e)
+    _log.info(f"[DEFI] address={address[:12]}... positions={len(positions)} errors={len(uniq_errors)}")
+    return positions, uniq_errors
+
+
+@app.get("/api/defi/positions")
+async def defi_positions(address: str = Query(...), force: bool = Query(False), user=Depends(get_current_user)):
+    """DeFi positions (lending/borrowing/staking/LP) of a wallet via Moralis.
+
+    Without a configured Moralis key: HTTP 200 with configured=false so the
+    UI can show a "configure your key" state — never a 5xx.
+    """
+    if not address.startswith("0x"):
+        raise HTTPException(400, "Adresse invalide")
+
+    api_key = await _get_user_moralis_key(user["id"])
+    if not api_key:
+        return {
+            "configured": False,
+            "address": address,
+            "positions": [],
+            "summary": dict(_EMPTY_DEFI_SUMMARY),
+        }
+
+    cache_key = (user["id"], address.lower())
+    now = _time.time()
+    entry = _defi_cache.get(cache_key)
+    if not force and entry and (now - entry["ts"]) < _DEFI_CACHE_TTL:
+        return {**entry["data"], "cached": True}
+
+    positions, errors = await _fetch_moralis_defi_positions(api_key, address)
+    data = {
+        "configured": True,
+        "address": address,
+        "positions": positions,
+        "summary": summarize_defi_positions(positions),
+    }
+    if errors:
+        data["error"] = " ; ".join(errors[:3])[:300]
+    _defi_cache[cache_key] = {"data": data, "ts": now}
+    return data
+
+
 # ── External API Keys catalogue ─────────────────────────────
 
 API_KEY_CATALOGUE = [
@@ -1956,6 +2088,8 @@ async def set_api_key(provider: str, request: Request, user=Depends(get_current_
         "INSERT OR REPLACE INTO user_api_keys (user_id, provider, api_key) VALUES (?, ?, ?)",
         (user["id"], provider, api_key))
     await db.commit()
+    if provider == "moralis":
+        _invalidate_defi_cache(user["id"])
     return {"ok": True, "provider": provider, "configured": True, "msg": "Clé enregistrée"}
 
 
@@ -1963,6 +2097,8 @@ async def set_api_key(provider: str, request: Request, user=Depends(get_current_
 async def delete_api_key(provider: str, user=Depends(get_current_user), db=Depends(get_db)):
     await db.execute("DELETE FROM user_api_keys WHERE user_id=? AND provider=?", (user["id"], provider))
     await db.commit()
+    if provider == "moralis":
+        _invalidate_defi_cache(user["id"])
     return {"ok": True, "provider": provider, "configured": False}
 
 

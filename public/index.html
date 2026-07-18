@@ -142,6 +142,7 @@ tr.tm-off td{opacity:.45}
   <a href="#" class="active" onclick="switchPage('dashboard')" data-page="dashboard">📊 <span>Dashboard</span></a>
   <a href="#" onclick="switchPage('stats')" data-page="stats">📈 <span>Statistiques</span></a>
   <a href="#" onclick="switchPage('tokens')" data-page="tokens">📋 <span>Détail tokens</span></a>
+  <a href="#" onclick="switchPage('defi')" data-page="defi">🏦 <span>DeFi</span></a>
   <a href="#" onclick="switchPage('nfts')" data-page="nfts">🖼️ <span>NFTs</span></a>
   <a href="#" onclick="switchPage('txns')" data-page="txns">📜 <span>Transactions</span></a>
   <a href="#" onclick="switchPage('wallets')" data-page="wallets">💼 <span>Wallets</span></a>
@@ -226,6 +227,7 @@ tr.tm-off td{opacity:.45}
     </div>
 
     <div id="pageTokens" class="hidden"></div>
+    <div id="pageDefiPos" class="hidden"></div>
     <div id="pageNFTs" class="hidden"></div>
     <div id="pageTxns" class="hidden">
       <div class="card"><h2>📜 Transactions
@@ -254,7 +256,7 @@ tr.tm-off td{opacity:.45}
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>📦 Version</h2>
-        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.12.7</strong></p>
+        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.12.8</strong></p>
         <p id="verStatus" style="font-size:.85rem"></p>
         <button id="updateBtn" class="hidden" onclick="doUpdate()" style="margin-top:8px;background:#238636;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:.85rem">🔄 Mettre à jour</button>
         <p id="updateMsg" style="margin-top:8px;font-size:.8rem;color:#f0c040"></p>
@@ -362,6 +364,25 @@ var T = {
     apiKeyNotConfigured: "Non configuré",
     apiKeySaved: "✅ Clé enregistrée",
     apiKeyDeleted: "Clé supprimée",
+    defi: "DeFi",
+    dpLoading: "Chargement des positions DeFi…",
+    dpNoKey: "Ajoute ta clé Moralis dans Réglages → Clés API externes pour afficher tes positions DeFi (lending, emprunts, staking, LP) avec récompenses, health factor et APY.",
+    dpGoSettings: "Configurer ma clé Moralis",
+    dpNone: "Aucune position DeFi détectée",
+    dpError: "Erreur lors de la récupération des positions DeFi",
+    dpTotalSupplied: "Total fourni",
+    dpTotalBorrowed: "Total emprunté",
+    dpTotalRewards: "Récompenses",
+    dpNetValue: "Valeur nette DeFi",
+    dpSupplied: "Fourni",
+    dpBorrowed: "Emprunté",
+    dpRewards: "Récompenses",
+    dpHealth: "Health factor",
+    dpApy: "APY",
+    dpPnl: "PnL",
+    dpView: "Voir la position",
+    dpRefresh: "Actualiser",
+    dpPositions: "position(s)",
   },
   en: {
     dashboard: "Dashboard", stats: "Statistics", tokens: "Token Details", nfts: "NFTs",
@@ -438,6 +459,25 @@ var T = {
     apiKeyNotConfigured: "Not configured",
     apiKeySaved: "✅ Key saved",
     apiKeyDeleted: "Key deleted",
+    defi: "DeFi",
+    dpLoading: "Loading DeFi positions…",
+    dpNoKey: "Add your Moralis key in Settings → External API Keys to display your DeFi positions (lending, borrowing, staking, LP) with rewards, health factor and APY.",
+    dpGoSettings: "Configure my Moralis key",
+    dpNone: "No DeFi positions detected",
+    dpError: "Error while fetching DeFi positions",
+    dpTotalSupplied: "Total supplied",
+    dpTotalBorrowed: "Total borrowed",
+    dpTotalRewards: "Rewards",
+    dpNetValue: "Net DeFi value",
+    dpSupplied: "Supplied",
+    dpBorrowed: "Borrowed",
+    dpRewards: "Rewards",
+    dpHealth: "Health factor",
+    dpApy: "APY",
+    dpPnl: "PnL",
+    dpView: "View position",
+    dpRefresh: "Refresh",
+    dpPositions: "position(s)",
   }
 };
 function t(key) { return (T[LANG] && T[LANG][key]) || key; }
@@ -445,7 +485,7 @@ function applyLang() {
   document.getElementById("setLang").value = LANG;
   // Update sidebar
   var links = document.querySelectorAll(".sidebar a");
-  var keys = ["dashboard","stats","tokens","nfts","txns","wallets","settings"];
+  var keys = ["dashboard","stats","tokens","defi","nfts","txns","wallets","settings"];
   for (var i=0;i<Math.min(links.length,keys.length);i++) {
     var span = links[i].querySelector("span");
     if (span) span.textContent = t(keys[i]);
@@ -550,6 +590,7 @@ function switchPage(page) {
   document.getElementById("pageDashboard").classList.toggle("hidden", page!="dashboard");
   document.getElementById("pageStats").classList.toggle("hidden", page!="stats");
   document.getElementById("pageTokens").classList.toggle("hidden", page!="tokens");
+  document.getElementById("pageDefiPos").classList.toggle("hidden", page!="defi");
   document.getElementById("pageNFTs").classList.toggle("hidden", page!="nfts");
   document.getElementById("pageTxns").classList.toggle("hidden", page!="txns");
   document.getElementById("pageWallets").classList.toggle("hidden", page!="wallets");
@@ -558,6 +599,7 @@ function switchPage(page) {
   if (page=="stats") { populateFilters(); drawLineChart(); drawPnlChart(); }
   if (page=="txns") loadTransactions();
   if (page=="tokens" && lastResult) renderTokenTable(lastResult);
+  if (page=="defi") loadDefiPositions();
   if (page=="nfts") loadNFTs();
   if (page=="wallets") renderWalletPage();
   if (page=="settings") renderSettingsPage();
@@ -944,6 +986,148 @@ async function loadNFTs(){
     html+='</div></div>';
     el.innerHTML=html;
   }catch(e){console.error("loadNFTs",e);el.innerHTML='<div class="card"><div class="error">Erreur de chargement des NFTs</div></div>'}
+}
+
+// ── Page DeFi — positions via Moralis (v2.12.8) ───────────────
+// PIEGE v2.11.26 : jamais de variable locale nommée t/esc/fmtCurr/fetch ici.
+function dpAmt(v){
+  var n=Number(v);
+  if(!isFinite(n))return "0";
+  return n.toLocaleString(undefined,{maximumFractionDigits:Math.abs(n)>=1000?2:6});
+}
+
+function dpTypeLabel(ty){
+  var s=String(ty==null?"":ty).toLowerCase();
+  var map={lending:"Lending",staking:"Staking",liquidity:"LP","liquidity pool":"LP",farming:"Farming",vault:"Vault",yield:"Yield",rewards:"Rewards",defi:"DeFi"};
+  if(map[s])return map[s];
+  return s?s.charAt(0).toUpperCase()+s.slice(1):"DeFi";
+}
+
+function dpTokenLines(list,color,label){
+  if(!Array.isArray(list)||!list.length)return "";
+  var rows="";
+  for(var i=0;i<list.length;i++){
+    var tk=list[i]||{};
+    rows+='<div style="display:flex;justify-content:space-between;gap:10px;font-size:.78rem;padding:2px 0">'+
+      '<span>'+esc(dpAmt(tk.amount))+' <b>'+esc(tk.symbol||"?")+'</b></span>'+
+      '<span style="color:'+color+'">'+fmtCurr(tk.usd_value||0)+'</span></div>';
+  }
+  return '<div style="margin-top:8px"><div style="font-size:.62rem;color:'+color+';text-transform:uppercase;letter-spacing:.5px">'+esc(label)+'</div>'+rows+'</div>';
+}
+
+async function loadDefiPositions(force){
+  var el=document.getElementById("pageDefiPos");
+  if(!el)return;
+  el.innerHTML='<div class="card"><div class="loading">'+esc(t("dpLoading"))+'</div></div>';
+  try{
+    var addrs=activeWallet=="ALL"?wallets.map(function(w){return w.address}):[activeWallet];
+    addrs=addrs.filter(function(a){return a&&a!="ALL"});
+    if(!addrs.length){el.innerHTML='<div class="card"><h2>🏦 DeFi</h2><div class="loading">'+esc(t("noWallet"))+'</div></div>';return}
+    var results=await Promise.all(addrs.map(function(a){
+      return fetch("/api/defi/positions?address="+encodeURIComponent(a)+(force?"&force=true":""))
+        .then(function(r){return r.ok?r.json():null})
+        .catch(function(){return null});
+    }));
+    renderDefiPositions(results);
+  }catch(e){console.error("loadDefiPositions",e);el.innerHTML='<div class="card"><div class="error">'+esc(t("dpError"))+'</div></div>'}
+}
+
+function renderDefiPositions(results){
+  var el=document.getElementById("pageDefiPos");
+  if(!el)return;
+  var valid=[],i,j;
+  for(i=0;i<(results||[]).length;i++){var rr=results[i];if(rr&&typeof rr==="object"&&rr.summary)valid.push(rr)}
+  if(!valid.length){el.innerHTML='<div class="card"><div class="error">'+esc(t("dpError"))+'</div></div>';return}
+
+  var configured=false,allPos=[],errs=[],sup=0,bor=0,rew=0;
+  for(i=0;i<valid.length;i++){
+    var res=valid[i];
+    if(res.configured)configured=true;
+    var ps=Array.isArray(res.positions)?res.positions:[];
+    for(j=0;j<ps.length;j++)allPos.push(ps[j]);
+    var sm=res.summary||{};
+    sup+=sm.total_supplied_usd||0;bor+=sm.total_borrowed_usd||0;rew+=sm.total_rewards_usd||0;
+    if(res.error&&errs.indexOf(res.error)<0)errs.push(res.error);
+  }
+
+  // Etat « pas de clé Moralis » — CTA vers Réglages
+  if(!configured){
+    el.innerHTML='<div class="card" style="text-align:center;padding:40px 24px">'+
+      '<div style="font-size:2.2rem;margin-bottom:8px">🏦</div>'+
+      '<h2 style="justify-content:center">DeFi</h2>'+
+      '<p style="color:#8b949e;max-width:520px;margin:10px auto 18px;font-size:.85rem;line-height:1.5">'+esc(t("dpNoKey"))+'</p>'+
+      '<button class="btn btn-blue" onclick="switchPage(\'settings\')">🔑 '+esc(t("dpGoSettings"))+'</button></div>';
+    return;
+  }
+
+  var net=sup-bor+rew;
+  var html='<div class="grid">'+
+    '<div class="stat-card"><div class="label">'+esc(t("dpTotalSupplied"))+'</div><div class="value">'+fmtCurr(sup)+'</div></div>'+
+    '<div class="stat-card"><div class="label">'+esc(t("dpTotalBorrowed"))+'</div><div class="value" style="color:#f85149">'+fmtCurr(bor)+'</div></div>'+
+    '<div class="stat-card"><div class="label">'+esc(t("dpTotalRewards"))+'</div><div class="value" style="color:#40c463">'+fmtCurr(rew)+'</div></div>'+
+    '<div class="stat-card" style="border-left:2px solid #4dabf7"><div class="label">'+esc(t("dpNetValue"))+'</div><div class="value" style="color:#4dabf7">'+fmtCurr(net)+'</div></div></div>';
+
+  if(errs.length)html+='<div style="background:#332200;border:1px solid #f0c040;border-radius:8px;padding:8px 14px;margin-bottom:12px;font-size:.75rem;color:#f0c040">⚠️ '+esc(errs.join(" ; ").slice(0,300))+'</div>';
+
+  var refreshBtn='<button onclick="loadDefiPositions(true)" style="background:var(--card);border:1px solid var(--border);color:var(--accent);padding:4px 12px;border-radius:6px;cursor:pointer;font-size:.72rem;margin-left:auto">🔄 '+esc(t("dpRefresh"))+'</button>';
+
+  if(!allPos.length){
+    html+='<div class="card"><h2>🏦 DeFi'+refreshBtn+'</h2><div class="loading" style="padding:24px">'+esc(t("dpNone"))+'</div></div>';
+    el.innerHTML=html;
+    return;
+  }
+
+  // Regroupement par protocole
+  var groups={},order=[];
+  for(i=0;i<allPos.length;i++){
+    var pos=allPos[i]||{};
+    var gk=String(pos.protocol_id||pos.protocol||"?");
+    if(!groups[gk]){groups[gk]={proto:pos,items:[],net:0};order.push(gk)}
+    groups[gk].items.push(pos);
+    groups[gk].net+=pos.net_usd||0;
+  }
+  order.sort(function(a,b){return groups[b].net-groups[a].net});
+
+  html+='<div style="display:flex;margin-bottom:12px">'+refreshBtn+'</div>';
+
+  for(var g=0;g<order.length;g++){
+    var grp=groups[order[g]],proto=grp.proto||{};
+    var logo=proto.protocol_logo
+      ?'<img src="'+esc(proto.protocol_logo)+'" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display=\'none\'" style="width:26px;height:26px;border-radius:6px;background:#0d1117;object-fit:contain">'
+      :'<span style="font-size:1.1rem">🏦</span>';
+    var protoLink=proto.protocol_url?'<a href="'+esc(proto.protocol_url)+'" target="_blank" rel="noopener" style="color:var(--accent);font-size:.72rem;font-weight:400" title="'+esc(proto.protocol_url)+'">↗</a>':'';
+    html+='<div class="card" style="margin-bottom:14px"><h2>'+logo+'<span>'+esc(proto.protocol||order[g])+'</span>'+protoLink+
+      '<span style="font-weight:400;font-size:.68rem;color:#6e7681;margin-left:auto">'+grp.items.length+' '+esc(t("dpPositions"))+' · '+fmtCurr(grp.net)+'</span></h2>';
+
+    for(j=0;j<grp.items.length;j++){
+      var it=grp.items[j]||{};
+      html+='<div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px 14px;margin-top:10px">';
+      html+='<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">'+
+        '<span style="font-size:.62rem;padding:2px 8px;border-radius:8px;background:#1a2332;color:#4dabf7;font-weight:600;text-transform:uppercase;letter-spacing:.5px">'+esc(dpTypeLabel(it.type))+'</span>'+
+        (it.chain?'<span style="font-size:.62rem;padding:2px 8px;border-radius:8px;background:#21262d;color:#8b949e">'+esc(it.chain)+'</span>':'')+
+        '<span style="margin-left:auto;font-weight:700">'+fmtCurr(it.net_usd||0)+'</span></div>';
+      html+=dpTokenLines(it.supplied,"#c9d1d9",t("dpSupplied"));
+      html+=dpTokenLines(it.borrowed,"#f85149",t("dpBorrowed"));
+      html+=dpTokenLines(it.rewards,"#40c463",t("dpRewards"));
+
+      var mets=[];
+      if(it.health_factor!==null&&it.health_factor!==undefined){
+        var hf=Number(it.health_factor);
+        var hfc=hf>=1.5?"#40c463":(hf>=1.1?"#f0c040":"#f85149");
+        mets.push('<span>'+esc(t("dpHealth"))+' : <b style="color:'+hfc+'">'+esc(dpAmt(hf))+'</b></span>');
+      }
+      if(it.apy!==null&&it.apy!==undefined)mets.push('<span>'+esc(t("dpApy"))+' : <b>'+esc(dpAmt(it.apy))+'%</b></span>');
+      if(it.pnl!==null&&it.pnl!==undefined){
+        var pv=Number(it.pnl)||0;
+        mets.push('<span>'+esc(t("dpPnl"))+' : <b style="color:'+(pv>=0?"#40c463":"#f85149")+'">'+(pv>=0?"+":"")+fmtCurr(pv)+'</b></span>');
+      }
+      if(mets.length)html+='<div style="display:flex;gap:16px;flex-wrap:wrap;font-size:.72rem;color:#8b949e;margin-top:8px">'+mets.join("")+'</div>';
+      if(it.link)html+='<div style="margin-top:8px"><a href="'+esc(it.link)+'" target="_blank" rel="noopener" style="color:var(--accent);font-size:.72rem">'+esc(t("dpView"))+' ↗</a></div>';
+      html+='</div>';
+    }
+    html+='</div>';
+  }
+  el.innerHTML=html;
 }
 
 async function drawLineChart(){

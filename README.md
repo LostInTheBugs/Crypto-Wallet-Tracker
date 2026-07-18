@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — v2.12.7
+# Crypto Wallet Tracker — v2.12.8
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -13,6 +13,7 @@ Dashboard agrégé, graphiques d'évolution, historique des prix via DefiLlama, 
 - 💰 **Valorisation USD/€** — temps réel via Blockscout, conversion EUR (Frankfurter)
 - 🦙 **Fallback prix DefiLlama** — si Blockscout ne donne pas de prix, appel batch à l'API gratuite `coins.llama.fi/prices/current`
 - 🔒 **Détection DeFi best-effort** — catégorisation fine (lending, LP, staked, vault, synthetic) via heuristiques sur les symboles, aucun service tiers, 100 % gratuit. Section DeFi dédiée avec badges colorés et sous-totaux par catégorie
+- 🏦 **Page DeFi (Moralis)** — page dédiée listant les vraies positions DeFi par protocole (lending fourni/emprunté, staking, LP) avec récompenses, health factor, APY, PnL quand disponibles, et lien vers chaque position (dapp ou explorer). Résumé global fourni/emprunté/récompenses/valeur nette. Nécessite une clé API Moralis (gratuite) dans Paramètres → Clés API externes ; sans clé, la page l'explique proprement
 - 🎛️ **Gestion des tokens intégrée** — tout se passe dans l'onglet « Détail tokens » : compteurs actifs/inactifs, interrupteur on/off sur chaque ligne, section repliable des tokens inactifs (badge du motif), formulaire d'ajout manuel. Les tokens sans valeur, le spam, les memecoins illiquides et les prix à faible confiance DefiLlama sont désactivés par défaut ; un token désactivé est exclu des totaux, de la répartition DeFi et de l'historique (effet rétroactif)
 - 👥 **Comptes utilisateurs** — inscription, connexion, wallets privés (bcrypt + sessions)
 - 📊 **Dashboard** — valeur totale, répartition par chaîne (donut), cartes PNL Total / PNL 24h, mini-graphe, gaz cumulé
@@ -58,6 +59,7 @@ Crypto-Wallet-Tracker/
 │       ├── price_service.py   # SYMBOL_TO_CG, DefiLlama/CoinGecko, cache prix
 │       ├── pnl_service.py     # Timeline unifié, reconstruction soldes, PNL
 │       └── portfolio_service.py  # 22 chaînes, natif, fallback prix, spam, staked
+│       (+ defi_service.py — normaliseur positions DeFi Moralis, module pur)
 ├── public/index.html        # Frontend SPA + Chart.js (~800 lignes)
 ├── Dockerfile
 ├── docker-compose.yml
@@ -125,6 +127,15 @@ Crypto-Wallet-Tracker/
 ---
 
 ## 📋 Changelog
+
+### v2.12.8 — Page DeFi dédiée (positions réelles via Moralis)
+
+- **Nouvelle page « 🏦 DeFi »** — affiche l'ensemble des positions DeFi d'un wallet, regroupées par protocole (carte avec logo, nom, lien dapp) : lending (fourni/emprunté), borrowing, staking, LP. Chaque position montre son badge de type, les lignes Fourni / Emprunté (rouge) / Récompenses (vert) avec montants et valeurs, le health factor (coloré selon le risque), l'APY et le PnL quand Moralis les fournit, et un lien « Voir la position » (dapp du protocole ou explorer du contrat). En-tête résumé : total fourni, total emprunté, récompenses, valeur nette DeFi. Multi-wallets agrégé (vue « Tous »).
+- **Backend `GET /api/defi/positions?address=`** — interroge l'API DeFi de Moralis (`/wallets/{address}/defi/positions`, header `X-API-Key`) en parallèle sur 9 chaînes (eth, polygon, bsc, arbitrum, optimism, base, avalanche, gnosis, linea). Normalisation défensive vers un format stable (`src/services/defi_service.py`, module pur testable) : classification supplied/borrowed/rewards depuis `token_type` (en cas de doute → supplied), sommes par position, `net_usd = fourni − emprunté + récompenses`, tolérance totale aux champs manquants. Résumé global calculé côté serveur.
+- **Sans clé Moralis** — réponse HTTP 200 `{"configured": false, ...}` (jamais de 500) ; la page affiche « Ajoute ta clé Moralis dans Réglages → Clés API externes » avec un bouton vers les Réglages. La clé se configure par utilisateur via le catalogue v2.12.7 (provider `moralis`, fallback env `MORALIS_API_KEY`). Erreurs Moralis (401/429/timeout) remontées dans un champ `error` lisible et affichées en bandeau discret, positions déjà récupérées conservées.
+- **Cache serveur 600 s** par (utilisateur, adresse) pour préserver le quota du free tier Moralis, bypass `&force=true` (bouton 🔄 Actualiser), invalidation à l'enregistrement/suppression de la clé Moralis.
+- **La répartition DeFi best-effort existante (heuristiques, onglet Détail tokens) est inchangée** — la nouvelle page est séparée et n'utilise Moralis que pour elle-même.
+- **Tests** — `python3 tests/test_defi_normalizer.py` (49 assertions sur le normaliseur : mapping supplied/borrowed/rewards, sommes, net, health factor, APY, liens, entrées sales) et `node tests/smoke_defi_v2.12.8.js` (34 assertions : exécute le script inline réel dans un sandbox vm — états sans clé / avec positions / 0 position / erreur / garbage, XSS, pas de shadowing de `t()`, cohérence sidebar/applyLang/switchPage). i18n FR/EN, `esc()` partout.
 
 ### v2.12.7 — Catalogue des clés API externes
 
