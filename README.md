@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — v2.11.26
+# Crypto Wallet Tracker — v2.11.27
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -124,6 +124,9 @@ Crypto-Wallet-Tracker/
 ---
 
 ## 📋 Changelog
+
+### v2.11.27 — Hotfix rendu tokens
+- **Correction d'une regression v2.11.26** : dans l'onglet « Détail tokens », la variable de boucle `t` masquait la fonction de traduction `t()` nouvellement appelée dans la même fonction (hoisting), provoquant une `TypeError` qui laissait la page vide et masquait la section DeFi. La variable de boucle est renommée ; le tableau des tokens et la section DeFi s'affichent à nouveau.
 
 ### v2.11.26 — DeFi best-effort gratuite
 - **Catégorisation DeFi fine** — détection heuristique de 5 catégories (lending, LP, staked/LST, vault/yield, synthetic) à partir des symboles de tokens, sans aucune API tierce.

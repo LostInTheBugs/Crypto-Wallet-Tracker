@@ -213,7 +213,7 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>📦 Version</h2>
-        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.11.26</strong></p>
+        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.11.27</strong></p>
         <p id="verStatus" style="font-size:.85rem"></p>
         <button id="updateBtn" class="hidden" onclick="doUpdate()" style="margin-top:8px;background:#238636;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:.85rem">🔄 Mettre à jour</button>
         <p id="updateMsg" style="margin-top:8px;font-size:.8rem;color:#f0c040"></p>
@@ -641,9 +641,9 @@ function renderTokenTable(d){
     staked:'<span style="background:#14532d;color:#4ade80;font-size:.6rem;padding:1px 5px;border-radius:3px;margin-left:4px">'+t('staked')+'</span>',
     vault:'<span style="background:#3d3520;color:#f0c040;font-size:.6rem;padding:1px 5px;border-radius:3px;margin-left:4px">'+t('vault')+'</span>',
     synthetic:'<span style="background:#3d2a1a;color:#ff922b;font-size:.6rem;padding:1px 5px;border-radius:3px;margin-left:4px">'+t('synthetic')+'</span>'};
-  for(var i=0;i<d.tokens.length;i++){var t=d.tokens[i];var icon=t.icon?'<img class="ti" src="'+esc(t.icon)+'" onerror="this.style.display=\'none\'">':'';var pf=sym+(t.usd_price<0.01?t.usd_price.toFixed(6):t.usd_price.toFixed(4));
-    var pnlKnown=(t.pnl!==null&&t.pnl!==undefined);var pnl=pnlKnown?t.pnl:0;var pnlColor=pnlKnown?(pnl>=0?"#40c463":"#f85149"):"#6e7681";var pnlStr=pnlKnown?((pnl>=0?"+":"")+sym+Math.abs(pnl).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})):"—";
-    var catBadge=defiCatBadge[t.category]||'';html+='<tr><td>'+icon+'<b>'+esc(t.name)+'</b> <span style="color:#6e7681;font-size:.75rem">'+esc(t.symbol)+'</span>'+catBadge+'</td>'+(showWallet?'<td style="font-size:.75rem;color:#6e7681">'+esc(t._wallet)+'</td>':'')+'<td class="chain">'+t.chain+'</td><td>'+t.balance.toLocaleString()+'</td><td>'+pf+'</td><td class="usd">'+fmtCurr(t.usd_value)+'</td><td class="usd" style="color:'+pnlColor+'">'+pnlStr+'</td></tr>'}
+  for(var i=0;i<d.tokens.length;i++){var tk=d.tokens[i];var icon=tk.icon?'<img class="ti" src="'+esc(tk.icon)+'" onerror="this.style.display=\'none\'">':'';var pf=sym+(tk.usd_price<0.01?tk.usd_price.toFixed(6):tk.usd_price.toFixed(4));
+    var pnlKnown=(tk.pnl!==null&&tk.pnl!==undefined);var pnl=pnlKnown?tk.pnl:0;var pnlColor=pnlKnown?(pnl>=0?"#40c463":"#f85149"):"#6e7681";var pnlStr=pnlKnown?((pnl>=0?"+":"")+sym+Math.abs(pnl).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})):"—";
+    var catBadge=defiCatBadge[tk.category]||'';html+='<tr><td>'+icon+'<b>'+esc(tk.name)+'</b> <span style="color:#6e7681;font-size:.75rem">'+esc(tk.symbol)+'</span>'+catBadge+'</td>'+(showWallet?'<td style="font-size:.75rem;color:#6e7681">'+esc(tk._wallet)+'</td>':'')+'<td class="chain">'+tk.chain+'</td><td>'+tk.balance.toLocaleString()+'</td><td>'+pf+'</td><td class="usd">'+fmtCurr(tk.usd_value)+'</td><td class="usd" style="color:'+pnlColor+'">'+pnlStr+'</td></tr>'}
   html+='</tbody></table></div>';
   document.getElementById("pageTokens").innerHTML=html;
 }
