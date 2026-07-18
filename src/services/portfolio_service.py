@@ -658,7 +658,11 @@ async def _compute_portfolio(address: str) -> dict:
             c: round(v, 2)
             for c, v in sorted(chain_totals.items(), key=lambda x: x[1], reverse=True)
         },
-        "tokens": items[:200],
+        # Wide safety cap only — the per-user layer (_apply_user_token_prefs)
+        # classifies EVERY token (zero_value/spam auto-disable needs to see
+        # them all) and applies its own tighter response caps (v2.12.2).
+        # Old [:200] cap silently hid worthless tokens from classification.
+        "tokens": items[:1000],
         "errors": [
             {"chain": r["chain"], "error": r["error"]}
             for r in results if r["error"]
