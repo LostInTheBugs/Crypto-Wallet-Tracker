@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — v2.12.1
+# Crypto Wallet Tracker — v2.12.2
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -13,7 +13,7 @@ Dashboard agrégé, graphiques d'évolution, historique des prix via DefiLlama, 
 - 💰 **Valorisation USD/€** — temps réel via Blockscout, conversion EUR (Frankfurter)
 - 🦙 **Fallback prix DefiLlama** — si Blockscout ne donne pas de prix, appel batch à l'API gratuite `coins.llama.fi/prices/current`
 - 🔒 **Détection DeFi best-effort** — catégorisation fine (lending, LP, staked, vault, synthetic) via heuristiques sur les symboles, aucun service tiers, 100 % gratuit. Section DeFi dédiée avec badges colorés et sous-totaux par catégorie
-- 🎛️ **Gestion des tokens** — page dédiée pour activer/désactiver chaque token (détectés + ajoutés manuellement). Les memecoins illiquides et les prix à faible confiance DefiLlama sont désactivés par défaut ; un token désactivé est exclu des totaux, de la répartition DeFi et de l'historique (effet rétroactif)
+- 🎛️ **Gestion des tokens intégrée** — tout se passe dans l'onglet « Détail tokens » : compteurs actifs/inactifs, interrupteur on/off sur chaque ligne, section repliable des tokens inactifs (badge du motif), formulaire d'ajout manuel. Les tokens sans valeur, le spam, les memecoins illiquides et les prix à faible confiance DefiLlama sont désactivés par défaut ; un token désactivé est exclu des totaux, de la répartition DeFi et de l'historique (effet rétroactif)
 - 👥 **Comptes utilisateurs** — inscription, connexion, wallets privés (bcrypt + sessions)
 - 📊 **Dashboard** — valeur totale, répartition par chaîne (donut), cartes PNL Total / PNL 24h, mini-graphe, gaz cumulé
 - 📈 **Statistiques** — courbes valeur/coût d'achat, barres PNL journalier (7j/30j/90j/1a/All), filtrable par wallet/token/chaîne
@@ -125,6 +125,11 @@ Crypto-Wallet-Tracker/
 ---
 
 ## 📋 Changelog
+
+### v2.12.2 — Gestion des tokens fusionnée dans « Détail tokens »
+- **Un seul onglet** — la page « Gestion tokens » disparaît (menu + page dédiée) ; tout est désormais dans « 📋 Détail tokens » : cartes DeFi + compteurs « X actifs / Y inactifs », tableau des tokens actifs avec un interrupteur on/off par ligne, section repliable « Tokens inactifs (N) » (fermée par défaut, plafonnée à 100 lignes avec bouton « Voir tout »), et formulaire « Ajouter un token manuellement » avec la liste des tokens manuels (interrupteur + suppression) en bas de page.
+- **Auto-désactivation étendue** — deux nouveaux motifs en plus de `memecoin_pattern` et `low_confidence` : `zero_value` (valeur nulle ou prix inconnu) et `spam` (motif anti-spam). Appliqué aux nouveaux tokens **et rétroactivement** aux tokens jamais touchés par l'utilisateur (un choix explicite n'est jamais écrasé).
+- **API portfolio enrichie** — `/api/portfolio` renvoie désormais aussi les tokens inactifs (`tid`, `enabled`, `reason`) + `active_count`/`inactive_count` exacts ; les totaux (`total_usd`, `defi_usd`, `defi_breakdown`, `token_count`) restent calculés sur les seuls tokens actifs. Chaque interrupteur appelle `POST /api/tokens/toggle` avec le `tid`, invalide le cache client et re-rend l'interface (Dashboard inclus).
 
 ### v2.12.1 — Hotfix « database is locked »
 - **Écritures fiables sous rebuild** — l'ajout manuel d'un token (et tout write API) pouvait échouer en 500 « database is locked » pendant qu'un recalcul d'historique commitait en arrière-plan. `busy_timeout` est désormais appliqué **par connexion** (get_db, prefs, rebuild) et l'écriture de `daily_history` passe par un `executemany` unique (transaction beaucoup plus courte).

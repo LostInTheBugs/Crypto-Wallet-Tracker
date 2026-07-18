@@ -30,7 +30,7 @@ from services.pnl_service import (
 )
 from services.token_prefs import (
     token_tid, classify_token, load_user_prefs, get_disabled_tids,
-    insert_default_prefs,
+    insert_default_prefs, reclassify_prefs,
 )
 
 # ── Logging configuration ───────────────────────────────────────
@@ -949,15 +949,18 @@ async def _apply_user_token_prefs(user_id: int, data: dict, wallet_address: str)
     prefs = await load_user_prefs(user_id)
 
     new_rows = []
+    reclass_rows = []
     new_auto_disabled = 0
     for it in items:
         tid = token_tid(it.get("symbol"), it.get("chain"), it.get("contract_address"))
         it["tid"] = tid
         pref = prefs.get(tid)
+        spam_flag = bool(_is_spam(it.get("symbol")) or _is_spam(it.get("name")))
         if pref is None:
             de, reason = classify_token(
                 it.get("usd_value", 0), it.get("usd_price", 0),
-                it.get("balance", 0), it.get("price_confidence"))
+                it.get("balance", 0), it.get("price_confidence"),
+                is_spam=spam_flag)
             new_rows.append((
                 user_id, tid, de, "detected", it.get("chain") or "",
                 it.get("contract_address") or "", it.get("symbol") or "",
@@ -972,12 +975,38 @@ async def _apply_user_token_prefs(user_id: int, data: dict, wallet_address: str)
             it["enabled"] = bool(pref.get("enabled", 1))
             it["reason"] = pref.get("reason") or ""
             it["source"] = pref.get("source") or "detected"
+            # Retroactive reclassification (v2.12.2): rows inserted before the
+            # zero_value/spam heuristics existed, still pristine (enabled, no
+            # reason, never toggled by the user) are re-evaluated once. The
+            # SQL side re-checks the pristine guard (updated_at = created_at).
+            if (it["source"] == "detected" and it["enabled"] and not it["reason"]
+                    and (pref.get("updated_at") is None
+                         or pref.get("updated_at") == pref.get("created_at"))):
+                de2, reason2 = classify_token(
+                    it.get("usd_value", 0), it.get("usd_price", 0),
+                    it.get("balance", 0), it.get("price_confidence"),
+                    is_spam=spam_flag)
+                if not de2:
+                    reclass_rows.append((reason2, user_id, tid))
+                    pref["enabled"] = 0
+                    pref["reason"] = reason2
+                    it["enabled"] = False
+                    it["reason"] = reason2
+                    new_auto_disabled += 1
 
     if new_rows:
         try:
             await insert_default_prefs(new_rows)
         except Exception as e:
             logging.getLogger("crypto.portfolio").warning(f"[prefs] insert failed: {e}")
+    if reclass_rows:
+        try:
+            await reclassify_prefs(reclass_rows)
+            logging.getLogger("crypto.portfolio").info(
+                f"[prefs] user={user_id}: {len(reclass_rows)} pref(s) retroactively "
+                "auto-disabled (zero_value/spam)")
+        except Exception as e:
+            logging.getLogger("crypto.portfolio").warning(f"[prefs] reclassify failed: {e}")
 
     # Merge active manual tokens that are not already detected on-chain
     present = {it["tid"] for it in items}
@@ -995,6 +1024,7 @@ async def _apply_user_token_prefs(user_id: int, data: dict, wallet_address: str)
 
     # Recompute aggregates over ENABLED tokens only
     active = [it for it in items if it.get("enabled", True)]
+    inactive = [it for it in items if not it.get("enabled", True)]
     total = 0.0
     chain_totals: dict = {}
     defi_usd = 0.0
@@ -1009,20 +1039,26 @@ async def _apply_user_token_prefs(user_id: int, data: dict, wallet_address: str)
             defi_usd += v
             defi_breakdown[cat] = defi_breakdown.get(cat, 0) + v
 
-    items.sort(key=lambda x: (x.get("usd_value") or 0), reverse=True)
-    out["tokens"] = items[:250]
+    # Response layout: ALL actives first (value desc), then inactives (value
+    # desc, capped to bound the payload — a spam-heavy wallet can hold
+    # hundreds). Counts stay EXACT even when the list is capped.
+    active.sort(key=lambda x: (x.get("usd_value") or 0), reverse=True)
+    inactive.sort(key=lambda x: (x.get("usd_value") or 0), reverse=True)
+    out["tokens"] = active[:250] + inactive[:400]
     out["total_usd"] = round(total, 2)
     out["defi_usd"] = round(defi_usd, 2)
     out["staked_usd"] = round(defi_usd, 2)  # backward compat
     out["defi_breakdown"] = {k: round(v, 2) for k, v in defi_breakdown.items()}
     out["token_count"] = len(active)
+    out["active_count"] = len(active)
+    out["inactive_count"] = len(inactive)
     out["chains"] = {
         c: round(v, 2)
         for c, v in sorted(chain_totals.items(), key=lambda x: x[1], reverse=True)
         if v > 0
     }
     out["chain_count"] = len(out["chains"])
-    out["disabled_count"] = len(items) - len(active)
+    out["disabled_count"] = len(inactive)  # backward compat (v2.12.0)
     if out.get("total_cost_basis") is not None:
         out["total_pnl"] = round(out["total_usd"] - out["total_cost_basis"], 2)
     if new_auto_disabled:

@@ -46,7 +46,7 @@ MEMECOIN_MAX_UNIT_PRICE = 1e-4    # unit price threshold (<=)
 MEMECOIN_MIN_BALANCE = 1e7        # balance threshold (>=)
 
 # Valid `reason` values stored in user_token_prefs
-REASONS = ("low_confidence", "memecoin_pattern", "manual", "")
+REASONS = ("low_confidence", "memecoin_pattern", "zero_value", "spam", "manual", "")
 
 
 def token_tid(symbol, chain, contract) -> str:
@@ -59,15 +59,19 @@ def token_tid(symbol, chain, contract) -> str:
     return c if c else f"{(chain or '').lower()}:{(symbol or '').lower()}"
 
 
-def classify_token(usd_value, usd_price, balance, confidence) -> tuple[int, str]:
+def classify_token(usd_value, usd_price, balance, confidence, is_spam=False) -> tuple[int, str]:
     """Compute the default enabled state for a newly detected token.
 
     Returns (default_enabled, reason):
+      (0, "spam")              — spam-pattern token (is_spam passed by the caller,
+                                 which owns the _is_spam heuristic — no cyclic import)
+      (0, "zero_value")        — worthless holding: usd_value <= 0 OR unknown price
       (0, "low_confidence")    — DefiLlama price confidence below threshold
       (0, "memecoin_pattern")  — big value from a dust-priced token in huge supply
       (1, "")                  — normal token, enabled by default
 
-    Conservative by design: missing/None inputs never disable a token.
+    Conservative by design: missing/None inputs never disable a token
+    (except zero_value/spam, which are explicit worthlessness signals).
     """
     try:
         usd_value = float(usd_value or 0)
@@ -75,6 +79,15 @@ def classify_token(usd_value, usd_price, balance, confidence) -> tuple[int, str]
         balance = float(balance or 0)
     except (TypeError, ValueError):
         return 1, ""
+
+    # 0) Spam pattern — decided by the caller (portfolio_service._is_spam)
+    if is_spam:
+        return 0, "spam"
+
+    # 0bis) Zero value — no price known OR the position is worth nothing.
+    #       These rows only pollute the token list; re-enable is one click away.
+    if usd_value <= 0 or usd_price <= 0:
+        return 0, "zero_value"
 
     # 1) DefiLlama confidence — only when a confidence value exists
     if confidence is not None:
@@ -143,6 +156,30 @@ async def insert_default_prefs(rows: list) -> None:
             "INSERT OR IGNORE INTO user_token_prefs "
             "(user_id, tid, enabled, source, chain, contract_address, symbol, "
             "name, reason, default_enabled) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            rows)
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def reclassify_prefs(rows: list) -> None:
+    """Retroactively auto-disable prefs that the NEW heuristics (zero_value /
+    spam — v2.12.2) flag as dubious. Only rows still in their pristine
+    auto-managed state are touched: enabled=1, no reason, and NEVER updated
+    since insertion (updated_at = created_at — any user toggle bumps
+    updated_at). An explicit user choice is therefore never overwritten,
+    even under a concurrent toggle.
+
+    rows: list of (reason, user_id, tid)
+    """
+    if not rows:
+        return
+    db = await _connect()
+    try:
+        await db.executemany(
+            "UPDATE user_token_prefs SET enabled=0, reason=?, default_enabled=0 "
+            "WHERE user_id=? AND tid=? AND enabled=1 AND reason='' "
+            "AND (updated_at IS NULL OR updated_at = created_at)",
             rows)
         await db.commit()
     finally:
