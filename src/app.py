@@ -1890,6 +1890,18 @@ async def update_application(user=Depends(get_current_user)):
         return {"ok": False, "msg": str(e)[:200]}
 
 
+# ── External API Keys catalogue ─────────────────────────────
+
+API_KEY_CATALOGUE = [
+    {"id": "coingecko",    "name": "CoinGecko",     "category": "Pricing",      "description": "Prix des tokens (multi-chaînes)",              "get_key_url": "https://www.coingecko.com/en/developers/dashboard"},
+    {"id": "opensea",      "name": "OpenSea",        "category": "NFT",          "description": "Prix planchers & métadonnées NFT",             "get_key_url": "https://docs.opensea.io/reference/api-keys"},
+    {"id": "etherscan",    "name": "Etherscan",      "category": "Explorer",     "description": "Données on-chain / transactions",              "get_key_url": "https://etherscan.io/myapikey"},
+    {"id": "defillama",    "name": "DefiLlama",      "category": "Pricing/DeFi", "description": "Prix & données DeFi (Pro)",                    "get_key_url": "https://defillama.com/pro-api"},
+    {"id": "alchemy",      "name": "Alchemy",        "category": "RPC/Data",     "description": "Accès RPC / données multi-chaînes",           "get_key_url": "https://dashboard.alchemy.com/"},
+    {"id": "moralis",      "name": "Moralis",        "category": "Data/NFT",     "description": "Données tokens & NFT",                        "get_key_url": "https://admin.moralis.io/"},
+    {"id": "coinmarketcap","name": "CoinMarketCap",  "category": "Pricing",      "description": "Prix des tokens (alternative)",               "get_key_url": "https://pro.coinmarketcap.com/account"},
+]
+
 # ── API Keys (per user) ─────────────────────────────────────────
 
 async def _get_user_cg_key(user_id: int) -> str:
@@ -1905,16 +1917,26 @@ async def _get_user_cg_key(user_id: int) -> str:
 
 @app.get("/api/settings/keys")
 async def list_api_keys(user=Depends(get_current_user), db=Depends(get_db)):
-    providers = ["coingecko", "alchemy"]
+    """Return the full catalogue of providers with per-user configuration status."""
+    # Fetch all stored keys for this user in one query
+    cur = await db.execute(
+        "SELECT provider, api_key FROM user_api_keys WHERE user_id=?",
+        (user["id"],))
+    rows = await cur.fetchall()
+    stored = {row["provider"]: row["api_key"] for row in rows}
+    
     result = []
-    for p in providers:
-        cur = await db.execute("SELECT api_key FROM user_api_keys WHERE user_id=? AND provider=?", (user["id"], p))
-        row = await cur.fetchone()
-        if row:
-            masked = "..." + row["api_key"][-4:] if len(row["api_key"]) > 4 else "***"
-            result.append({"provider": p, "configured": True, "masked": masked})
+    for prov in API_KEY_CATALOGUE:
+        entry = dict(prov)
+        stored_key = stored.get(prov["id"])
+        if stored_key:
+            masked = "..." + stored_key[-4:] if len(stored_key) > 4 else "***"
+            entry["configured"] = True
+            entry["masked"] = masked
         else:
-            result.append({"provider": p, "configured": False, "masked": None})
+            entry["configured"] = False
+            entry["masked"] = None
+        result.append(entry)
     return result
 
 
@@ -1925,7 +1947,7 @@ async def set_api_key(provider: str, request: Request, user=Depends(get_current_
     if not api_key:
         raise HTTPException(400, "Clé API requise")
     
-    # Validate
+    # Validate (best-effort — only reject if validator actually fails)
     valid, msg = await _validate_api_key(provider, api_key)
     if not valid:
         raise HTTPException(400, msg)
@@ -1934,7 +1956,7 @@ async def set_api_key(provider: str, request: Request, user=Depends(get_current_
         "INSERT OR REPLACE INTO user_api_keys (user_id, provider, api_key) VALUES (?, ?, ?)",
         (user["id"], provider, api_key))
     await db.commit()
-    return {"ok": True, "provider": provider, "configured": True}
+    return {"ok": True, "provider": provider, "configured": True, "msg": "Clé enregistrée"}
 
 
 @app.delete("/api/settings/keys/{provider}")
@@ -1945,7 +1967,11 @@ async def delete_api_key(provider: str, user=Depends(get_current_user), db=Depen
 
 
 async def _validate_api_key(provider: str, api_key: str) -> tuple:
-    """Validate API key against provider. Returns (is_valid, message)."""
+    """Validate API key against provider. Returns (is_valid, message).
+    
+    Best-effort validation: only providers with a real validator can fail;
+    unknown providers pass through without blocking.
+    """
     if provider == "coingecko":
         try:
             async with httpx.AsyncClient(timeout=10) as c:
@@ -1967,7 +1993,8 @@ async def _validate_api_key(provider: str, api_key: str) -> tuple:
                 return False, "Alchemy: réponse invalide"
         except Exception as e:
             return False, f"Alchemy: {str(e)[:80]}"
-    return False, "Provider inconnu"
+    # Unknown providers / no validator: store without blocking
+    return True, "Clé enregistrée (validation best-effort)"
 
 @app.get("/")
 async def index():

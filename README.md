@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — v2.12.6
+# Crypto Wallet Tracker — v2.12.7
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -23,7 +23,7 @@ Dashboard agrégé, graphiques d'évolution, historique des prix via DefiLlama, 
 - 🧮 **PNL calculé** — coût moyen pondéré, soldes reconstruits par date, PNL journalier
 - 🛡️ **Filtre anti-spam** — détection automatique des tokens de scam/airdrop
 - ⚙️ **Paramètres** — langue (FR/EN), devise (USD/EUR), changement de mot de passe, clés API utilisateur
-- 🔑 **Clés API par utilisateur** — CoinGecko, Alchemy (saisies et validées dans Paramètres, jamais en clair dans l'API)
+- 🔑 **Clés API par utilisateur** — catalogue de 7 services (CoinGecko, OpenSea, Etherscan, DefiLlama, Alchemy, Moralis, CoinMarketCap) avec validation best-effort et interface en cartes avec logos
 - 📦 **Vérification de version** — compare avec le dernier tag GitHub
 - ⚡ **Cache prix** — table `price_history`, 2ᵉ rebuild ~0 appel réseau
 - 🐳 **Docker** — une commande pour déployer
@@ -125,6 +125,14 @@ Crypto-Wallet-Tracker/
 ---
 
 ## 📋 Changelog
+
+### v2.12.7 — Catalogue des clés API externes (inspiré de Rotki)
+
+- **Catalogue enrichi** — `GET /api/settings/keys` renvoie désormais un catalogue complet de 7 services externes (CoinGecko, OpenSea, Etherscan, DefiLlama, Alchemy, Moralis, CoinMarketCap) avec ID, nom, catégorie, description, lien d'obtention, statut et clé masquée. Stockage clé-valeur dans `user_api_keys`, PUT/DELETE génériques fonctionnent pour tout fournisseur du catalogue.
+- **Validation best-effort** — CoinGecko et Alchemy conservent leur validation réelle ; les autres fournisseurs sont stockés sans blocage (pass-through). Plus de rejet « Provider inconnu ».
+- **Interface en grille de cartes** — la section « Clés API externes » dans Paramètres présente chaque service sous forme de carte avec logo inline SVG (jamais d'image cassée), nom, badge de catégorie, description, statut (vert ✓ / gris), champ de saisie masqué, boutons Enregistrer / Supprimer, et lien « Obtenir une clé ». Logos inline 100 % intégrés (Geo, OpenSea, Etherscan, DefiLlama, Alchemy, Moralis, CMC) avec palettes de couleurs distinctives.
+- **i18n** — tous les libellés ajoutés en FR et EN (apiKeysTitle, apiKeyDesc, apiKeyPlaceholder, etc.).
+- **Aucune régression** — rétro-compatibilité des endpoints, pas de variable `t` dans les boucles, py_compile ok.
 
 ### v2.12.6 — PNL par token visible dès la fin du rebuild (invalidation du cache)
 

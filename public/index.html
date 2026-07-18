@@ -104,6 +104,35 @@ tr.tm-off td{opacity:.45}
 .tok-chip-on{background:#14532d;color:#4ade80}
 .tok-chip-off{background:#2a2f38;color:#8b949e}
 .hidden{display:none !important}
+/* ── API Keys cards ─────────────────────────────── */
+.api-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:8px;transition:border-color .15s}
+.api-card:hover{border-color:#30363d}
+.api-card-head{display:flex;align-items:center;gap:10px}
+.api-logo-wrap{flex-shrink:0;width:40px;height:40px;border-radius:10px;overflow:hidden}
+.api-logo-wrap svg{display:block;width:40px;height:40px}
+.api-card-info{flex:1;min-width:0}
+.api-card-name{font-weight:600;color:var(--title);font-size:.9rem}
+.api-badge-cat{display:inline-block;font-size:.62rem;padding:1px 8px;border-radius:8px;background:#1a2332;color:#8b949e;font-weight:500;margin-top:2px}
+.api-card-desc{font-size:.78rem;color:#8b949e;line-height:1.35}
+.api-card-status{font-size:.78rem;display:flex;align-items:center;gap:6px}
+.api-status-dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex-shrink:0}
+.api-status-dot.api-configured{background:#40c463;box-shadow:0 0 6px #40c46344}
+.api-status-dot.api-unconfigured{background:#6e7681}
+.api-card-form{display:flex;flex-direction:column;gap:6px}
+.api-key-input{width:100%;padding:7px 10px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--title);font-size:.8rem;outline:none}
+.api-key-input:focus{border-color:var(--accent)}
+.api-card-actions{display:flex;gap:6px}
+.btn-api{padding:6px 14px;border-radius:6px;border:none;cursor:pointer;font-size:.78rem;font-weight:600}
+.btn-api-save{background:var(--accent);color:#fff}
+.btn-api-save:hover{opacity:.9}
+.btn-api-del{background:var(--red);color:#fff}
+.btn-api-del:hover{opacity:.9}
+.api-msg{font-size:.75rem;min-height:1.2em;transition:color .2s}
+.api-get-key{font-size:.72rem;color:var(--accent);text-decoration:none;margin-top:2px;display:inline-block}
+.api-get-key:hover{text-decoration:underline}
+@media(max-width:768px){
+  #apiKeysSection{grid-template-columns:1fr !important}
+}
 </style>
 </head>
 <body>
@@ -225,14 +254,15 @@ tr.tm-off td{opacity:.45}
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>📦 Version</h2>
-        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.12.6</strong></p>
+        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.12.7</strong></p>
         <p id="verStatus" style="font-size:.85rem"></p>
         <button id="updateBtn" class="hidden" onclick="doUpdate()" style="margin-top:8px;background:#238636;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:.85rem">🔄 Mettre à jour</button>
         <p id="updateMsg" style="margin-top:8px;font-size:.8rem;color:#f0c040"></p>
       </div>
       <div class="card" style="margin-bottom:16px">
-        <h2>🔑 Clés API</h2>
-        <div id="apiKeysSection"></div>
+        <h2 id="apiKeysTitle">🔑 Clés API externes</h2>
+        <p style="font-size:.8rem;color:#6e7681;margin-bottom:12px" id="apiKeysDesc">Configurez des clés API pour débloquer des données supplémentaires (prix, NFT, explorateurs).</p>
+        <div id="apiKeysSection" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px"></div>
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>🔒 Mot de passe</h2>
@@ -322,6 +352,16 @@ var T = {
     tokInactiveTitle: "Tokens inactifs",
     tokNoActive: "Aucun token actif",
     tokShowAll: "Voir tout",
+    apiKeysTitle: "🔑 Clés API externes",
+    apiKeysDesc: "Configurez des clés API pour débloquer des données supplémentaires (prix, NFT, explorateurs).",
+    apiKeyPlaceholder: "Clé API",
+    apiKeySave: "Enregistrer",
+    apiKeyDelete: "Supprimer",
+    apiKeyGet: "Obtenir une clé",
+    apiKeyConfigured: "Configuré ✓",
+    apiKeyNotConfigured: "Non configuré",
+    apiKeySaved: "✅ Clé enregistrée",
+    apiKeyDeleted: "Clé supprimée",
   },
   en: {
     dashboard: "Dashboard", stats: "Statistics", tokens: "Token Details", nfts: "NFTs",
@@ -388,6 +428,16 @@ var T = {
     tokInactiveTitle: "Inactive tokens",
     tokNoActive: "No active token",
     tokShowAll: "Show all",
+    apiKeysTitle: "🔑 External API Keys",
+    apiKeysDesc: "Configure API keys to unlock additional data (pricing, NFT, explorers).",
+    apiKeyPlaceholder: "API Key",
+    apiKeySave: "Save",
+    apiKeyDelete: "Delete",
+    apiKeyGet: "Get a key",
+    apiKeyConfigured: "Configured ✓",
+    apiKeyNotConfigured: "Not configured",
+    apiKeySaved: "✅ Key saved",
+    apiKeyDeleted: "Key deleted",
   }
 };
 function t(key) { return (T[LANG] && T[LANG][key]) || key; }
@@ -416,6 +466,11 @@ function applyLang() {
   document.getElementById("authTitle").textContent = t("login");
   // Update page title
   switchPage(currentPage);
+  // Update API keys card header
+  var akTitle = document.getElementById("apiKeysTitle");
+  if (akTitle) akTitle.textContent = t("apiKeysTitle");
+  var akDesc = document.getElementById("apiKeysDesc");
+  if (akDesc) akDesc.textContent = t("apiKeysDesc");
 }
 function changeLang() {
   LANG = document.getElementById("setLang").value;
@@ -1136,23 +1191,51 @@ function showReconWarning(rec){
   el.style.display="block";
 }
 
-// ── API Keys ──────────────────────────────────────────────
+// ── API Keys — Catalogue cards ────────────────────────────
+// Inline SVG logos for each provider (never broken, no external deps)
+function svgLogo(pid){
+  // Each logo is an SVG with viewBox 0 0 40 40
+  // Letters are service initials with colored circle; branded logos are compact SVGs
+  var logos = {
+    coingecko: '<svg viewBox="0 0 40 40" width="40" height="40"><circle cx="20" cy="20" r="20" fill="#2d6a4f"/><path d="M12 20c0-4 3-7 7-7h1c4 0 7 3 7 7v1c0 4-3 7-7 7h-1c-4 0-7-3-7-7v-1z" fill="#95d5b2"/><circle cx="17" cy="18" r="2" fill="#1b4332"/><circle cx="23" cy="18" r="2" fill="#1b4332"/><path d="M17 24c2 1.5 4 1.5 6 0" stroke="#1b4332" stroke-width="1.5" fill="none"/></svg>',
+    opensea: '<svg viewBox="0 0 40 40" width="40" height="40"><circle cx="20" cy="20" r="20" fill="#1a3a5c"/><text x="20" y="26" text-anchor="middle" fill="#4dabf7" font-size="18" font-weight="bold" font-family="sans-serif">O</text><path d="M10 32c0-6 4-10 10-10s10 4 10 10" fill="none" stroke="#4dabf7" stroke-width="1.5"/></svg>',
+    etherscan: '<svg viewBox="0 0 40 40" width="40" height="40"><circle cx="20" cy="20" r="20" fill="#2d1b4e"/><circle cx="17" cy="17" r="7" fill="none" stroke="#b794f4" stroke-width="2"/><line x1="22" y1="22" x2="28" y2="28" stroke="#b794f4" stroke-width="2.5" stroke-linecap="round"/></svg>',
+    defillama: '<svg viewBox="0 0 40 40" width="40" height="40"><circle cx="20" cy="20" r="20" fill="#3b2b10"/><ellipse cx="20" cy="24" rx="8" ry="5" fill="#e8a838"/><rect x="17" y="14" width="6" height="10" rx="2" fill="#f5c542"/><circle cx="18" cy="16" r="1" fill="#3b2b10"/><circle cx="22" cy="16" r="1" fill="#3b2b10"/></svg>',
+    alchemy: '<svg viewBox="0 0 40 40" width="40" height="40"><circle cx="20" cy="20" r="20" fill="#0a2a3b"/><text x="20" y="26" text-anchor="middle" fill="#4fc3f7" font-size="20" font-weight="bold" font-family="sans-serif">A</text><circle cx="27" cy="13" r="2.5" fill="#fdd835"/></svg>',
+    moralis: '<svg viewBox="0 0 40 40" width="40" height="40"><circle cx="20" cy="20" r="20" fill="#2d1350"/><text x="20" y="26" text-anchor="middle" fill="#b388ff" font-size="18" font-weight="bold" font-family="sans-serif">M</text></svg>',
+    coinmarketcap: '<svg viewBox="0 0 40 40" width="40" height="40"><circle cx="20" cy="20" r="20" fill="#0d2f1d"/><text x="20" y="26" text-anchor="middle" fill="#40c463" font-size="18" font-weight="bold" font-family="sans-serif">C</text><rect x="12" y="28" width="3" height="-6" fill="#40c463"/><rect x="17" y="28" width="3" height="-10" fill="#40c463"/><rect x="22" y="28" width="3" height="-8" fill="#40c463"/></svg>',
+  };
+  return logos[pid] || '<svg viewBox="0 0 40 40" width="40" height="40"><circle cx="20" cy="20" r="20" fill="var(--border)"/><text x="20" y="26" text-anchor="middle" fill="var(--text)" font-size="18" font-weight="bold" font-family="sans-serif">'+(pid.charAt(0).toUpperCase())+'</text></svg>';
+}
+
 async function renderApiKeys(){
   try {
     var r = await fetch("/api/settings/keys");
-    var keys = await r.json();
+    var provs = await r.json();
     var html = "";
-    for (var i=0;i<keys.length;i++){
-      var k = keys[i];
-      var name = k.provider.charAt(0).toUpperCase()+k.provider.slice(1);
-      html += '<div style="margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--border)">';
-      html += '<strong>'+name+'</strong> ';
-      html += k.configured ? '<span style="color:#40c463;font-size:.8rem">✓ Configurée ('+k.masked+')</span>' : '<span style="color:#6e7681;font-size:.8rem">Non configurée</span>';
-      html += '<div style="display:flex;gap:8px;margin-top:6px">';
-      html += '<input type="password" id="key_'+k.provider+'" placeholder="Nouvelle clé API" style="flex:1;max-width:300px">';
-      html += '<button class="btn btn-blue" onclick="saveApiKey(\''+k.provider+'\')">Enregistrer</button>';
-      if (k.configured) html += '<button class="btn btn-red" onclick="deleteApiKey(\''+k.provider+'\')">Supprimer</button>';
-      html += '</div><div id="keyMsg_'+k.provider+'" style="font-size:.8rem;margin-top:4px"></div></div>';
+    for (var i=0;i<provs.length;i++){
+      var k = provs[i];
+      var statusCls = k.configured ? "api-configured" : "api-unconfigured";
+      var statusTxt = k.configured ? t("apiKeyConfigured")+(k.masked?" ("+esc(k.masked)+")":"") : t("apiKeyNotConfigured");
+      var delBtn = k.configured ? '<button class="btn-api btn-api-del" onclick="deleteApiKey(\''+k.id+'\')">'+esc(t("apiKeyDelete"))+'</button>' : "";
+      html += '<div class="api-card">';
+      html += '<div class="api-card-head">';
+      html += '<div class="api-logo-wrap">'+svgLogo(k.id)+'</div>';
+      html += '<div class="api-card-info">';
+      html += '<div class="api-card-name">'+esc(k.name)+'</div>';
+      html += '<span class="api-badge-cat">'+esc(k.category)+'</span>';
+      html += '</div></div>';
+      html += '<div class="api-card-desc">'+esc(k.description)+'</div>';
+      html += '<div class="api-card-status"><span class="api-status-dot '+statusCls+'"></span> '+statusTxt+'</div>';
+      html += '<div class="api-card-form">';
+      html += '<input type="password" id="key_'+k.id+'" placeholder="'+esc(t("apiKeyPlaceholder"))+'" class="api-key-input">';
+      html += '<div class="api-card-actions">';
+      html += '<button class="btn-api btn-api-save" onclick="saveApiKey(\''+k.id+'\')">'+esc(t("apiKeySave"))+'</button>';
+      html += delBtn;
+      html += '</div></div>';
+      html += '<div id="keyMsg_'+k.id+'" class="api-msg"></div>';
+      html += '<a href="'+esc(k.get_key_url)+'" target="_blank" rel="noopener" class="api-get-key">'+esc(t("apiKeyGet"))+' ↗</a>';
+      html += '</div>';
     }
     document.getElementById("apiKeysSection").innerHTML = html;
   } catch(e) {console.error("renderApiKeys",e)}
@@ -1160,16 +1243,16 @@ async function renderApiKeys(){
 
 async function saveApiKey(provider){
   var el = document.getElementById("key_"+provider);
-  var key = el.value.trim();
-  if (!key) return;
+  var keyVal = el.value.trim();
+  if (!keyVal) return;
   var msg = document.getElementById("keyMsg_"+provider);
-  msg.textContent = "Validation...";
+  msg.textContent = "⏳...";
   msg.style.color = "#f0c040";
   try {
-    var r = await fetch("/api/settings/keys/"+provider, {method:"PUT", headers:{"Content-Type":"application/json"}, body:JSON.stringify({api_key:key})});
+    var r = await fetch("/api/settings/keys/"+provider, {method:"PUT", headers:{"Content-Type":"application/json"}, body:JSON.stringify({api_key:keyVal})});
     var d = await r.json();
     if (r.ok) {
-      msg.textContent = "✅ "+d.msg||"Clé enregistrée";
+      msg.textContent = t("apiKeySaved");
       msg.style.color = "#40c463";
       el.value = "";
       renderApiKeys();
@@ -1185,9 +1268,14 @@ async function saveApiKey(provider){
 }
 
 async function deleteApiKey(provider){
-  if (!confirm("Supprimer la clé "+provider+" ?")) return;
+  if (!confirm(esc(t("apiKeyDelete"))+" "+provider+" ?")) return;
   try {
-    await fetch("/api/settings/keys/"+provider, {method:"DELETE"});
+    var r = await fetch("/api/settings/keys/"+provider, {method:"DELETE"});
+    var d = await r.json();
+    if (r.ok) {
+      var msg = document.getElementById("keyMsg_"+provider);
+      if (msg) { msg.textContent = t("apiKeyDeleted"); msg.style.color = "#6e7681"; }
+    }
     renderApiKeys();
   } catch(e) {console.error("deleteApiKey",e)}
 }
