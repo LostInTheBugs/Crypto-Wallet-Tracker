@@ -21,6 +21,7 @@ import aiosqlite
 from services.price_service import (
     DB_PATH, SYMBOL_TO_CG, _price_at, _fetch_prices_per_token,
 )
+from services.token_prefs import token_tid
 
 logging.basicConfig(
     level=logging.INFO,
@@ -171,9 +172,9 @@ async def _rebuild_history(
     # chain:symbol). This prevents two different tokens sharing a symbol —
     # e.g. the real BOB (~$1) and a spam "bob" (millions of units) — from
     # being merged and mispriced together.
-    def _tid(symbol, chain, contract):
-        c = (contract or "").strip().lower()
-        return c if c else f"{(chain or '').lower()}:{(symbol or '').lower()}"
+    # Shared helper (services.token_prefs) — the SAME identity is used by the
+    # live portfolio filtering, so enable/disable prefs match both paths.
+    _tid = token_tid
 
     tid_sym: Dict[str, str] = {}     # tid -> display symbol (lower)
     tid_chain: Dict[str, str] = {}   # tid -> chain
@@ -248,6 +249,24 @@ async def _rebuild_history(
     daily_deltas: Dict[str, Dict[str, float]] = defaultdict(lambda: defaultdict(float))
     excluded_tids: Set[str] = set()
 
+    # ── User-disabled tokens (user_token_prefs) — RETROACTIVE filter ──
+    # Tokens the user disabled (or auto-disabled memecoins/low-confidence)
+    # are excluded from the whole reconstruction: snapshots, PNL, charts.
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            cur = await db.execute(
+                "SELECT tid FROM user_token_prefs WHERE user_id=? AND enabled=0",
+                (user_id,))
+            disabled_tids = {r[0] for r in await cur.fetchall()}
+        if disabled_tids:
+            excluded_tids |= disabled_tids
+            logger.info(
+                f"[rebuild] user={user_id}: {len(disabled_tids)} disabled tid(s) "
+                f"excluded from history")
+    except Exception:
+        # Table may not exist yet on first boot — never block the rebuild
+        pass
+
     tx_tids: Set[str] = {_tid(tx["token_symbol"], tx["chain"], tx["contract_address"]) for tx in txs}
 
     def _keep_tid(tid: str) -> bool:
@@ -263,6 +282,8 @@ async def _rebuild_history(
 
     # Detect orphan tokens (have portfolio value but no transactions)
     for tid, val in current_values.items():
+        if tid in excluded_tids:
+            continue  # user-disabled — keep out of deltas AND costs
         if tid not in tx_tids and _keep_tid(tid):
             price = current_prices.get(tid, 0)
             if price > 0:

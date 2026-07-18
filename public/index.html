@@ -91,6 +91,17 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
 @keyframes spin{to{transform:rotate(360deg)}}
 #viewLogin{background:url(/static/bg-login.png) center/cover no-repeat;min-height:100vh;display:flex;align-items:center;justify-content:center;padding-top:30vh}
 #viewLogin .card{background:rgba(18,22,28,0.92);backdrop-filter:blur(8px)}
+/* Toggle switch (token management) */
+.switch{position:relative;display:inline-block;width:36px;height:20px;vertical-align:middle}
+.switch input{opacity:0;width:0;height:0}
+.switch .slider{position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background:#30363d;border-radius:20px;transition:.2s}
+.switch .slider:before{position:absolute;content:"";height:14px;width:14px;left:3px;bottom:3px;background:#8b949e;border-radius:50%;transition:.2s}
+.switch input:checked + .slider{background:#1f6feb}
+.switch input:checked + .slider:before{transform:translateX(16px);background:#fff}
+tr.tm-off td{opacity:.45}
+.tm-badge{font-size:.62rem;padding:1px 6px;border-radius:8px;background:#3d2a1a;color:#ff922b;margin-left:6px;white-space:nowrap}
+.tm-tab{background:var(--card);border:1px solid var(--border);color:var(--text);padding:7px 16px;border-radius:8px;cursor:pointer;font-size:.82rem}
+.tm-tab.active{border-color:var(--accent);color:var(--accent);background:#1a2838;font-weight:700}
 .hidden{display:none !important}
 </style>
 </head>
@@ -104,6 +115,7 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
   <a href="#" onclick="switchPage('nfts')" data-page="nfts">🖼️ <span>NFTs</span></a>
   <a href="#" onclick="switchPage('txns')" data-page="txns">📜 <span>Transactions</span></a>
   <a href="#" onclick="switchPage('wallets')" data-page="wallets">💼 <span>Wallets</span></a>
+  <a href="#" onclick="switchPage('tokenmgmt')" data-page="tokenmgmt">🎛️ <span>Gestion tokens</span></a>
   <a href="#" onclick="switchPage('settings')" data-page="settings" style="margin-top:auto">⚙️ <span>Paramètres</span></a>
 </div>
 
@@ -196,6 +208,33 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
       </h2><div id="txnContent" style="overflow-x:auto"></div></div>
     </div>
     <div id="pageWallets" class="hidden"></div>
+    <div id="pageTokenMgmt" class="hidden">
+      <div class="card">
+        <h2>🎛️ <span id="tmTitle">Gestion des tokens</span></h2>
+        <p id="tmHint" style="font-size:.78rem;color:#6e7681;margin-bottom:12px"></p>
+        <div style="display:flex;gap:8px;margin-bottom:16px">
+          <button id="tmTabDetected" class="tm-tab active" onclick="tmSwitchTab('detected')">Détectés</button>
+          <button id="tmTabManual" class="tm-tab" onclick="tmSwitchTab('manual')">Ajoutés manuellement</button>
+        </div>
+        <div id="tmPaneDetected">
+          <div style="display:flex;gap:8px;margin-bottom:10px">
+            <button class="btn btn-green" style="font-size:.72rem;padding:5px 10px" onclick="tmBulk(true)" id="tmBtnAll">Tout activer</button>
+            <button class="btn btn-red" style="font-size:.72rem;padding:5px 10px" onclick="tmBulk(false)" id="tmBtnNone">Tout désactiver</button>
+          </div>
+          <div id="tmDetectedList" style="overflow-x:auto"><div class="loading">...</div></div>
+        </div>
+        <div id="tmPaneManual" class="hidden">
+          <div class="add-form">
+            <select id="tmChain" style="background:var(--bg);border:1px solid var(--border);color:var(--title);padding:8px 12px;border-radius:6px;font-size:.85rem;max-width:160px"></select>
+            <input id="tmAddr" type="text" placeholder="Adresse du contrat (0x...)">
+            <input id="tmSymbol" type="text" placeholder="Symbole (optionnel)" style="max-width:140px">
+            <button class="btn btn-blue" onclick="tmAddManual()" id="tmBtnAdd">Ajouter</button>
+          </div>
+          <div id="tmManualMsg" class="error" style="margin-bottom:8px"></div>
+          <div id="tmManualList" style="overflow-x:auto"><div class="loading">...</div></div>
+        </div>
+      </div>
+    </div>
     <div id="pageSettings" class="hidden">
       <div class="card" style="margin-bottom:16px">
         <h2>🌐 Langue</h2>
@@ -213,7 +252,7 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>📦 Version</h2>
-        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.11.27</strong></p>
+        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">v2.12.0</strong></p>
         <p id="verStatus" style="font-size:.85rem"></p>
         <button id="updateBtn" class="hidden" onclick="doUpdate()" style="margin-top:8px;background:#238636;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:.85rem">🔄 Mettre à jour</button>
         <p id="updateMsg" style="margin-top:8px;font-size:.8rem;color:#f0c040"></p>
@@ -278,6 +317,33 @@ var T = {
     lp: "LP",
     vault: "vault",
     synthetic: "synth",
+    tokenmgmt: "Gestion tokens",
+    tmTitle: "Gestion des tokens",
+    tmHint: "Les tokens désactivés sont exclus des totaux, de la répartition DeFi et de l'historique (effet rétroactif). Les memecoins illiquides ou à prix douteux sont désactivés par défaut.",
+    tmDetected: "Détectés",
+    tmManual: "Ajoutés manuellement",
+    tmEnableAll: "Tout activer",
+    tmDisableAll: "Tout désactiver",
+    tmAdd: "Ajouter",
+    tmAddrPh: "Adresse du contrat (0x...)",
+    tmSymbolPh: "Symbole (optionnel)",
+    tmToken: "Token",
+    tmChainCol: "Chaîne",
+    tmBalance: "Balance",
+    tmPrice: "Prix",
+    tmValue: "Valeur",
+    tmReason: "Motif",
+    tmActive: "Actif",
+    tmDelete: "Supprimer",
+    tmEmpty: "Aucun token",
+    tmDisabledBadge: "désactivé",
+    tmConfirmBulk: "Appliquer à tous les tokens détectés ?",
+    tmConfirmDel: "Supprimer ce token manuel ?",
+    tmAddError: "Erreur lors de l'ajout",
+    tmAdded: "Token ajouté",
+    reasonLowConf: "faible confiance prix",
+    reasonMemecoin: "memecoin illiquide",
+    reasonManual: "manuel",
   },
   en: {
     dashboard: "Dashboard", stats: "Statistics", tokens: "Token Details", nfts: "NFTs",
@@ -312,6 +378,33 @@ var T = {
     lp: "LP",
     vault: "vault",
     synthetic: "synth",
+    tokenmgmt: "Token Management",
+    tmTitle: "Token Management",
+    tmHint: "Disabled tokens are excluded from totals, DeFi breakdown and history (retroactive). Illiquid memecoins and dubious-price tokens are disabled by default.",
+    tmDetected: "Detected",
+    tmManual: "Manually added",
+    tmEnableAll: "Enable all",
+    tmDisableAll: "Disable all",
+    tmAdd: "Add",
+    tmAddrPh: "Contract address (0x...)",
+    tmSymbolPh: "Symbol (optional)",
+    tmToken: "Token",
+    tmChainCol: "Chain",
+    tmBalance: "Balance",
+    tmPrice: "Price",
+    tmValue: "Value",
+    tmReason: "Reason",
+    tmActive: "Enabled",
+    tmDelete: "Delete",
+    tmEmpty: "No tokens",
+    tmDisabledBadge: "disabled",
+    tmConfirmBulk: "Apply to all detected tokens?",
+    tmConfirmDel: "Remove this manual token?",
+    tmAddError: "Error while adding",
+    tmAdded: "Token added",
+    reasonLowConf: "low price confidence",
+    reasonMemecoin: "illiquid memecoin",
+    reasonManual: "manual",
   }
 };
 function t(key) { return (T[LANG] && T[LANG][key]) || key; }
@@ -319,7 +412,7 @@ function applyLang() {
   document.getElementById("setLang").value = LANG;
   // Update sidebar
   var links = document.querySelectorAll(".sidebar a");
-  var keys = ["dashboard","stats","tokens","nfts","txns","wallets","settings"];
+  var keys = ["dashboard","stats","tokens","nfts","txns","wallets","tokenmgmt","settings"];
   for (var i=0;i<Math.min(links.length,keys.length);i++) {
     var span = links[i].querySelector("span");
     if (span) span.textContent = t(keys[i]);
@@ -330,6 +423,11 @@ function applyLang() {
   document.getElementById("authPass").placeholder = t("password");
   document.getElementById("authBtn").textContent = t("loginBtn");
   document.getElementById("authTitle").textContent = t("login");
+  // Token management static labels
+  var tmEls = {tmTitle:"tmTitle", tmHint:"tmHint", tmTabDetected:"tmDetected", tmTabManual:"tmManual", tmBtnAll:"tmEnableAll", tmBtnNone:"tmDisableAll", tmBtnAdd:"tmAdd"};
+  for (var id in tmEls) { if (tmEls.hasOwnProperty(id)) { var el = document.getElementById(id); if (el) el.textContent = t(tmEls[id]); } }
+  var tmA = document.getElementById("tmAddr"); if (tmA) tmA.placeholder = t("tmAddrPh");
+  var tmS = document.getElementById("tmSymbol"); if (tmS) tmS.placeholder = t("tmSymbolPh");
   // Update page title
   switchPage(currentPage);
 }
@@ -353,6 +451,7 @@ function switchPage(page) {
   document.getElementById("pageNFTs").classList.toggle("hidden", page!="nfts");
   document.getElementById("pageTxns").classList.toggle("hidden", page!="txns");
   document.getElementById("pageWallets").classList.toggle("hidden", page!="wallets");
+  document.getElementById("pageTokenMgmt").classList.toggle("hidden", page!="tokenmgmt");
   document.getElementById("pageSettings").classList.toggle("hidden", page!="settings");
   if (page=="dashboard" && lastResult) { renderResult(lastResult); drawMiniChart(); }
   if (page=="stats") { populateFilters(); drawLineChart(); drawPnlChart(); }
@@ -360,6 +459,7 @@ function switchPage(page) {
   if (page=="tokens" && lastResult) renderTokenTable(lastResult);
   if (page=="nfts") loadNFTs();
   if (page=="wallets") renderWalletPage();
+  if (page=="tokenmgmt") loadTokenMgmt();
   if (page=="settings") renderSettingsPage();
 }
 
@@ -565,7 +665,8 @@ async function loadAllWallets(force){
     var totalUsd=0,defiUsd=0,allTokens=[],chainTotals={},chainSet={},allErrors=[],defiBreakdown={};
     for(var i=0;i<results.length;i++){var d=results[i],w=wallets[i];totalUsd+=d.total_usd||0;defiUsd+=d.defi_usd||d.staked_usd||0;for(var j=0;j<d.tokens.length;j++){var t=d.tokens[j];t._wallet=w.label||w.address.slice(0,10)+"...";allTokens.push(t)}for(var c in d.chains){if(d.chains.hasOwnProperty(c)){chainTotals[c]=(chainTotals[c]||0)+d.chains[c];chainSet[c]=true}}if(d.errors)for(var k=0;k<d.errors.length;k++)allErrors.push({wallet:w.label||w.address.slice(0,10)+"...",chain:d.errors[k].chain,error:d.errors[k].error});if(d.defi_breakdown)for(var dc in d.defi_breakdown){if(d.defi_breakdown.hasOwnProperty(dc))defiBreakdown[dc]=(defiBreakdown[dc]||0)+d.defi_breakdown[dc]}}
     allTokens.sort(function(a,b){return b.usd_value-a.usd_value});
-    var agg={total_usd:Math.round(totalUsd*100)/100,defi_usd:Math.round(defiUsd*100)/100,staked_usd:Math.round(defiUsd*100)/100,defi_breakdown:defiBreakdown,token_count:allTokens.length,chain_count:Object.keys(chainSet).length,chains:chainTotals,tokens:allTokens.slice(0,200),errors:allErrors.slice(0,10)};
+    var enabledCount=0;for(var ei=0;ei<allTokens.length;ei++){if(allTokens[ei].enabled!==false)enabledCount++}
+    var agg={total_usd:Math.round(totalUsd*100)/100,defi_usd:Math.round(defiUsd*100)/100,staked_usd:Math.round(defiUsd*100)/100,defi_breakdown:defiBreakdown,token_count:enabledCount,chain_count:Object.keys(chainSet).length,chains:chainTotals,tokens:allTokens.slice(0,200),errors:allErrors.slice(0,10)};
     pfCacheWrite("ALL",agg);
     if(activeWallet!="ALL")return; // la vue a changé pendant le fetch, ne pas écraser
     renderResult(agg);hideCacheAge();
@@ -620,7 +721,7 @@ function renderTokenTable(d){
     var defiColors={lending:"#4dabf7",lp:"#da77f2",staked:"#40c463",vault:"#f0c040",synthetic:"#ff922b"};
     html+='<h2>🔒 '+t('defiTotal')+' <span style="font-weight:400;font-size:.7rem;color:#6e7681">('+(d.defi_usd?fmtCurr(d.defi_usd):fmtCurr(0))+'</span>)</h2>'+
       '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">';
-    var defiCountByCat={};for(var di=0;di<d.tokens.length;di++){var tc=d.tokens[di].category||"wallet";if(defiKeys.indexOf(tc)!=-1)defiCountByCat[tc]=(defiCountByCat[tc]||0)+1}
+    var defiCountByCat={};for(var di=0;di<d.tokens.length;di++){var tc=d.tokens[di].category||"wallet";if(defiKeys.indexOf(tc)!=-1&&d.tokens[di].enabled!==false)defiCountByCat[tc]=(defiCountByCat[tc]||0)+1}
     for(var di=0;di<defiKeys.length;di++){var ck=defiKeys[di];var bv=brk[ck]||0;if(bv>0){
       var cnt=defiCountByCat[ck]||0;
       html+='<div style="background:var(--bg);border-left:3px solid '+defiColors[ck]+';border-radius:6px;padding:8px 10px;min-width:130px">'+
@@ -643,7 +744,8 @@ function renderTokenTable(d){
     synthetic:'<span style="background:#3d2a1a;color:#ff922b;font-size:.6rem;padding:1px 5px;border-radius:3px;margin-left:4px">'+t('synthetic')+'</span>'};
   for(var i=0;i<d.tokens.length;i++){var tk=d.tokens[i];var icon=tk.icon?'<img class="ti" src="'+esc(tk.icon)+'" onerror="this.style.display=\'none\'">':'';var pf=sym+(tk.usd_price<0.01?tk.usd_price.toFixed(6):tk.usd_price.toFixed(4));
     var pnlKnown=(tk.pnl!==null&&tk.pnl!==undefined);var pnl=pnlKnown?tk.pnl:0;var pnlColor=pnlKnown?(pnl>=0?"#40c463":"#f85149"):"#6e7681";var pnlStr=pnlKnown?((pnl>=0?"+":"")+sym+Math.abs(pnl).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})):"—";
-    var catBadge=defiCatBadge[tk.category]||'';html+='<tr><td>'+icon+'<b>'+esc(tk.name)+'</b> <span style="color:#6e7681;font-size:.75rem">'+esc(tk.symbol)+'</span>'+catBadge+'</td>'+(showWallet?'<td style="font-size:.75rem;color:#6e7681">'+esc(tk._wallet)+'</td>':'')+'<td class="chain">'+tk.chain+'</td><td>'+tk.balance.toLocaleString()+'</td><td>'+pf+'</td><td class="usd">'+fmtCurr(tk.usd_value)+'</td><td class="usd" style="color:'+pnlColor+'">'+pnlStr+'</td></tr>'}
+    var tkOff=(tk.enabled===false);var offBadge=tkOff?'<span class="tm-badge">'+esc(tmReasonLabel(tk.reason)||t("tmDisabledBadge"))+'</span>':'';
+    var catBadge=defiCatBadge[tk.category]||'';html+='<tr'+(tkOff?' class="tm-off"':'')+'><td>'+icon+'<b>'+esc(tk.name)+'</b> <span style="color:#6e7681;font-size:.75rem">'+esc(tk.symbol)+'</span>'+catBadge+offBadge+'</td>'+(showWallet?'<td style="font-size:.75rem;color:#6e7681">'+esc(tk._wallet)+'</td>':'')+'<td class="chain">'+tk.chain+'</td><td>'+tk.balance.toLocaleString()+'</td><td>'+pf+'</td><td class="usd">'+fmtCurr(tk.usd_value)+'</td><td class="usd" style="color:'+pnlColor+'">'+pnlStr+'</td></tr>'}
   html+='</tbody></table></div>';
   document.getElementById("pageTokens").innerHTML=html;
 }
@@ -1026,6 +1128,136 @@ async function loadTransactions(page){
       var csel=document.getElementById("txnChain");if(csel.options.length<=1){chains.forEach(function(c){csel.innerHTML+='<option value="'+c+'">'+c+'</option>'})}
     }
   }catch(e){console.error("loadTransactions",e);document.getElementById("txnContent").innerHTML='<div class="error">Erreur</div>'}
+}
+
+// ── Token management (v2.12.0) ───────────────────────────
+var tmTab="detected", _tmDetected=[], _tmManual=[];
+var TM_CHAINS=["ethereum","base","optimism","arbitrum","polygon","gnosis","zksync","celo","scroll","soneium","ink","mode","unichain","lisk","linea","etherlink","metis","manta","bob","zora","worldchain","hyperevm"];
+
+function tmReasonLabel(reason){
+  if(reason=="low_confidence")return t("reasonLowConf");
+  if(reason=="memecoin_pattern")return t("reasonMemecoin");
+  if(reason=="manual")return t("reasonManual");
+  return "";
+}
+
+function tmInvalidatePfCache(){
+  try{Object.keys(localStorage).forEach(function(k){if(k.indexOf("pfCache:")==0)localStorage.removeItem(k)})}catch(e){}
+  loadingAddr=null; // allow loadOneWallet to re-fetch the same address
+}
+
+function tmSwitchTab(tab){
+  tmTab=tab;
+  document.getElementById("tmTabDetected").classList.toggle("active",tab=="detected");
+  document.getElementById("tmTabManual").classList.toggle("active",tab=="manual");
+  document.getElementById("tmPaneDetected").classList.toggle("hidden",tab!="detected");
+  document.getElementById("tmPaneManual").classList.toggle("hidden",tab!="manual");
+  loadTokenMgmt();
+}
+
+function tmChainOptions(){
+  var sel=document.getElementById("tmChain");
+  if(!sel||sel.options.length>0)return;
+  var html="";
+  for(var i=0;i<TM_CHAINS.length;i++){var c=TM_CHAINS[i];html+='<option value="'+c+'">'+c.charAt(0).toUpperCase()+c.slice(1)+'</option>'}
+  sel.innerHTML=html;
+}
+
+function tmRenderTable(tokens,isManual){
+  if(!tokens.length)return '<div class="loading">'+t("tmEmpty")+'</div>';
+  var sym=currSymbol();
+  var html='<table><thead><tr><th>'+t("tmToken")+'</th><th>'+t("tmChainCol")+'</th><th>'+t("tmBalance")+'</th><th>'+t("tmPrice")+'</th><th>'+t("tmValue")+'</th><th>'+t("tmReason")+'</th><th>'+t("tmActive")+'</th>'+(isManual?'<th></th>':'')+'</tr></thead><tbody>';
+  for(var i=0;i<tokens.length;i++){
+    var tk=tokens[i];
+    var price=tk.usd_price?sym+(tk.usd_price<0.01?tk.usd_price.toFixed(8):tk.usd_price.toFixed(4)):"-";
+    var motif=tmReasonLabel(tk.reason);
+    var badge=(!tk.enabled&&motif)?'<span class="tm-badge">'+esc(motif)+'</span>':'';
+    html+='<tr class="'+(tk.enabled?'':'tm-off')+'"><td><b>'+esc(tk.name||tk.symbol)+'</b> <span style="color:#6e7681;font-size:.75rem">'+esc(tk.symbol)+'</span>'+badge+'</td>'+
+      '<td class="chain">'+esc(tk.chain)+'</td>'+
+      '<td>'+(tk.balance||0).toLocaleString()+'</td>'+
+      '<td>'+price+'</td>'+
+      '<td class="usd">'+fmtCurr(tk.usd_value||0)+'</td>'+
+      '<td style="font-size:.75rem;color:#6e7681">'+(motif?esc(motif):"—")+'</td>'+
+      '<td><label class="switch"><input type="checkbox"'+(tk.enabled?' checked':'')+' onchange="tmToggle('+i+',this.checked,'+(isManual?'true':'false')+')"><span class="slider"></span></label></td>'+
+      (isManual?'<td><button class="btn btn-red" style="padding:3px 8px;font-size:.7rem" title="'+esc(t("tmDelete"))+'" onclick="tmDelManual('+i+')">✕</button></td>':'')+
+      '</tr>';
+  }
+  html+='</tbody></table>';
+  return html;
+}
+
+async function loadTokenMgmt(){
+  tmChainOptions();
+  var el=document.getElementById(tmTab=="detected"?"tmDetectedList":"tmManualList");
+  if(!el)return;
+  el.innerHTML='<div class="loading">...</div>';
+  try{
+    var r=await fetch("/api/tokens?scope="+tmTab);
+    if(!r.ok)throw new Error("HTTP "+r.status);
+    var d=await r.json();
+    if(tmTab=="detected"){_tmDetected=d.tokens||[];el.innerHTML=tmRenderTable(_tmDetected,false)}
+    else{_tmManual=d.tokens||[];el.innerHTML=tmRenderTable(_tmManual,true)}
+  }catch(e){console.error("loadTokenMgmt",e);el.innerHTML='<div class="error">Erreur</div>'}
+}
+
+async function tmToggle(idx,enabled,isManual){
+  var list=isManual?_tmManual:_tmDetected;
+  var tk=list[idx];
+  if(!tk)return;
+  try{
+    var r=await fetch("/api/tokens/toggle",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({tid:tk.tid,enabled:enabled})});
+    if(!r.ok)throw new Error("HTTP "+r.status);
+    tk.enabled=enabled;
+    tmInvalidatePfCache();
+    loadTokenMgmt();
+    loadView(); // server cache stays warm; prefs are applied on top → fast refresh
+  }catch(e){console.error("tmToggle",e);loadTokenMgmt()}
+}
+
+async function tmBulk(enabled){
+  if(!confirm(t("tmConfirmBulk")))return;
+  try{
+    var r=await fetch("/api/tokens/bulk",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({scope:tmTab,enabled:enabled})});
+    if(!r.ok)throw new Error("HTTP "+r.status);
+    tmInvalidatePfCache();
+    loadTokenMgmt();
+    loadView();
+  }catch(e){console.error("tmBulk",e)}
+}
+
+async function tmAddManual(){
+  var chain=document.getElementById("tmChain").value;
+  var addr=document.getElementById("tmAddr").value.trim();
+  var symb=document.getElementById("tmSymbol").value.trim();
+  var msg=document.getElementById("tmManualMsg");
+  msg.style.color="";msg.textContent="";
+  if(!addr.startsWith("0x")||addr.length!=42){msg.textContent=t("invalidAddr");return}
+  var btn=document.getElementById("tmBtnAdd");btn.disabled=true;
+  try{
+    var r=await fetch("/api/tokens/manual",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({chain:chain,contract_address:addr,symbol:symb})});
+    var d=await r.json();
+    if(!r.ok){msg.textContent=d.detail||t("tmAddError");return}
+    document.getElementById("tmAddr").value="";document.getElementById("tmSymbol").value="";
+    msg.style.color="#40c463";msg.textContent="✅ "+t("tmAdded");
+    setTimeout(function(){msg.textContent="";msg.style.color=""},3000);
+    tmInvalidatePfCache();
+    loadTokenMgmt();
+    loadView();
+  }catch(e){console.error("tmAddManual",e);msg.textContent=t("tmAddError")}
+  finally{btn.disabled=false}
+}
+
+async function tmDelManual(idx){
+  var tk=_tmManual[idx];
+  if(!tk)return;
+  if(!confirm(t("tmConfirmDel")))return;
+  try{
+    var r=await fetch("/api/tokens/manual",{method:"DELETE",headers:{"Content-Type":"application/json"},body:JSON.stringify({tid:tk.tid})});
+    if(!r.ok)throw new Error("HTTP "+r.status);
+    tmInvalidatePfCache();
+    loadTokenMgmt();
+    loadView();
+  }catch(e){console.error("tmDelManual",e)}
 }
 
 // ── Debug Panel ──────────────────────────────────────────

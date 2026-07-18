@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — v2.11.27
+# Crypto Wallet Tracker — v2.12.0
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -13,6 +13,7 @@ Dashboard agrégé, graphiques d'évolution, historique des prix via DefiLlama, 
 - 💰 **Valorisation USD/€** — temps réel via Blockscout, conversion EUR (Frankfurter)
 - 🦙 **Fallback prix DefiLlama** — si Blockscout ne donne pas de prix, appel batch à l'API gratuite `coins.llama.fi/prices/current`
 - 🔒 **Détection DeFi best-effort** — catégorisation fine (lending, LP, staked, vault, synthetic) via heuristiques sur les symboles, aucun service tiers, 100 % gratuit. Section DeFi dédiée avec badges colorés et sous-totaux par catégorie
+- 🎛️ **Gestion des tokens** — page dédiée pour activer/désactiver chaque token (détectés + ajoutés manuellement). Les memecoins illiquides et les prix à faible confiance DefiLlama sont désactivés par défaut ; un token désactivé est exclu des totaux, de la répartition DeFi et de l'historique (effet rétroactif)
 - 👥 **Comptes utilisateurs** — inscription, connexion, wallets privés (bcrypt + sessions)
 - 📊 **Dashboard** — valeur totale, répartition par chaîne (donut), cartes PNL Total / PNL 24h, mini-graphe, gaz cumulé
 - 📈 **Statistiques** — courbes valeur/coût d'achat, barres PNL journalier (7j/30j/90j/1a/All), filtrable par wallet/token/chaîne
@@ -124,6 +125,18 @@ Crypto-Wallet-Tracker/
 ---
 
 ## 📋 Changelog
+
+### v2.12.0 — Gestion des tokens (activer/désactiver)
+- **Nouvelle page « 🎛️ Gestion des tokens »** avec deux sous-onglets : **Détectés** (tokens trouvés automatiquement sur les chaînes) et **Ajoutés manuellement** (ajout par chaîne + adresse de contrat).
+- **Interrupteur on/off par token** — un token désactivé est exclu du total, du nombre de tokens, de la répartition par chaîne, de la répartition DeFi **et de l'historique** (snapshots + PNL recalculés rétroactivement en tâche de fond via un worker dédié).
+- **Auto-désactivation des tokens douteux** (conservatrice, motif affiché et modifiable) :
+  - `memecoin_pattern` — grosse valeur affichée (≥ 500 $) issue d'un prix microscopique (≤ 0,0001 $) sur une balance énorme (≥ 10 M d'unités) ;
+  - `low_confidence` — indice de confiance DefiLlama du prix < 0,8 (le champ `confidence` de l'API est désormais capturé et propagé).
+  Le défaut n'est appliqué qu'à la **première détection** d'un token : le choix explicite de l'utilisateur n'est jamais écrasé.
+- **Tokens manuels** — formulaire chaîne + adresse (validation 0x…, 42 caractères), métadonnées récupérées via Blockscout, prix via Blockscout/DefiLlama, fusion dans le portefeuille, suppression possible.
+- **Nouveaux endpoints** : `GET /api/tokens?scope=detected|manual`, `POST /api/tokens/toggle`, `POST /api/tokens/bulk`, `POST /api/tokens/manual`, `DELETE /api/tokens/manual`.
+- **Nouvelle table** `user_token_prefs` (préférences par utilisateur et par token, clé `(user_id, tid)`, migration idempotente).
+- UI : tokens désactivés grisés avec badge motif dans « Détail tokens », boutons « Tout activer / Tout désactiver », i18n FR/EN complète.
 
 ### v2.11.27 — Hotfix rendu tokens
 - **Correction d'une regression v2.11.26** : dans l'onglet « Détail tokens », la variable de boucle `t` masquait la fonction de traduction `t()` nouvellement appelée dans la même fonction (hoisting), provoquant une `TypeError` qui laissait la page vide et masquait la section DeFi. La variable de boucle est renommée ; le tableau des tokens et la section DeFi s'affichent à nouveau.

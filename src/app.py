@@ -22,9 +22,15 @@ from services.price_service import (
 from services.portfolio_service import (
     _compute_portfolio, CHAINS, NATIVE_COIN, fetch_chain, _is_spam,
     format_snapshots_v2, format_snapshots_legacy,
+    _token_category, _is_defi_category, CHAIN_TO_LLAMA,
+    _fetch_defillama_current_prices,
 )
 from services.pnl_service import (
     _rebuild_history, compute_pnl_from_rows, format_pnl_v2,
+)
+from services.token_prefs import (
+    token_tid, classify_token, load_user_prefs, get_disabled_tids,
+    insert_default_prefs,
 )
 
 # ── Logging configuration ───────────────────────────────────────
@@ -188,6 +194,27 @@ async def lifespan(app: FastAPI):
                 FOREIGN KEY(user_id) REFERENCES users(id)
             )
         """)
+        # Per-user token preferences (enable/disable + manual tokens) — v2.12.0
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS user_token_prefs (
+                user_id INTEGER NOT NULL,
+                tid TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                source TEXT NOT NULL DEFAULT 'detected',
+                chain TEXT DEFAULT '',
+                contract_address TEXT DEFAULT '',
+                symbol TEXT DEFAULT '',
+                name TEXT DEFAULT '',
+                reason TEXT DEFAULT '',
+                default_enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now')),
+                PRIMARY KEY(user_id, tid),
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            )
+        """)
+        try: await db.execute("CREATE INDEX IF NOT EXISTS idx_utp_user ON user_token_prefs(user_id)")
+        except: pass
         await db.commit()
     yield
 
@@ -767,6 +794,431 @@ async def _get_eth_price_at(timestamp_str: str) -> float:
 _wallet_labels = {}
 
 
+# ── Token preferences / management (v2.12.0) ────────────────────
+
+_manual_token_cache: dict = {}   # (wallet_address_lower, tid) -> {"item": dict|None, "ts": float}
+_MANUAL_TOKEN_TTL = 3600
+
+_rebuild_state: dict = {}        # user_id -> {"running": bool, "rerun": bool}
+
+
+async def _run_history_rebuild(user_id: int):
+    """Rebuild daily_history for all the user's wallets in a SUBPROCESS
+    (services/rebuild_worker.py) — the same reliable mechanism as the price
+    enrichment worker. Runs in the background; never blocks an HTTP response.
+
+    Debounced: if a rebuild is already running for this user, one rerun is
+    queued so the LAST preference state always wins.
+    """
+    st = _rebuild_state.setdefault(user_id, {"running": False, "rerun": False})
+    if st["running"]:
+        st["rerun"] = True
+        return
+    st["running"] = True
+    _rlog = logging.getLogger("crypto.rebuild")
+    worker = os.path.join(os.path.dirname(os.path.abspath(__file__)), "services", "rebuild_worker.py")
+    try:
+        while True:
+            st["rerun"] = False
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    sys.executable, worker, str(user_id),
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                    env={**os.environ, "DB_PATH": DB_PATH})
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=1800)
+                out = (stdout.decode() or "").strip()
+                _rlog.info(f"history rebuild done user={user_id}: days={out[-20:] if out else '?'}")
+                if stderr:
+                    err = stderr.decode()[:200].strip()
+                    if err:
+                        _rlog.warning(f"rebuild worker stderr: {err}")
+            except Exception as e:
+                _rlog.warning(f"rebuild subprocess failed: {e}")
+            if not st["rerun"]:
+                break
+    finally:
+        st["running"] = False
+
+
+async def _fetch_manual_token_item(wallet_address: str, pref: dict):
+    """Live balance + price for a manually added token on ONE wallet.
+
+    Blockscout /token-balances (single call, no pagination) filtered on the
+    contract; DefiLlama current-price fallback when Blockscout has no rate.
+    Result cached 1h per (wallet, tid). Returns an item dict or None.
+    """
+    tid = (pref.get("tid") or "").lower()
+    chain = (pref.get("chain") or "").lower()
+    contract = (pref.get("contract_address") or "").lower()
+    host = CHAINS.get(chain)
+    if not host or not contract:
+        return None
+
+    key = (wallet_address.lower(), tid)
+    now = _time.time()
+    entry = _manual_token_cache.get(key)
+    if entry and now - entry["ts"] < _MANUAL_TOKEN_TTL:
+        return dict(entry["item"]) if entry["item"] else None
+
+    balance = 0.0
+    usd_price = 0.0
+    symbol = pref.get("symbol") or "?"
+    name = pref.get("name") or symbol
+    icon = ""
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=12) as client:
+            r = await client.get(f"https://{host}/api/v2/addresses/{wallet_address}/token-balances")
+            if r.status_code == 200:
+                for b in (r.json() or []):
+                    tk = (b or {}).get("token") or {}
+                    addr = (tk.get("address") or tk.get("address_hash") or "").lower()
+                    if addr != contract:
+                        continue
+                    try:
+                        decimals = int(tk.get("decimals") or 18)
+                        balance = int(b.get("value") or 0) / (10 ** decimals)
+                    except Exception:
+                        balance = 0.0
+                    usd_price = float(tk.get("exchange_rate") or 0)
+                    symbol = tk.get("symbol") or symbol
+                    name = tk.get("name") or name
+                    icon = tk.get("icon_url") or ""
+                    break
+    except Exception:
+        pass
+
+    price_confidence = None
+    if usd_price <= 0:
+        try:
+            llama = await _fetch_defillama_current_prices([(chain, contract, symbol)])
+            lp = llama.get(contract)
+            if lp:
+                usd_price = lp["price"]
+                price_confidence = lp.get("confidence")
+        except Exception:
+            pass
+
+    item = {
+        "chain": chain,
+        "name": name,
+        "symbol": symbol,
+        "balance": round(balance, 6),
+        "usd_value": round(balance * usd_price, 2),
+        "usd_price": usd_price,
+        "icon": icon,
+        "type": "ERC-20",
+        "contract_address": contract,
+        "price_unknown": usd_price <= 0,
+        "price_confidence": price_confidence,
+        "category": _token_category(symbol),
+        "tid": tid,
+        "enabled": True,
+        "reason": pref.get("reason") or "manual",
+        "source": "manual",
+    }
+    _manual_token_cache[key] = {"item": item, "ts": now}
+    return dict(item)
+
+
+async def _apply_user_token_prefs(user_id: int, data: dict, wallet_address: str) -> dict:
+    """Attach per-user enable/disable prefs to portfolio items and recompute
+    the aggregates over ENABLED tokens only.
+
+    • Every item gets: tid, enabled, reason, source.
+    • Newly seen tids are auto-classified (classify_token) and inserted with
+      the computed default (INSERT OR IGNORE — an existing user choice is
+      NEVER overwritten).
+    • Active manually-added tokens are merged in with live balance/price.
+    • total_usd / defi_usd / defi_breakdown / token_count / chains reflect
+      enabled tokens only; ALL items stay in the response with their flags.
+    • Operates on a COPY: the per-address _portfolio_cache is shared between
+      users and must never be polluted with user-specific fields.
+
+    Sets data["_new_auto_disabled"] (internal) when new dubious tokens were
+    auto-disabled — the caller uses it to trigger a history rebuild.
+    """
+    out = dict(data)
+    items = [dict(it) for it in data.get("tokens", [])]
+    prefs = await load_user_prefs(user_id)
+
+    new_rows = []
+    new_auto_disabled = 0
+    for it in items:
+        tid = token_tid(it.get("symbol"), it.get("chain"), it.get("contract_address"))
+        it["tid"] = tid
+        pref = prefs.get(tid)
+        if pref is None:
+            de, reason = classify_token(
+                it.get("usd_value", 0), it.get("usd_price", 0),
+                it.get("balance", 0), it.get("price_confidence"))
+            new_rows.append((
+                user_id, tid, de, "detected", it.get("chain") or "",
+                it.get("contract_address") or "", it.get("symbol") or "",
+                it.get("name") or "", reason, de))
+            prefs[tid] = {"tid": tid, "enabled": de, "source": "detected", "reason": reason}
+            if not de:
+                new_auto_disabled += 1
+            it["enabled"] = bool(de)
+            it["reason"] = reason
+            it["source"] = "detected"
+        else:
+            it["enabled"] = bool(pref.get("enabled", 1))
+            it["reason"] = pref.get("reason") or ""
+            it["source"] = pref.get("source") or "detected"
+
+    if new_rows:
+        try:
+            await insert_default_prefs(new_rows)
+        except Exception as e:
+            logging.getLogger("crypto.portfolio").warning(f"[prefs] insert failed: {e}")
+
+    # Merge active manual tokens that are not already detected on-chain
+    present = {it["tid"] for it in items}
+    for pref in prefs.values():
+        if pref.get("source") != "manual" or not pref.get("enabled"):
+            continue
+        if (pref.get("tid") or "").lower() in present:
+            continue
+        try:
+            m_item = await _fetch_manual_token_item(wallet_address, pref)
+        except Exception:
+            m_item = None
+        if m_item and (m_item.get("balance") or 0) > 0:
+            items.append(m_item)
+
+    # Recompute aggregates over ENABLED tokens only
+    active = [it for it in items if it.get("enabled", True)]
+    total = 0.0
+    chain_totals: dict = {}
+    defi_usd = 0.0
+    defi_breakdown: dict = {}
+    for it in active:
+        v = float(it.get("usd_value") or 0)
+        total += v
+        ch = it.get("chain") or "?"
+        chain_totals[ch] = chain_totals.get(ch, 0) + v
+        cat = it.get("category", "wallet")
+        if _is_defi_category(cat):
+            defi_usd += v
+            defi_breakdown[cat] = defi_breakdown.get(cat, 0) + v
+
+    items.sort(key=lambda x: (x.get("usd_value") or 0), reverse=True)
+    out["tokens"] = items[:250]
+    out["total_usd"] = round(total, 2)
+    out["defi_usd"] = round(defi_usd, 2)
+    out["staked_usd"] = round(defi_usd, 2)  # backward compat
+    out["defi_breakdown"] = {k: round(v, 2) for k, v in defi_breakdown.items()}
+    out["token_count"] = len(active)
+    out["chains"] = {
+        c: round(v, 2)
+        for c, v in sorted(chain_totals.items(), key=lambda x: x[1], reverse=True)
+        if v > 0
+    }
+    out["chain_count"] = len(out["chains"])
+    out["disabled_count"] = len(items) - len(active)
+    if out.get("total_cost_basis") is not None:
+        out["total_pnl"] = round(out["total_usd"] - out["total_cost_basis"], 2)
+    if new_auto_disabled:
+        out["_new_auto_disabled"] = new_auto_disabled
+    return out
+
+
+@app.get("/api/tokens")
+async def list_tokens(scope: str = Query("detected"), user=Depends(get_current_user), db=Depends(get_db)):
+    """Tokens of the management page. scope=detected|manual."""
+    if scope not in ("detected", "manual"):
+        raise HTTPException(400, "scope doit être 'detected' ou 'manual'")
+    cur = await db.execute(
+        "SELECT * FROM user_token_prefs WHERE user_id=? AND source=? ORDER BY LOWER(symbol)",
+        (user["id"], scope))
+    prefs = [dict(r) for r in await cur.fetchall()]
+
+    cur = await db.execute("SELECT address FROM wallets WHERE user_id=?", (user["id"],))
+    wallet_rows = await cur.fetchall()
+
+    # Live data per tid, aggregated across the user's wallets
+    live: dict = {}
+    if scope == "detected":
+        for w in wallet_rows:
+            entry = _portfolio_cache.get(w["address"])
+            if not entry:
+                continue
+            for it in entry["data"].get("tokens", []):
+                tid = token_tid(it.get("symbol"), it.get("chain"), it.get("contract_address"))
+                agg = live.setdefault(tid, {"balance": 0.0, "usd_value": 0.0, "usd_price": 0.0})
+                agg["balance"] += float(it.get("balance") or 0)
+                agg["usd_value"] += float(it.get("usd_value") or 0)
+                if not agg["usd_price"]:
+                    agg["usd_price"] = float(it.get("usd_price") or 0)
+    else:
+        for p in prefs:
+            agg = live.setdefault(p["tid"], {"balance": 0.0, "usd_value": 0.0, "usd_price": 0.0})
+            for w in wallet_rows:
+                try:
+                    m = await _fetch_manual_token_item(w["address"], p)
+                except Exception:
+                    m = None
+                if m:
+                    agg["balance"] += float(m.get("balance") or 0)
+                    agg["usd_value"] += float(m.get("usd_value") or 0)
+                    if not agg["usd_price"]:
+                        agg["usd_price"] = float(m.get("usd_price") or 0)
+
+    tokens = []
+    for p in prefs:
+        lv = live.get(p["tid"], {})
+        tokens.append({
+            "tid": p["tid"],
+            "chain": p.get("chain") or "",
+            "symbol": p.get("symbol") or "?",
+            "name": p.get("name") or "",
+            "balance": round(float(lv.get("balance") or 0), 6),
+            "usd_value": round(float(lv.get("usd_value") or 0), 2),
+            "usd_price": float(lv.get("usd_price") or 0),
+            "enabled": bool(p.get("enabled")),
+            "reason": p.get("reason") or "",
+            "source": p.get("source") or scope,
+            "default_enabled": bool(p.get("default_enabled", 1)),
+        })
+    # Sort: biggest value first, then symbol
+    tokens.sort(key=lambda x: (-x["usd_value"], x["symbol"].lower()))
+    return {"scope": scope, "tokens": tokens}
+
+
+@app.post("/api/tokens/toggle")
+async def toggle_token(request: Request, user=Depends(get_current_user), db=Depends(get_db)):
+    """Enable/disable a token. Triggers a retroactive history rebuild."""
+    data = await request.json()
+    tid = (data.get("tid") or "").strip().lower()
+    enabled = 1 if data.get("enabled") else 0
+    if not tid:
+        raise HTTPException(400, "tid requis")
+    cur = await db.execute(
+        "SELECT tid FROM user_token_prefs WHERE user_id=? AND tid=?", (user["id"], tid))
+    row = await cur.fetchone()
+    if row:
+        await db.execute(
+            "UPDATE user_token_prefs SET enabled=?, updated_at=datetime('now') "
+            "WHERE user_id=? AND tid=?",
+            (enabled, user["id"], tid))
+    else:
+        await db.execute(
+            "INSERT INTO user_token_prefs (user_id, tid, enabled, source, reason, default_enabled) "
+            "VALUES (?,?,?,?,?,?)",
+            (user["id"], tid, enabled, "detected", "", 1))
+    await db.commit()
+    asyncio.create_task(_run_history_rebuild(user["id"]))
+    return {"ok": True, "tid": tid, "enabled": bool(enabled)}
+
+
+@app.post("/api/tokens/bulk")
+async def bulk_toggle_tokens(request: Request, user=Depends(get_current_user), db=Depends(get_db)):
+    """Enable/disable ALL tokens of a scope at once."""
+    data = await request.json()
+    scope = (data.get("scope") or "detected").strip()
+    enabled = 1 if data.get("enabled") else 0
+    if scope not in ("detected", "manual"):
+        raise HTTPException(400, "scope doit être 'detected' ou 'manual'")
+    await db.execute(
+        "UPDATE user_token_prefs SET enabled=?, updated_at=datetime('now') "
+        "WHERE user_id=? AND source=?",
+        (enabled, user["id"], scope))
+    await db.commit()
+    asyncio.create_task(_run_history_rebuild(user["id"]))
+    return {"ok": True, "scope": scope, "enabled": bool(enabled)}
+
+
+@app.post("/api/tokens/manual")
+async def add_manual_token(request: Request, user=Depends(get_current_user), db=Depends(get_db)):
+    """Manually add (and enable) a token by chain + contract address."""
+    data = await request.json()
+    chain = (data.get("chain") or "").strip().lower()
+    contract = (data.get("contract_address") or "").strip().lower()
+    symbol = (data.get("symbol") or "").strip()[:20]
+    if chain not in CHAINS:
+        raise HTTPException(400, "Chaîne inconnue")
+    if not contract.startswith("0x") or len(contract) != 42:
+        raise HTTPException(400, "Adresse de contrat invalide (0x + 40 caractères hex)")
+    tid = contract
+
+    # Token metadata via Blockscout (best effort)
+    name = ""
+    try:
+        host = CHAINS[chain]
+        async with httpx.AsyncClient(follow_redirects=True, timeout=12) as client:
+            r = await client.get(f"https://{host}/api/v2/tokens/{contract}")
+            if r.status_code == 200:
+                tk = r.json() or {}
+                symbol = tk.get("symbol") or symbol
+                name = tk.get("name") or ""
+    except Exception:
+        pass
+    if not symbol:
+        symbol = "?"
+    if not name:
+        name = symbol
+
+    cur = await db.execute(
+        "SELECT tid FROM user_token_prefs WHERE user_id=? AND tid=?", (user["id"], tid))
+    exists = await cur.fetchone()
+    if exists:
+        await db.execute(
+            "UPDATE user_token_prefs SET enabled=1, source='manual', chain=?, "
+            "contract_address=?, symbol=?, name=?, reason='manual', "
+            "updated_at=datetime('now') WHERE user_id=? AND tid=?",
+            (chain, contract, symbol, name, user["id"], tid))
+    else:
+        await db.execute(
+            "INSERT INTO user_token_prefs (user_id, tid, enabled, source, chain, "
+            "contract_address, symbol, name, reason, default_enabled) "
+            "VALUES (?,?,1,'manual',?,?,?,?,'manual',1)",
+            (user["id"], tid, chain, contract, symbol, name))
+    await db.commit()
+
+    # Best-effort live data across the user's wallets
+    item = {"tid": tid, "chain": chain, "symbol": symbol, "name": name,
+            "balance": 0.0, "usd_value": 0.0, "usd_price": 0.0,
+            "enabled": True, "reason": "manual", "source": "manual"}
+    try:
+        cur = await db.execute(
+            "SELECT address FROM wallets WHERE user_id=? ORDER BY created_at", (user["id"],))
+        wrows = await cur.fetchall()
+        pref = {"tid": tid, "chain": chain, "contract_address": contract,
+                "symbol": symbol, "name": name, "reason": "manual"}
+        bal = usd = price = 0.0
+        for w in wrows:
+            m = await _fetch_manual_token_item(w["address"], pref)
+            if m:
+                bal += float(m.get("balance") or 0)
+                usd += float(m.get("usd_value") or 0)
+                if not price:
+                    price = float(m.get("usd_price") or 0)
+        item.update({"balance": round(bal, 6), "usd_value": round(usd, 2), "usd_price": price})
+    except Exception:
+        pass
+
+    asyncio.create_task(_run_history_rebuild(user["id"]))
+    return {"ok": True, "token": item}
+
+
+@app.delete("/api/tokens/manual")
+async def del_manual_token(request: Request, user=Depends(get_current_user), db=Depends(get_db)):
+    """Remove a manually added token preference."""
+    data = await request.json()
+    tid = (data.get("tid") or "").strip().lower()
+    if not tid:
+        raise HTTPException(400, "tid requis")
+    await db.execute(
+        "DELETE FROM user_token_prefs WHERE user_id=? AND tid=? AND source='manual'",
+        (user["id"], tid))
+    await db.commit()
+    for k in list(_manual_token_cache.keys()):
+        if k[1] == tid:
+            _manual_token_cache.pop(k, None)
+    asyncio.create_task(_run_history_rebuild(user["id"]))
+    return {"ok": True, "tid": tid}
+
+
 # ── Portfolio endpoint ───────────────────────────────────────────
 
 @app.get("/api/portfolio")
@@ -785,7 +1237,10 @@ async def portfolio(address: str = Query(...), force: bool = Query(False), user=
 
     entry = _portfolio_cache.get(address)
     if not force and entry and (now - entry["ts"]) < 3600:
-        data = dict(entry["data"])
+        # Apply per-user token prefs on a COPY (cache is shared between users)
+        data = await _apply_user_token_prefs(user["id"], entry["data"], address)
+        if data.pop("_new_auto_disabled", None):
+            asyncio.create_task(_run_history_rebuild(user["id"]))
         data["cached"] = True
         return data
 
@@ -904,6 +1359,14 @@ async def portfolio(address: str = Query(...), force: bool = Query(False), user=
         _log.info(
             f"[TRACE] /api/portfolio AFTER enrich: enriched={enriched} "            f"missing_history={missing_history} tokens={len(data.get('tokens',[]))}"
         )
+
+    # Apply per-user token prefs (enable/disable + manual tokens) on a COPY —
+    # the address-keyed cache stays user-agnostic. Totals below (snapshot,
+    # response) reflect ENABLED tokens only.
+    data = await _apply_user_token_prefs(user["id"], data, address)
+    if data.pop("_new_auto_disabled", None):
+        # Newly auto-disabled dubious tokens → retroactive history rebuild
+        asyncio.create_task(_run_history_rebuild(user["id"]))
 
     # Save intraday snapshot for dashboard mini-chart
     try:
@@ -1053,10 +1516,16 @@ async def get_snapshots(token: str = Query(None), wallet: str = Query(None), cha
     if not token and rows and wallet:
         try:
             pf = await _compute_portfolio(wallet)
-            # Use the full portfolio total (tokens are already spam-filtered in
-            # _compute_portfolio). Since v2.11.13 the history includes priced
-            # unmapped tokens too, so the last point should reflect the real total.
-            pf_total = pf.get("total_usd", 0) or 0
+            # Use the portfolio total over ENABLED tokens only (tokens are
+            # already spam-filtered in _compute_portfolio; user-disabled tids
+            # are excluded here so the last point matches the filtered history).
+            disabled = await get_disabled_tids(user["id"])
+            pf_total = 0.0
+            for tk in pf.get("tokens", []):
+                tk_tid = token_tid(tk.get("symbol"), tk.get("chain"), tk.get("contract_address"))
+                if tk_tid in disabled:
+                    continue
+                pf_total += tk.get("usd_value", 0) or 0
             if pf_total > 0:
                 rows[-1] = dict(rows[-1])
                 rows[-1]["total_usd"] = round(pf_total, 2)
@@ -1107,10 +1576,17 @@ async def backfill_snapshots(user=Depends(get_current_user), db=Depends(get_db))
         hist_row = await cur2.fetchone()
         hist_value = hist_row["value_usd"] if hist_row else 0
         # Portfolio value over the SAME set the history now covers (all priced,
-        # spam-filtered tokens), so delta_pct is a meaningful indicator.
+        # spam-filtered tokens, user-disabled tids excluded), so delta_pct is a
+        # meaningful indicator.
         address = wallet_rows[0]["address"]
         data = await _compute_portfolio(address)
-        port_value = data.get("total_usd", 0) or 0
+        disabled = await get_disabled_tids(user["id"])
+        port_value = 0.0
+        for tk in data.get("tokens", []):
+            tk_tid = token_tid(tk.get("symbol"), tk.get("chain"), tk.get("contract_address"))
+            if tk_tid in disabled:
+                continue
+            port_value += tk.get("usd_value", 0) or 0
         if hist_value > 0 and port_value > 0:
             delta_pct = round((hist_value - port_value) / port_value * 100, 1)
             reconciliation = {"history_last_value": round(hist_value, 2),

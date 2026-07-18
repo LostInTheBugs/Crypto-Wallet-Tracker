@@ -402,15 +402,17 @@ async def fetch_chain(client, chain, host, address):
 # DefiLlama batch price lookup (fallback for unpriced tokens)
 # ═══════════════════════════════════════════════════════════════════
 
-async def _fetch_defillama_current_prices(queries: list[tuple[str, str, str]]) -> dict[str, float]:
-    """Batch-fetch current prices from DefiLlama.
+async def _fetch_defillama_current_prices(queries: list[tuple[str, str, str]]) -> dict[str, dict]:
+    """Batch-fetch current prices (WITH confidence) from DefiLlama.
 
     Args:
         queries: list of (chain_slug, contract_address, symbol) tuples.
                  chain_slug is the DefiLlama chain name (e.g. 'xdai' for Gnosis).
 
     Returns:
-        {contract_address: price_usd} for tokens that DefiLlama knows about.
+        {contract_address: {"price": float, "confidence": float|None}}
+        for tokens that DefiLlama knows about. `confidence` (0..1) is
+        DefiLlama's own price reliability score; None when absent.
     """
     if not queries:
         return {}
@@ -453,7 +455,12 @@ async def _fetch_defillama_current_prices(queries: list[tuple[str, str, str]]) -
                     if price > 0:
                         # Key format: "chain:address"
                         addr = key.split(":", 1)[-1].lower() if ":" in key else key.lower()
-                        prices[addr] = float(price)
+                        conf = coin_data.get("confidence")
+                        try:
+                            conf = float(conf) if conf is not None else None
+                        except (TypeError, ValueError):
+                            conf = None
+                        prices[addr] = {"price": float(price), "confidence": conf}
             except Exception:
                 continue
 
@@ -511,6 +518,7 @@ async def _compute_portfolio(address: str) -> dict:
                 "type": t.get("type", "ERC-20"),
                 "contract_address": t.get("contract_address", ""),
                 "price_unknown": False,
+                "price_confidence": None,  # set when the price comes from DefiLlama
                 "category": _token_category(sym) if not _is_spam(sym) else "wallet",
             })
 
@@ -535,12 +543,14 @@ async def _compute_portfolio(address: str) -> dict:
                     continue
                 addr = item.get("contract_address", "")
                 if addr and addr.lower() in llama_prices:
-                    new_price = llama_prices[addr.lower()]
+                    entry = llama_prices[addr.lower()]
+                    new_price = entry["price"]
                     item["usd_price"] = new_price
                     new_usd = item["balance"] * new_price
                     delta = new_usd - item["usd_value"]
                     item["usd_value"] = round(new_usd, 2)
                     item["price_unknown"] = False
+                    item["price_confidence"] = entry.get("confidence")
                     total += delta
                     enriched += 1
             logger.info(
@@ -568,13 +578,15 @@ async def _compute_portfolio(address: str) -> dict:
                     for item in unpriced_natives:
                         wrapped_addr = NATIVE_WRAPPED.get(item["chain"], "").lower()
                         if wrapped_addr and wrapped_addr in native_prices:
-                            new_price = native_prices[wrapped_addr]
+                            entry = native_prices[wrapped_addr]
+                            new_price = entry["price"]
                             if new_price > 0:
                                 item["usd_price"] = new_price
                                 new_usd = item["balance"] * new_price
                                 delta = new_usd - item["usd_value"]
                                 item["usd_value"] = round(new_usd, 2)
                                 item["price_unknown"] = False
+                                item["price_confidence"] = entry.get("confidence")
                                 total += delta
                                 enriched_native += 1
                     logger.info(
