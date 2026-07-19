@@ -299,7 +299,7 @@ tr.tm-off td{opacity:.45}
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>📦 Version</h2>
-        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">2026.07.12</strong></p>
+        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">2026.07.13</strong></p>
         <p id="verStatus" style="font-size:.85rem"></p>
         <button id="updateBtn" class="hidden" onclick="doUpdate()" style="margin-top:8px;background:#238636;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:.85rem">🔄 Mettre à jour</button>
         <p id="updateMsg" style="margin-top:8px;font-size:.8rem;color:#f0c040"></p>
@@ -355,7 +355,10 @@ var T = {
     pwdTooShort: "❌ 4 caractères minimum",
     verCurrent: "Version actuelle", verLatest: "Dernière version",
     verUpToDate: "✅ À jour", verOutdated: "⚠️ Nouvelle version disponible",
-    updateBtn: "🔄 Mettre à jour", updating: "⏳ Mise à jour en cours...",
+    updateBtn: "🔄 Mettre à jour", updating: "⏳ Demande en cours...",
+    updRunning: "⏳ Déploiement en cours...", updDone: "✅ Déploiement terminé",
+    updReload: "Rechargement...", updFailed: "❌ Échec du déploiement",
+    updTimeout: "⏰ Délai d'attente dépassé", updError: "Erreur réseau",
     verCheckError: "❌ Impossible de vérifier",
     noData: "📭 Aucune donnée",
     swap: "Swap", received: "Reçu", sentLbl: "Envoyé", legsLbl: "jambes",
@@ -537,7 +540,10 @@ var T = {
     pwdTooShort: "❌ 4 characters minimum",
     verCurrent: "Current version", verLatest: "Latest version",
     verUpToDate: "✅ Up to date", verOutdated: "⚠️ New version available",
-    updateBtn: "🔄 Update now", updating: "⏳ Updating...",
+    updateBtn: "🔄 Update now", updating: "⏳ Requesting...",
+    updRunning: "⏳ Deploying...", updDone: "✅ Update complete",
+    updReload: "Reloading...", updFailed: "❌ Update failed",
+    updTimeout: "⏰ Timed out waiting", updError: "Network error",
     verCheckError: "❌ Unable to check",
     noData: "📭 No data",
     swap: "Swap", received: "Received", sentLbl: "Sent", legsLbl: "legs",
@@ -1722,9 +1728,38 @@ async function doUpdate(){
   btn.disabled=true;btn.textContent=t("updating");msg.textContent="";
   try{
     var r=await fetch("/api/update",{method:"POST"});var d=await r.json();
-    if(d.ok){msg.innerHTML='<span style="color:#40c463">'+d.msg+"</span>";setTimeout(function(){location.reload()},5000)}
-    else{msg.innerHTML='<span style="color:#f85149">'+d.msg+"</span>";btn.disabled=false;btn.textContent=t("updateBtn")}
-  }catch(e){msg.textContent="Erreur";btn.disabled=false;btn.textContent=t("updateBtn")}
+    if(d.ok){
+      msg.innerHTML='<span style="color:#f0c040">'+esc(d.msg||"Demande envoyée")+"</span>";
+      // Poll status every 3s
+      var start=Date.now(),maxWait=180000;
+      var pollId=setInterval(async function(){
+        try{
+          var sr=await fetch("/api/update/status");
+          if(!sr.ok)return;
+          var st=await sr.json();
+          var state=st.state||"idle";
+          if(state==="requested"||state==="idle"){
+            // Not picked up yet or idle again
+            if(Date.now()-start>maxWait){clearInterval(pollId);msg.innerHTML='<span style="color:#f85149">'+t("updTimeout")+"</span>";btn.disabled=false;btn.textContent=t("updateBtn")}
+          }else if(state==="running"){
+            msg.innerHTML='<span style="color:#f0c040">'+t("updRunning")+"</span>"
+          }else if(state==="done"){
+            clearInterval(pollId);
+            msg.innerHTML='<span style="color:#40c463">'+t("updDone")+" — "+t("updReload")+"</span>";
+            setTimeout(function(){location.reload()},2000)
+          }else if(state==="failed"){
+            clearInterval(pollId);
+            msg.innerHTML='<span style="color:#f85149">'+t("updFailed")+": "+esc(st.message||"")+"</span>";
+            btn.disabled=false;btn.textContent=t("updateBtn")
+          }
+        }catch(e){}
+      },3000)
+    }else{
+      var errMsg=d.msg||d.detail||"Demande échouée";
+      msg.innerHTML='<span style="color:#f85149">'+esc(errMsg)+"</span>";
+      btn.disabled=false;btn.textContent=t("updateBtn")
+    }
+  }catch(e){msg.textContent=t("updError");btn.disabled=false;btn.textContent=t("updateBtn")}
 }
 
 async function checkVersion(){

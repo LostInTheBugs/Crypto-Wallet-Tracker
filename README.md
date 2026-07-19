@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — 2026.07.12
+# Crypto Wallet Tracker — 2026.07.13
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -142,8 +142,9 @@ Crypto-Wallet-Tracker/
 - [x] 2026.07.10 — NFT : liens source + fiabilite des floors
 - [x] 2026.07.11 — PWA, theme, recherche, watchlist
 - [x] 2026.07.12 — Consolidation SQLite (ecritures serialisees)
-- [ ] 2026.07.13 — Sauvegardes auto + sante + tests/CI
-- [ ] 2026.07.14 — Durcissement auth & comptes
+- [x] 2026.07.13 — Self-update via updater cote hote (bouton Mettre a jour fonctionnel)
+- [ ] 2026.07.14 — Sauvegardes auto + sante + tests/CI
+- [ ] 2026.07.15 — Durcissement auth & comptes
 
 ### Phase 2 — Multi-chaines non-EVM & airdrops
 - [ ] Refactor abstraction multi-provider (prerequis)
@@ -153,6 +154,13 @@ Crypto-Wallet-Tracker/
 - [ ] Airdrops a claim
 
 ## 📋 Changelog
+
+### 2026.07.13 — Self-update via updater côté hôte (bouton Mettre à jour fonctionnel)
+
+- **Updater côté hôte** : le conteneur ne gère plus son propre déploiement (il n'a ni git ni docker). Un clic sur « Mettre à jour » dans ⚙️ Paramètres écrit un fichier de demande sur un volume Docker partagé (`/data/deploy/request.json`). Un service systemd sur l'hôte (`crypto-update.path` + `crypto-update.service`) surveille cette demande, exécute `git pull origin main` puis `docker compose up -d --build`, et écrit l'état dans `/data/deploy/status.json`. Le frontend poll l'état toutes les 3 secondes et recharge la page au succès.
+- **Sécurité** : le conteneur n'a jamais accès à la socket Docker, à git, ni au host. Il se contente d'écrire un fichier sur un volume partagé. L'updater tourne en `root` sur l'hôte avec les permissions nécessaires.
+- **Correction UI** : le frontend n'affiche plus jamais « undefined » en cas d'erreur — fallback sur `d.msg || d.detail || "Demande échouée"`. Ajout des clés i18n FR/EN pour tous les états du déploiement (demande, déploiement, terminé, échec, timeout).
+- Fichiers ajoutés : `deploy/host-updater.sh`, `deploy/crypto-update.path`, `deploy/crypto-update.service`.
 
 ### 2026.07.12 — Consolidation SQLite : ecritures serialisees (fin des "database is locked")
 

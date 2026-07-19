@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse, Response
 from contextlib import asynccontextmanager
 import httpx, asyncio, jwt, bcrypt, aiosqlite, os, datetime, calendar, time as _time, bisect, math, subprocess, re, json
+from pathlib import Path
 
 # Service imports
 import sys, os
@@ -2722,45 +2723,51 @@ async def latest_version():
 
 @app.post("/api/update")
 async def update_application(user=Depends(get_current_user)):
-    """Trigger git pull + docker rebuild from GitHub. Disabled by default:
-    set ALLOW_UPDATE=1 to enable (it can run arbitrary upstream code)."""
-    if (os.environ.get("ALLOW_UPDATE") or "").strip().lower() not in ("1", "true", "yes"):
-        raise HTTPException(403, "Mise à jour désactivée sur ce serveur (ALLOW_UPDATE non défini)")
-    import asyncio.subprocess
+    """Write a deploy request file on the shared volume (/data/deploy/request.json).
+    A systemd service on the host monitors this file and performs the actual
+    git pull + docker rebuild. The container has no git/docker/host access."""
+    deploy_dir = Path("/data/deploy")
+    deploy_dir.mkdir(parents=True, exist_ok=True)
+
+    request_file = deploy_dir / "request.json"
+    status_file = deploy_dir / "status.json"
+
+    # Check if there's already a pending/running update
+    if status_file.exists():
+        try:
+            status_data = json.loads(status_file.read_text())
+            state = status_data.get("state", "")
+            if state in ("requested", "running"):
+                return {
+                    "ok": False,
+                    "msg": f"Une mise à jour est déjà en cours (état: {state})",
+                }
+        except Exception:
+            pass
+
+    import datetime
+    request_data = {
+        "requested_at": datetime.datetime.utcnow().isoformat() + "Z",
+        "requested_by": user.get("username", "unknown"),
+        "target": "origin/main",
+    }
+    request_file.write_text(json.dumps(request_data, indent=2))
+    return {
+        "ok": True,
+        "msg": "Mise à jour demandée. L'hôte va déployer (~1 min)…",
+    }
+
+
+@app.get("/api/update/status")
+async def update_status(user=Depends(get_current_user)):
+    """Read the deploy status file written by the host updater."""
+    status_file = Path("/data/deploy/status.json")
+    if not status_file.exists():
+        return {"state": "idle"}
     try:
-        # Run git pull
-        proc = await asyncio.subprocess.create_subprocess_exec(
-            "git", "pull", "origin", "main",
-            cwd="/opt/crypto-wallet-tracker",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
-        git_ok = proc.returncode == 0
-
-        if not git_ok:
-            return {
-                "ok": False,
-                "msg": f"git pull failed: {stderr.decode()[:200]}",
-            }
-
-        # Run docker compose up -d --build (background — takes ~60s)
-        proc2 = await asyncio.subprocess.create_subprocess_exec(
-            "docker", "compose", "up", "-d", "--build",
-            cwd="/opt/crypto-wallet-tracker",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        # Don't wait — docker compose will recreate the container
-        # Return immediately; the new container will serve this response
-
-        return {
-            "ok": True,
-            "msg": "Mise à jour lancée. L'application redémarre...",
-            "git_output": stdout.decode()[:200],
-        }
-    except Exception as e:
-        return {"ok": False, "msg": str(e)[:200]}
+        return json.loads(status_file.read_text())
+    except Exception:
+        return {"state": "idle"}
 
 
 # ── DeFi positions (Moralis) — v2.12.8 / fallback gratuit v2.12.9 ──
