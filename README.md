@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — 2026.07.4
+# Crypto Wallet Tracker — 2026.07.5
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -131,7 +131,7 @@ Crypto-Wallet-Tracker/
 ### Phase 1 — Fonctionnalites
 - [x] 2026.07.3 — Analytics (repartition & performance)
 - [x] 2026.07.4 — Export CSV/PDF (holdings, tx, PnL fiscal)
-- [ ] 2026.07.5 — Transactions : approbations, interactions, gaz
+- [x] 2026.07.5 — Transactions : approbations, interactions, gaz
 - [ ] 2026.07.6 — Moteur d'alertes + digest
 - [ ] 2026.07.7 — Alertes health-factor / liquidation
 - [ ] 2026.07.8 — Valorisation NFT (prix planchers)
@@ -149,6 +149,15 @@ Crypto-Wallet-Tracker/
 - [ ] Airdrops a claim
 
 ## 📋 Changelog
+
+### 2026.07.5 — Transactions enrichies (approve, contract interactions, gas analytics, tags/notes)
+
+- **Collecte étendue** : en plus des token-transfers, capture maintenant toutes les transactions d'une adresse via l'endpoint Blockscout `/addresses/{address}/transactions`. Détecte les transactions `approve` (approbation de dépense), `contract` (interaction de contrat sans transfert de token), et `native` (envoi/réception de coin native).
+- **Pas de doublon** : un tx_hash déjà présent (transfert de token) est conservé enrichi (méthode), jamais dupliqué.
+- **API `/api/transactions`** : nouveaux types `approve|contract|native` dans le filtre `type=`, compteurs étendus, tags utilisateur attachés à chaque événement.
+- **Gaz analytics** : `GET /api/gas/analytics?address=&range=` → total gaz dépensé, série temporelle journalière, répartition par chaîne. Carte gaz sur la page Transactions avec mini-graphe Chart.js.
+- **Tags/notes** : table `user_tx_tags`, endpoints `POST /api/transactions/tag` (upsert) et `GET /api/transactions/tags`. Interface inline : clic sur l'icône tag → éditeur (catégorie + note), sauvegarde immédiate. Catégories suggérées : revenu, trade, transfert, frais, autre.
+- **UI** : badges colorés distincts (✅ Approve orange, 📄 Contrat bleu, 📥/📤 Natif vert/rouge). Filtre de type enrichi. i18n FR/EN exhaustif.
 
 ### 2026.07.4 — Export CSV/PDF (holdings, transactions, rapport PnL, synthèse)
 

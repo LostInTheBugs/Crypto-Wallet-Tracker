@@ -236,7 +236,7 @@ tr.tm-off td{opacity:.45}
         <span style="display:inline-flex;gap:6px;margin-left:12px;align-items:center">
           <select id="txnWallet" onchange="loadTransactions()" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:2px 6px;border-radius:4px;font-size:.65rem"><option value="">Tous wallets</option></select>
           <select id="txnChain" onchange="loadTransactions()" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:2px 6px;border-radius:4px;font-size:.65rem"><option value="">Toutes chaînes</option></select>
-          <select id="txnDir" onchange="loadTransactions()" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:2px 6px;border-radius:4px;font-size:.65rem"><option value="">Tout</option><option value="receive">Entrant</option><option value="send">Sortant</option><option value="swap">Swap</option></select>
+          <select id="txnDir" onchange="loadTransactions()" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:2px 6px;border-radius:4px;font-size:.65rem"><option value="">Tout</option><option value="receive">Entrant</option><option value="send">Sortant</option><option value="swap">Swap</option><option value="approve">Approve</option><option value="contract">Contrat</option><option value="native">Natif</option></select>
         </span>
       </h2><div id="txnContent" style="overflow-x:auto"></div></div>
     </div>
@@ -258,7 +258,7 @@ tr.tm-off td{opacity:.45}
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>📦 Version</h2>
-        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">2026.07.4</strong></p>
+        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">2026.07.5</strong></p>
         <p id="verStatus" style="font-size:.85rem"></p>
         <button id="updateBtn" class="hidden" onclick="doUpdate()" style="margin-top:8px;background:#238636;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:.85rem">🔄 Mettre à jour</button>
         <p id="updateMsg" style="margin-top:8px;font-size:.8rem;color:#f0c040"></p>
@@ -319,6 +319,12 @@ var T = {
     noData: "📭 Aucune donnée",
     swap: "Swap", received: "Reçu", sentLbl: "Envoyé", legsLbl: "jambes",
     dirAll: "Tout", dirIn: "Entrant", dirOut: "Sortant", dirSwap: "Swap",
+    dirApprove: "Approbation", dirContract: "Contrat", dirNative: "Natif",
+    gasTotal: "Gaz total", gasTitle: "Analytics gaz",
+    tagCategory: "Catégorie", tagNote: "Note", tagSave: "Enregistrer",
+    approveLbl: "Approve", contractLbl: "Contrat", nativeLbl: "Natif",
+    tagHint: "Cliquer pour taguer",
+    revenuTag: "Revenu", tradeTag: "Trade", transfertTag: "Transfert", fraisTag: "Frais", autreTag: "Autre",
     defiTotal: "Total DeFi",
     defiLending: "Prêts (Lending)",
     defiLp: "Liquidité (LP)",
@@ -448,6 +454,12 @@ var T = {
     noData: "📭 No data",
     swap: "Swap", received: "Received", sentLbl: "Sent", legsLbl: "legs",
     dirAll: "All", dirIn: "Incoming", dirOut: "Outgoing", dirSwap: "Swap",
+    dirApprove: "Approval", dirContract: "Contract", dirNative: "Native",
+    gasTotal: "Total Gas", gasTitle: "Gas Analytics",
+    tagCategory: "Category", tagNote: "Note", tagSave: "Save",
+    approveLbl: "Approve", contractLbl: "Contract", nativeLbl: "Native",
+    tagHint: "Click to tag",
+    revenuTag: "Income", tradeTag: "Trade", transfertTag: "Transfer", fraisTag: "Fees", autreTag: "Other",
     defiTotal: "DeFi Total",
     defiLending: "Lending",
     defiLp: "Liquidity Pools",
@@ -996,7 +1008,16 @@ function renderTokenTable(d){
       html+='<tr><td>'+icon+'<b>'+esc(tk.name)+'</b> <span style="color:#6e7681;font-size:.75rem">'+esc(tk.symbol)+'</span>'+catBadge+'</td>'+(showWallet?'<td style="font-size:.75rem;color:#6e7681">'+esc(tk._wallet||"")+'</td>':'')+'<td class="chain">'+esc(tk.chain)+'</td><td>'+(tk.balance||0).toLocaleString()+'</td><td>'+pf+'</td><td class="usd">'+fmtCurr(tk.usd_value||0)+'</td><td class="usd" style="color:'+pnlColor+'">'+pnlStr+'</td>'+
         '<td><label class="switch"><input type="checkbox" checked'+(tk.tid?'':' disabled')+' data-tid="'+esc(tk.tid||"")+'" onchange="tokSwitch(this)"><span class="slider"></span></label></td></tr>';
     }
-    html+='</tbody></table>';
+  
+  // Gas analytics card (2026.07.5)
+  if(typeof gasCardLoaded==="undefined"||!gasCardLoaded){
+    gasCardLoaded=true;
+    loadGasAnalytics();
+  }
+  var gasHtml='<div id="gasCard" style="margin-top:16px;padding:12px;background:rgba(88,166,255,.06);border:1px solid rgba(88,166,255,.15);border-radius:8px"><h3 style="margin-bottom:8px;font-size:.85rem">'+(gasCardData?'⛽ '+t("gasTitle")+' : '+sym+gasCardData.total_gas_usd.toFixed(2):'⛽ '+t("gasTitle"))+'</h3><div id="gasChartWrap" style="max-height:150px"><canvas id="gasChart" style="width:100%;height:120px"></canvas></div></div>';
+  html=gasHtml+html;
+
+  html+='</tbody></table>';
   }
   html+='</div>';
 
@@ -1659,17 +1680,45 @@ function renderTxnTable(){
     sortTh("txn","usd_value","num",sym+' Valeur')+
     sortTh("txn","gas_fee_usd","num","⛽")+
     sortTh("txn","direction","str","Sens")+
-    '<th>🔗</th></tr></thead><tbody>';
+    '<th>🔗</th>'+
+    '<th>🏷</th></tr></thead><tbody>';
   for(var i=0;i<items.length;i++){
     var tx=items[i];var date=tx.block_time?tx.block_time.slice(0,16).replace("T"," "):"-";
     var short=tx.wallet_address.slice(0,6)+"..."+tx.wallet_address.slice(-4);
     // v2.12.4 — événements regroupés : type swap|send|receive (direction rétro-compat in|out|swap)
+    // 2026.07.5 — nouveaux types: approve|contract|native
     var isSwap=(tx.type==="swap"||tx.direction==="swap");
+    var isApprove=tx.type==="approve";
+    var isContract=tx.type==="contract";
+    var isNative=tx.type==="native";
     var explorerLink=tx.explorer_url?'<a href="'+tx.explorer_url+'" target="_blank" rel="noopener" title="Voir sur l&apos;explorateur">🔗</a>':'-';
     var val=sym+(Math.abs(tx.usd_value||0)).toFixed(2);
     var gas=tx.gas_fee_usd?sym+tx.gas_fee_usd.toFixed(2):"-";
+
+    // Tags inline
+    var tagKey=tx.tx_hash+":"+tx.chain,tag=tx.tag||{};
+    var tagCat=(tag.category||""),tagNote=(tag.note||"");
+    var tagLabel=tagCat?tagCat:"🏷";
+    var tagCell='<span style="cursor:pointer;font-size:.7rem;color:#6e7681" title="'+tagNote+'" data-tagkey="'+tagKey+'" data-tagcat="'+(tagCat?tagCat:"")+'" data-tagnote="'+(tagNote?tagNote:"")+'" onclick="showTagEditor(event,this.getAttribute(\'data-tagkey\'),this.getAttribute(\'data-tagcat\'),this.getAttribute(\'data-tagnote\'))">'+tagLabel+'</span>';
+
     var tokCell,qtyCell,sensCell;
-    if(isSwap){
+    if(isApprove){
+      var methodLabel=tx.event_method?tx.event_method.toUpperCase():"APPROVE";
+      tokCell='<b>'+esc(tx.token_symbol)+'</b> <span style="color:#6e7681;font-size:.65rem">'+methodLabel+'</span>';
+      qtyCell="-";
+      sensCell='<td style="font-size:.75rem" title="'+methodLabel+'"><span style="background:rgba(255,171,64,.15);border:1px solid #ffab40;color:#ffab40;border-radius:10px;padding:1px 7px;font-size:.7rem;white-space:nowrap">✅ '+t("approveLbl")+'</span></td>';
+    }else if(isContract){
+      var cLabel=tx.token_symbol||"?";
+      tokCell='<span style="color:#6e7681"><b>'+esc(cLabel)+'</b> <span style="font-size:.65rem">'+esc(tx.token_name||"")+'</span></span>';
+      qtyCell="-";
+      sensCell='<td style="font-size:.75rem"><span style="background:rgba(88,166,255,.15);border:1px solid #58a6ff;color:#58a6ff;border-radius:10px;padding:1px 7px;font-size:.7rem;white-space:nowrap">📄 '+t("contractLbl")+'</span></td>';
+    }else if(isNative){
+      var isInN=tx.direction==="in";
+      var ncIcon=isInN?"📥":"📤";var ncColor=isInN?"#40c463":"#f85149";
+      tokCell='<b>'+esc(tx.token_symbol)+'</b> <span style="color:#6e7681;font-size:.7rem">('+t("nativeLbl")+')</span>';
+      qtyCell=fmtAmt(tx.amount);
+      sensCell='<td style="font-size:.75rem;color:'+ncColor+'">'+ncIcon+' <span style="font-size:.7rem">'+t("nativeLbl")+'</span></td>';
+    }else if(isSwap){
       var legsNote=(tx.legs&&tx.legs>2)?' <span style="color:#6e7681;font-size:.65rem">('+tx.legs+' '+t("legsLbl")+')</span>':'';
       tokCell='<span style="color:#f85149"><b>'+esc(tx.sent_symbol)+'</b></span> <span style="color:#6e7681">→</span> <span style="color:#40c463"><b>'+esc(tx.recv_symbol)+'</b></span>'+legsNote;
       qtyCell='<span style="color:#f85149;white-space:nowrap">-'+fmtAmt(tx.sent_amount)+'</span><span style="color:#6e7681"> / </span><span style="color:#40c463;white-space:nowrap">+'+fmtAmt(tx.recv_amount)+'</span>';
@@ -1697,18 +1746,96 @@ function renderTxnTable(){
       '<td class="usd">'+val+'</td>'+
       '<td style="font-size:.8rem;color:#6e7681">'+gas+'</td>'+
       sensCell+
-      '<td>'+explorerLink+'</td></tr>';
+      '<td>'+explorerLink+'</td>'+
+      '<td>'+tagCell+'</td></tr>';
   }
+
+  // Gas analytics card (2026.07.5)
+  if(typeof gasCardLoaded==="undefined"||!gasCardLoaded){
+    gasCardLoaded=true;
+    loadGasAnalytics();
+  }
+  var gasHtml='<div id="gasCard" style="margin-top:16px;padding:12px;background:rgba(88,166,255,.06);border:1px solid rgba(88,166,255,.15);border-radius:8px"><h3 style="margin-bottom:8px;font-size:.85rem">'+(gasCardData?'⛽ '+t("gasTitle")+' : '+sym+gasCardData.total_gas_usd.toFixed(2):'⛽ '+t("gasTitle"))+'</h3><div id="gasChartWrap" style="max-height:150px"><canvas id="gasChart" style="width:100%;height:120px"></canvas></div></div>';
+  html=gasHtml+html;
+
   html+='</tbody></table>';
   var totalPages=Math.ceil(txnData.total/100);
   html+='<div style="margin-top:12px;display:flex;gap:8px;justify-content:center">';
   for(var p=0;p<Math.min(totalPages,20);p++){html+='<button class="btn'+(p==page?' btn-blue':'')+'" onclick="loadTransactions('+p+')" style="font-size:.7rem;padding:2px 8px">'+(p+1)+'</button>'}
   if(totalPages>20)html+='<span style="color:#6e7681;font-size:.7rem">...'+totalPages+' pages</span>';
   html+='</div>';
-  document.getElementById("txnContent").innerHTML=html;
+  document.getElementById("txnContent").innerHTML=html;}
+
+// ── Gas analytics (2026.07.5) ────────────────────────────────
+var gasCardData=null;var gasCardLoaded=false;var gasChartInst=null;
+async function loadGasAnalytics(){
+  try{
+    var r=await fetch("/api/gas/analytics");
+    var d=await r.json();
+    gasCardData=d;
+    // Update card text
+    var sym=currSymbol();
+    var cards=document.querySelectorAll("#gasCard h3");
+    if(cards.length>0)cards[0].innerHTML='⛽ '+t("gasTitle")+' : '+sym+Math.round(d.total_gas_usd*100)/100;
+    // Draw mini chart
+    if(d.by_day&&d.by_day.length>1){
+      var ctx=document.getElementById("gasChart");
+      if(!ctx)return;
+      if(gasChartInst)gasChartInst.destroy();
+      var labels=d.by_day.map(function(p){return p.date.slice(5)});
+      var vals=d.by_day.map(function(p){return p.gas_usd});
+      gasChartInst=new Chart(ctx.getContext("2d"),{type:"line",data:{labels:labels,datasets:[{label:t("gasTotal"),data:vals,borderColor:"#58a6ff",backgroundColor:"rgba(88,166,255,.1)",fill:true,tension:.3,pointRadius:0}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{font:{size:9},maxTicksLimit:10}},y:{ticks:{font:{size:9},callback:function(v){return "$"+v}}}}}});
+    }
+  }catch(e){console.error("loadGasAnalytics",e)}
 }
 
-// ── Token management (merged into Détail tokens — v2.12.2) ─
+// ── Transaction tags (2026.07.5) ──────────────────────────────
+function showTagEditor(ev,tagKey,cat,note){
+  ev.stopPropagation();
+  var html='<div style="position:fixed;top:30%;left:50%;transform:translate(-50%,-50%);background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:16px;z-index:9999;min-width:280px">'+
+    '<h3 style="margin-bottom:12px">🏷 '+t("tagCategory")+'/'+t("tagNote")+'</h3>'+
+    '<select id="tagCatSel" style="width:100%;margin-bottom:8px;padding:4px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px">'+
+      '<option value="">—</option>'+
+      '<option value="revenu">'+t("revenuTag")+'</option>'+
+      '<option value="trade">'+t("tradeTag")+'</option>'+
+      '<option value="transfert">'+t("transfertTag")+'</option>'+
+      '<option value="frais">'+t("fraisTag")+'</option>'+
+      '<option value="autre">'+t("autreTag")+'</option>'+
+    '</select>'+
+    '<input id="tagNoteIn" placeholder="'+t("tagNote")+'" value="'+note+'" style="width:100%;margin-bottom:8px;padding:4px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px">'+
+    '<div style="display:flex;gap:8px;justify-content:flex-end">'+
+      '<button class="btn" onclick="document.getElementById(\'tagOverlay\').remove()" style="font-size:.7rem">✕</button>'+
+      '<button class="btn btn-blue" onclick="saveTag(\''+tagKey+'\')" style="font-size:.7rem">'+t("tagSave")+'</button>'+
+    '</div></div>';
+  var overlay=document.createElement("div");
+  overlay.id="tagOverlay";
+  overlay.innerHTML=html;
+  overlay.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9998";
+  document.body.appendChild(overlay);
+  overlay.addEventListener("click",function(e){if(e.target===overlay)overlay.remove()});
+  // Set current values
+  var sel=document.getElementById("tagCatSel");
+  if(sel&&cat)sel.value=cat;
+}
+
+async function saveTag(tagKey){
+  var sel=document.getElementById("tagCatSel");
+  var cat=sel?sel.value:"";
+  var note=document.getElementById("tagNoteIn");
+  var noteVal=note?note.value:"";
+  var parts=tagKey.split(":");
+  var tx_hash=parts[0];var chain=parts.slice(1).join(":");
+  try{
+    var r=await fetch("/api/transactions/tag",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({tx_hash:tx_hash,chain:chain,category:cat,note:noteVal})});
+    if(r.ok){
+      var overlay=document.getElementById("tagOverlay");
+      if(overlay)overlay.remove();
+      loadTransactions(txnData?txnData.page:0);
+    }
+  }catch(e){console.error("saveTag",e)}
+}
+
+// ── Token management (merged into Détail tokens — v2.12.2) ─ (merged into Détail tokens — v2.12.2) ─
 var _tmManual=[];
 var tokInactOpen=false, tokShowAllInact=false, TOK_INACT_DISPLAY=100;
 var TM_CHAINS=["ethereum","base","optimism","arbitrum","polygon","gnosis","zksync","celo","scroll","soneium","ink","mode","unichain","lisk","linea","etherlink","metis","manta","bob","zora","worldchain","hyperevm"];
@@ -1769,6 +1896,15 @@ function tmRenderManualTable(tokens){
       '<td><button class="btn btn-red" style="padding:3px 8px;font-size:.7rem" title="'+esc(t("tmDelete"))+'" onclick="tmDelManual('+i+')">✕</button></td>'+
       '</tr>';
   }
+
+  // Gas analytics card (2026.07.5)
+  if(typeof gasCardLoaded==="undefined"||!gasCardLoaded){
+    gasCardLoaded=true;
+    loadGasAnalytics();
+  }
+  var gasHtml='<div id="gasCard" style="margin-top:16px;padding:12px;background:rgba(88,166,255,.06);border:1px solid rgba(88,166,255,.15);border-radius:8px"><h3 style="margin-bottom:8px;font-size:.85rem">'+(gasCardData?'⛽ '+t("gasTitle")+' : '+sym+gasCardData.total_gas_usd.toFixed(2):'⛽ '+t("gasTitle"))+'</h3><div id="gasChartWrap" style="max-height:150px"><canvas id="gasChart" style="width:100%;height:120px"></canvas></div></div>';
+  html=gasHtml+html;
+
   html+='</tbody></table>';
   return html;
 }

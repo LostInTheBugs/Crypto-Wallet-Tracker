@@ -70,6 +70,36 @@ def group_transaction_events(rows):
     events = []
     for key in order:
         legs_rows = groups[key]
+        first = legs_rows[0]
+
+        # 2026.07.5 — non-transfer event types (approve/contract/native)
+        ev_type = (first.get("event_type") or "").strip()
+        if ev_type in ("approve", "contract", "native"):
+            ev = {
+                "type": ev_type,
+                "direction": first.get("direction") or "",
+                "chain": first.get("chain") or "",
+                "tx_hash": first.get("tx_hash") or "",
+                "wallet_address": first.get("wallet_address") or "",
+                "block_time": first.get("block_time") or "",
+                "gas_fee_usd": first.get("gas_fee_usd") or 0,
+                "legs": 1,
+                "sent": [],
+                "received": [],
+                "sent_symbol": None,
+                "sent_amount": None,
+                "recv_symbol": None,
+                "recv_amount": None,
+                "usd_value": first.get("usd_value") or 0,
+                "token_symbol": first.get("token_symbol") or "",
+                "token_name": first.get("token_name") or ev_type,
+                "amount": first.get("amount") or 0,
+                "usd_price": first.get("usd_price") or 0,
+                "event_method": first.get("event_method") or "",
+            }
+            events.append(ev)
+            continue
+
         outs = [_leg(r) for r in legs_rows if (r.get("direction") or "") == "out"]
         ins = [_leg(r) for r in legs_rows if (r.get("direction") or "") != "out"]
         first = legs_rows[0]
@@ -149,6 +179,6 @@ def filter_events(events, token=None, direction=None, event_type=None):
                if any((leg["symbol"] or "").lower() == tl for leg in e["sent"] + e["received"])]
     if direction in ("in", "out"):
         out = [e for e in out if e["type"] == "swap" or e["direction"] == direction]
-    if event_type in ("swap", "send", "receive"):
+    if event_type in ("swap", "send", "receive", "approve", "contract", "native"):
         out = [e for e in out if e["type"] == event_type]
     return out

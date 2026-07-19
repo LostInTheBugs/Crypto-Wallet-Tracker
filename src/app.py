@@ -197,6 +197,12 @@ async def lifespan(app: FastAPI):
         except: pass
         try: await db.execute("ALTER TABLE transactions ADD COLUMN price_checked INTEGER DEFAULT 0")
         except: pass
+        try: await db.execute("ALTER TABLE transactions ADD COLUMN event_type TEXT DEFAULT 'transfer'")
+        except: pass
+        try: await db.execute("ALTER TABLE transactions ADD COLUMN event_method TEXT DEFAULT ''")
+        except: pass
+        try: await db.execute("ALTER TABLE transactions ADD COLUMN event_to TEXT DEFAULT ''")
+        except: pass
         try: await db.execute("CREATE INDEX IF NOT EXISTS idx_tx_dedup ON transactions(tx_hash, log_index, user_id)")
         except: pass
         # User API keys
@@ -230,6 +236,19 @@ async def lifespan(app: FastAPI):
         """)
         try: await db.execute("CREATE INDEX IF NOT EXISTS idx_utp_user ON user_token_prefs(user_id)")
         except: pass
+        # Tx tags table (2026.07.5) — user notes/annotations on transactions
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS user_tx_tags (
+                user_id INTEGER NOT NULL,
+                tx_hash TEXT NOT NULL,
+                chain TEXT NOT NULL,
+                category TEXT DEFAULT '',
+                note TEXT DEFAULT '',
+                created_at TEXT DEFAULT (datetime('now')),
+                PRIMARY KEY(user_id, tx_hash, chain),
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            )
+        """)
         # v2.12.5 — sweep idempotent des lignes orphelines au démarrage : purge
         # toute donnée dont le wallet n'existe plus dans wallets (comparaison
         # insensible à la casse — le worker de reconstruction a pu écrire des
@@ -546,12 +565,159 @@ async def _fetch_transactions_for_wallet(user_id: int, address: str) -> int:
     return total_tx
 
 
+async def _fetch_full_address_transactions(user_id: int, address: str) -> int:
+    """Fetch ALL address transactions (approve, contract, native) from Blockscout,
+    skipping those already captured as token-transfers.
+    Dedup on tx_hash — a tx that already exists in the DB is never duplicated.
+    """
+    import logging
+    _tx2_log = logging.getLogger("crypto.tx_fetch2")
+    total_new = 0
+
+    for chain, host in CHAINS.items():
+        try:
+            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as bc:
+                url = f"https://{host}/api/v2/addresses/{address}/transactions"
+                params = {}
+                page_count = 0
+                while page_count < MAX_TX_PAGES:
+                    last_err = None
+                    resp = None
+                    for attempt in range(1, TX_RETRIES + 1):
+                        try:
+                            resp = await bc.get(url, params=params)
+                            if resp.status_code == 200:
+                                break
+                            last_err = "HTTP %d" % resp.status_code
+                            if resp.status_code < 500:
+                                break
+                        except Exception as e:
+                            last_err = str(e)[:100]
+                            resp = None
+                        if attempt < TX_RETRIES and last_err and (
+                                "50" in last_err or
+                                "timeout" in last_err.lower() or
+                                "Connection" in last_err):
+                            backoff = TX_RETRY_BACKOFF ** attempt
+                            await asyncio.sleep(backoff)
+                        else:
+                            break
+
+                    if resp is None or (last_err and resp.status_code != 200):
+                        _tx2_log.warning(
+                            "Giving up full-tx on chain=%s at page %d: %s",
+                            chain, page_count + 1, last_err)
+                        break
+
+                    data = resp.json()
+                    items = data.get("items", [])
+                    if not items:
+                        break
+
+                    async with aiosqlite.connect(DB_PATH) as db:
+                        for item in items:
+                            if not item:
+                                continue
+                            tx_hash = item.get("hash") or item.get("tx_hash", "")
+                            if not tx_hash:
+                                continue
+
+                            # Skip if already in DB
+                            cur2 = await db.execute(
+                                "SELECT id, event_type FROM transactions WHERE tx_hash=? AND user_id=? LIMIT 1",
+                                (tx_hash, user_id))
+                            existing = await cur2.fetchone()
+                            if existing:
+                                method = (item.get("method") or "").strip().lower()
+                                if method and not (existing[1] or "").strip():
+                                    await db.execute(
+                                        "UPDATE transactions SET event_method=? WHERE tx_hash=? AND user_id=? AND id=?",
+                                        (method, tx_hash, user_id, existing[0]))
+                                continue
+
+                            # Classify
+                            method = (item.get("method") or "").strip().lower()
+                            ts = item.get("timestamp", "")
+                            to_addr = (item.get("to") or {}).get("hash", "")
+                            from_addr = (item.get("from") or {}).get("hash", "")
+                            value_raw = item.get("value", "0")
+
+                            typ = None
+                            amount = 0.0
+                            token_sym = ""
+                            direction = ""
+                            usd_price = 0.0
+
+                            if method in ("approve", "increaseallowance"):
+                                typ = "approve"
+                                token_sym = "?"
+                                try:
+                                    tok_cur = await db.execute(
+                                        "SELECT DISTINCT token_symbol FROM transactions "
+                                        "WHERE contract_address=? AND user_id=? AND chain=? LIMIT 1",
+                                        (to_addr.lower() if to_addr else "", user_id, chain))
+                                    tok_row = await tok_cur.fetchone()
+                                    if tok_row:
+                                        token_sym = tok_row[0] or "?"
+                                except Exception:
+                                    pass
+                            elif value_raw and value_raw != "0":
+                                typ = "native"
+                                try:
+                                    amount = int(value_raw) / 1e18
+                                except Exception:
+                                    amount = 0.0
+                                nc = NATIVE_COIN.get(chain, {"symbol": "?"})
+                                token_sym = nc["symbol"] if nc else "?"
+                                direction = "in" if to_addr.lower() == address.lower() else "out"
+                                try:
+                                    usd_price = await _get_native_price(chain, host)
+                                except Exception:
+                                    usd_price = 0.0
+                            elif method:
+                                typ = "contract"
+                                token_sym = method[:20]
+                                direction = ""
+
+                            if not typ:
+                                continue
+
+                            block_time = ts[:19].replace("T", " ") if ts else ""
+                            await db.execute(
+                                "INSERT INTO transactions (user_id, wallet_address, token_symbol, token_name, "
+                                "amount, usd_value, usd_price, chain, tx_hash, block_time, direction, "
+                                "log_index, event_type, event_method, event_to) "
+                                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                (user_id, address, token_sym, typ, round(amount, 8),
+                                 round(amount * usd_price, 2), usd_price,
+                                 chain, tx_hash, block_time, direction, 0,
+                                 typ, method, to_addr.lower() if to_addr else ""))
+                            total_new += 1
+                        await db.commit()
+
+                    nxt = data.get("next_page_params")
+                    if not nxt:
+                        break
+                    params = {**params, **nxt}
+                    page_count += 1
+
+                if page_count >= MAX_TX_PAGES:
+                    _tx2_log.warning(
+                        "Reached MAX_TX_PAGES=%d for chain=%s wallet=%s (full-tx)",
+                        MAX_TX_PAGES, chain, address[:10])
+        except Exception:
+            continue
+
+    return total_new
+
+
 # ── Import pipeline ──────────────────────────────────────────────
 
 async def _fetch_then_rebuild(user_id: int, address: str):
     try:
         _import_progress[user_id] = {"stage": "fetch", "done": 0, "total": len(CHAINS), "in_done": 0, "in_total": 0, "out_done": 0, "out_total": 0}
         count = await _fetch_transactions_for_wallet(user_id, address)
+        count2 = await _fetch_full_address_transactions(user_id, address)
         await _enrich_historical_prices(user_id)
         async with aiosqlite.connect(DB_PATH) as db:
             db.row_factory = aiosqlite.Row
@@ -600,22 +766,33 @@ async def get_transactions(wallet: str = Query(None), chain: str = Query(None), 
         params.append(chain)
     where = " AND ".join(conditions)
     cur = await db.execute(
-        f"SELECT id, wallet_address, token_symbol, token_name, amount, usd_price, usd_value, chain, tx_hash, block_time, direction, log_index, gas_fee_usd, contract_address FROM transactions WHERE {where} ORDER BY block_time DESC",
+        f"SELECT id, wallet_address, token_symbol, token_name, amount, usd_price, usd_value, chain, tx_hash, block_time, direction, log_index, gas_fee_usd, contract_address, event_type, event_method FROM transactions WHERE {where} ORDER BY block_time DESC",
         tuple(params))
     rows = await cur.fetchall()
 
     events = group_transaction_events(rows)
     events = filter_events(events, token=token, direction=direction)
-    counts = {"swap": 0, "send": 0, "receive": 0}
+    counts = {"swap": 0, "send": 0, "receive": 0, "approve": 0, "contract": 0, "native": 0}
     for ev in events:
         counts[ev["type"]] = counts.get(ev["type"], 0) + 1
     events = filter_events(events, event_type=event_type)
 
     total = len(events)
     page = events[offset:offset + limit]
+
+    # 2026.07.5 — attach user tags to events
+    tag_cur = await db.execute(
+        "SELECT tx_hash, chain, category, note FROM user_tx_tags WHERE user_id=?",
+        (user["id"],))
+    tag_map = {}
+    for tr in await tag_cur.fetchall():
+        tag_map[f"{tr['tx_hash']}:{tr['chain']}"] = {"category": tr["category"] or "", "note": tr["note"] or ""}
+
     for ev in page:
         ev["wallet_label"] = _wallet_labels.get(ev["wallet_address"], "")
         ev["explorer_url"] = f"https://{CHAINS[ev['chain']]}/tx/{ev['tx_hash']}" if ev["tx_hash"] and CHAINS.get(ev["chain"]) else ""
+        tag_key = f"{ev['tx_hash']}:{ev['chain']}"
+        ev["tag"] = tag_map.get(tag_key) or {}
     return {"total": total, "items": page, "counts": counts}
 
 
@@ -807,6 +984,100 @@ async def gas_total(user=Depends(get_current_user), db=Depends(get_db),
             f"FROM transactions WHERE user_id=? AND {exists_w}", (user["id"], user["id"]))
     row = await cur.fetchone()
     return {"total_gas_usd": round(row["total"] if row else 0, 2)}
+
+
+@app.get("/api/gas/analytics")
+async def gas_analytics(address: str = Query(None), range: str = Query("30d"),
+                        user=Depends(get_current_user), db=Depends(get_db)):
+    """2026.07.5 — gas analytics: total spent, daily time series, by-chain breakdown.
+    Defensive: never 500, empty structure on any failure."""
+    import logging
+    _ga_log = logging.getLogger("crypto.gas_analytics")
+
+    empty = {"total_gas_usd": 0.0, "by_day": [], "by_chain": []}
+
+    try:
+        conditions = ["user_id=?"]
+        params = [user["id"]]
+        conditions.append(
+            "lower(wallet_address) IN (SELECT lower(address) FROM wallets WHERE user_id=?)")
+        params.append(user["id"])
+        if address:
+            conditions.append("lower(wallet_address)=lower(?)")
+            params.append(address)
+
+        # Range filter: default 30 days
+        range_days = 30
+        if range and range.rstrip("d").isdigit():
+            range_days = int(range.rstrip("d"))
+
+        cutoff = (datetime.datetime.utcnow() - datetime.timedelta(days=range_days)).strftime("%Y-%m-%d")
+        conditions.append("block_time >= ?")
+        params.append(cutoff)
+
+        where = " AND ".join(conditions)
+
+        # Total gas
+        cur = await db.execute(
+            f"SELECT COALESCE(SUM(gas_fee_usd), 0) as total FROM transactions WHERE {where}",
+            tuple(params))
+        row = await cur.fetchone()
+        total = round(row["total"] if row else 0, 2)
+
+        # By day
+        cur = await db.execute(
+            f"SELECT SUBSTR(block_time, 1, 10) as d, COALESCE(SUM(gas_fee_usd), 0) as g "
+            f"FROM transactions WHERE {where} "
+            f"GROUP BY d ORDER BY d ASC",
+            tuple(params))
+        by_day = [{"date": r["d"], "gas_usd": round(r["g"], 2)} for r in await cur.fetchall()]
+
+        # By chain
+        cur = await db.execute(
+            f"SELECT chain, COALESCE(SUM(gas_fee_usd), 0) as g "
+            f"FROM transactions WHERE {where} "
+            f"GROUP BY chain ORDER BY g DESC",
+            tuple(params))
+        by_chain = [{"chain": r["chain"], "gas_usd": round(r["g"], 2)} for r in await cur.fetchall()]
+
+        return {"total_gas_usd": total, "by_day": by_day, "by_chain": by_chain}
+    except Exception as e:
+        _ga_log.error(f"gas/analytics failed: {e}")
+        return empty
+
+
+# ── Transaction tags (2026.07.5) ─────────────────────────────────
+
+@app.post("/api/transactions/tag")
+async def set_transaction_tag(request: Request, user=Depends(get_current_user), db=Depends(get_db)):
+    """Upsert a tag/note on a transaction. Body: {tx_hash, chain, category?, note?}."""
+    data = await request.json()
+    tx_hash = (data.get("tx_hash") or "").strip()
+    chain = (data.get("chain") or "").strip()
+    category = (data.get("category") or "").strip().lower()[:50]
+    note = (data.get("note") or "").strip()[:500]
+    if not tx_hash or not chain:
+        raise HTTPException(400, "tx_hash et chain requis")
+    await db.execute(
+        "INSERT OR REPLACE INTO user_tx_tags (user_id, tx_hash, chain, category, note) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (user["id"], tx_hash, chain, category, note))
+    await db.commit()
+    return {"ok": True, "tx_hash": tx_hash, "chain": chain, "category": category, "note": note}
+
+
+@app.get("/api/transactions/tags")
+async def get_transaction_tags(user=Depends(get_current_user), db=Depends(get_db)):
+    """Get all tags for the current user. Returns {tx_hash:chain -> {category, note}}."""
+    cur = await db.execute(
+        "SELECT tx_hash, chain, category, note, created_at FROM user_tx_tags "
+        "WHERE user_id=? ORDER BY created_at DESC",
+        (user["id"],))
+    items = {}
+    for r in await cur.fetchall():
+        key = f"{r['tx_hash']}:{r['chain']}"
+        items[key] = {"category": r["category"] or "", "note": r["note"] or "", "created_at": r["created_at"] or ""}
+    return {"tags": items}
 
 
 # ── Historical price enrichment (DefiLlama) ──────────────────────
@@ -1520,6 +1791,7 @@ async def _daily_tx_refresh(user_id: int):
         wallets_list = await cur.fetchall()
     for w in wallets_list:
         count = await _fetch_transactions_for_wallet(user_id, w["address"])
+        await _fetch_full_address_transactions(user_id, w["address"])
         await _enrich_historical_prices(user_id)
         if count > 0:
             await _rebuild_history(user_id, w["address"], _compute_portfolio)
@@ -1818,6 +2090,7 @@ async def fetch_transactions(user=Depends(get_current_user), db=Depends(get_db))
     total_tx = 0
     for w in wallets_list:
         total_tx += await _fetch_transactions_for_wallet(user["id"], w["address"])
+        total_tx += await _fetch_full_address_transactions(user["id"], w["address"])
     return {"ok": True, "transactions_fetched": total_tx}
 
 
