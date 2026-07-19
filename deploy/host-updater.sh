@@ -1,12 +1,17 @@
 #!/bin/bash
 # Crypto Wallet Tracker — Host-side updater (polling daemon)
 # Runs as a long-lived systemd service. Every ~12 s, checks for a deploy
-# request file on the shared Docker volume. When found: git reset + docker
-# rebuild, write status, and ALWAYS delete the request file so the next
-# click on "Mettre à jour" triggers again cleanly.
+# request file on the shared Docker volume. When found: git fetch (HTTPS,
+# no credentials needed — public repo) + docker rebuild, write status,
+# and ALWAYS delete the request file so the next click on "Mettre à jour"
+# triggers again cleanly.
 #
 # Replaces the fragile systemd.path (PathExists) that blocked on
 # unit-start-limit-hit when request.json was not deleted.
+#
+# 2026.07.18 — Switched from SSH (git@github.com) to HTTPS fetch.
+# The repo is public, no credentials needed. credential.helper is
+# explicitly disabled to avoid any interactive prompt.
 
 set -euo pipefail
 
@@ -53,8 +58,7 @@ auto_deploy_if_ahead() {
     fi
 
     log "[auto-check] fetching origin/main …"
-    local fetch_ok=true
-    if ! sudo -n env GIT_SSH_COMMAND="$GIT_SSH_CMD" git -C "$APP_DIR" fetch origin main --quiet 2>&1 | tee -a "$LOG_FILE"; then
+    if ! sudo -n git -c credential.helper= -C "$APP_DIR" fetch origin main --quiet 2>&1 | tee -a "$LOG_FILE"; then
         log "[auto-check] WARNING: git fetch failed — will retry next cycle"
         return 0  # don't block the loop
     fi
@@ -87,37 +91,11 @@ process_request() {
 {"state":"running","message":"git fetch + reset --hard origin/main + docker rebuild in progress…","updated_at":"$(date -u +'%Y-%m-%dT%H:%M:%SZ')","version":""}
 EOF
 
-    # ── SSH key setup (best-effort) ─────────────────────────
-    DEPLOY_KEY=""
-    ROOT_KEY="/tmp/root_deploy_key"
-
-    find_and_copy_key() {
-        local src="$1"
-        if [ -f "$src" ] && [ -r "$src" ]; then
-            cp "$src" "$ROOT_KEY"
-            chmod 600 "$ROOT_KEY"
-            chown root:root "$ROOT_KEY"
-            DEPLOY_KEY="$ROOT_KEY"
-            return 0
-        fi
-        return 1
-    }
-
-    find_and_copy_key /tmp/deploy_key || \
-    find_and_copy_key /root/.ssh/id_ed25519 || \
-    find_and_copy_key /home/cpt-claude/.ssh/id_ed25519 || \
-    find_and_copy_key /home/cpt-frederic/.ssh/id_ed25519 || true
-
-    GIT_SSH_CMD=""
-    if [ -n "$DEPLOY_KEY" ]; then
-        GIT_SSH_CMD="ssh -i ${DEPLOY_KEY} -o StrictHostKeyChecking=no"
-    fi
-
-    # ── git fetch + hard reset ──────────────────────────────
+    # ── git fetch (HTTPS, public repo — no credentials needed) ──
     log "Step 1/3: git fetch + reset --hard origin/main …"
     cd "$APP_DIR"
 
-    if ! sudo -n env GIT_SSH_COMMAND="$GIT_SSH_CMD" git -C "$APP_DIR" fetch origin main --quiet 2>&1 | tee -a "$LOG_FILE"; then
+    if ! sudo -n git -c credential.helper= -C "$APP_DIR" fetch origin main --quiet 2>&1 | tee -a "$LOG_FILE"; then
         log "ERROR: git fetch failed"
         cat > "$STATUS_FILE" <<EOF
 {"state":"failed","message":"git fetch origin main failed — check /var/log/crypto-updater.log","updated_at":"$(date -u +'%Y-%m-%dT%H:%M:%SZ')","version":""}
@@ -143,7 +121,7 @@ EOF
     log "Force-sync complete: working tree now at origin/main"
 
     # ── Fetch tags (for logging only) ───────────────────────
-    sudo -n env GIT_SSH_COMMAND="$GIT_SSH_CMD" git -C "$APP_DIR" fetch --tags origin 2>/dev/null || true
+    sudo -n git -c credential.helper= -C "$APP_DIR" fetch --tags origin 2>/dev/null || true
 
     # ── Docker rebuild ──────────────────────────────────────
     log "Step 2/3: docker compose up -d --build …"
@@ -167,42 +145,13 @@ EOF
 {"state":"done","message":"Déploiement terminé — version $VERSION","updated_at":"$(date -u +'%Y-%m-%dT%H:%M:%SZ')","version":"$VERSION"}
 EOF
 
-    # Cleanup deploy key
-    rm -f "$ROOT_KEY" 2>/dev/null || true
     log "========== Deploy complete =========="
     return 0
 }
 
 # ── Main polling loop ───────────────────────────────────────
-log "Crypto-updater daemon started (poll interval: ${POLL_INTERVAL}s, auto-check: ${AUTO_CHECK_INTERVAL}s)"
+log "Crypto-updater daemon started (poll interval: ${POLL_INTERVAL}s, auto-check: ${AUTO_CHECK_INTERVAL}s, fetch: HTTPS)"
 mkdir -p "$DEPLOY_DIR"
-
-# ── SSH key discovery (best-effort, runs once) ──────────────
-DEPLOY_KEY=""
-ROOT_KEY="/tmp/root_deploy_key"
-
-find_and_copy_key() {
-    local src="$1"
-    if [ -f "$src" ] && [ -r "$src" ]; then
-        cp "$src" "$ROOT_KEY"
-        chmod 600 "$ROOT_KEY"
-        chown root:root "$ROOT_KEY"
-        DEPLOY_KEY="$ROOT_KEY"
-        return 0
-    fi
-    return 1
-}
-
-# Pre-discover SSH key for auto-mode git fetches
-find_and_copy_key /tmp/deploy_key || \
-find_and_copy_key /root/.ssh/id_ed25519 || \
-find_and_copy_key /home/cpt-claude/.ssh/id_ed25519 || \
-find_and_copy_key /home/cpt-frederic/.ssh/id_ed25519 || true
-
-GIT_SSH_CMD=""
-if [ -n "$DEPLOY_KEY" ]; then
-    GIT_SSH_CMD="ssh -i ${DEPLOY_KEY} -o StrictHostKeyChecking=no"
-fi
 
 AUTO_TICK=0
 
@@ -222,28 +171,7 @@ while true; do
     AUTO_TICK=$((AUTO_TICK + POLL_INTERVAL))
     if [ "$AUTO_TICK" -ge "$AUTO_CHECK_INTERVAL" ]; then
         AUTO_TICK=0
-        # Re-discover key on each cycle (it may have been deleted after a deploy)
-        if [ -z "$DEPLOY_KEY" ] || [ ! -f "$ROOT_KEY" ]; then
-            find_and_copy_key /tmp/deploy_key || \
-            find_and_copy_key /root/.ssh/id_ed25519 || \
-            find_and_copy_key /home/cpt-claude/.ssh/id_ed25519 || \
-            find_and_copy_key /home/cpt-frederic/.ssh/id_ed25519 || true
-            if [ -n "$DEPLOY_KEY" ]; then
-                GIT_SSH_CMD="ssh -i ${DEPLOY_KEY} -o StrictHostKeyChecking=no"
-            fi
-        fi
         auto_deploy_if_ahead
-        # After auto-deploy, refresh SSH key (it may have been deleted)
-        if [ ! -f "$ROOT_KEY" ] || [ ! -r "$ROOT_KEY" ]; then
-            DEPLOY_KEY=""
-            find_and_copy_key /tmp/deploy_key || \
-            find_and_copy_key /root/.ssh/id_ed25519 || \
-            find_and_copy_key /home/cpt-claude/.ssh/id_ed25519 || \
-            find_and_copy_key /home/cpt-frederic/.ssh/id_ed25519 || true
-            if [ -n "$DEPLOY_KEY" ]; then
-                GIT_SSH_CMD="ssh -i ${DEPLOY_KEY} -o StrictHostKeyChecking=no"
-            fi
-        fi
     fi
 
     sleep "$POLL_INTERVAL"

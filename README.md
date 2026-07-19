@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — 2026.07.17
+# Crypto Wallet Tracker — 2026.07.18
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -147,7 +147,8 @@ Crypto-Wallet-Tracker/
 - [x] 2026.07.15 — Declencheur self-update fiabilise
 - [x] 2026.07.16 — Choix maj auto/manuelle
 - [x] 2026.07.17 — Sauvegardes auto + sante + tests/CI
-- [ ] 2026.07.18 — Durcissement auth & comptes
+- [x] 2026.07.18 — Updater self-update en HTTPS (fetch fiable, plus de cle SSH)
+- [ ] 2026.07.19 — Durcissement auth & comptes
 
 ### Phase 2 — Multi-chaines non-EVM & airdrops
 - [ ] Refactor abstraction multi-provider (prerequis)
@@ -157,6 +158,12 @@ Crypto-Wallet-Tracker/
 - [ ] Airdrops a claim
 
 ## 📋 Changelog
+
+### 2026.07.18 — Updater self-update en HTTPS (depot public, plus de probleme de cle)
+
+- **Fetch en HTTPS** : l'updater hôte (`host-updater.sh`) utilise désormais `git fetch` via HTTPS (`https://github.com/LostInTheBugs/Crypto-Wallet-Tracker.git`) au lieu de SSH (`git@github.com`). Le dépôt étant public, aucune clé ni authentification n'est nécessaire.
+- **Suppression de la logique SSH** : toute la détection/copie de clés SSH (`find_and_copy_key`, `GIT_SSH_COMMAND`, `DEPLOY_KEY`) est retirée. Plus de `Permission denied (publickey)` ni de prompts interactifs — `credential.helper` est explicitement désactivé (`git -c credential.helper=`).
+- **Bootstrap** : le remote du dépôt sur la VM de production est basculé en HTTPS. L'updater corrigé est réinstallé, le service redémarré.
 
 ### 2026.07.17 — Sauvegardes automatiques de la base, page santé/statut, tests + CI
 
