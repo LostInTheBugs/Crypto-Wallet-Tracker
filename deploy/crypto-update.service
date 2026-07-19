@@ -1,11 +1,16 @@
 [Unit]
-Description=Crypto Wallet Tracker — Host-side updater (git pull + docker rebuild)
+Description=Crypto Wallet Tracker — Host-side updater (polling daemon)
 After=network.target docker.service
+Wants=docker.service
 
 [Service]
-Type=oneshot
+Type=simple
 ExecStart=/opt/crypto-wallet-tracker/deploy/host-updater.sh
 StandardOutput=append:/var/log/crypto-updater.log
 StandardError=append:/var/log/crypto-updater.log
 User=root
-TimeoutSec=300
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
