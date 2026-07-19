@@ -2770,6 +2770,51 @@ async def update_status(user=Depends(get_current_user)):
         return {"state": "idle"}
 
 
+# ── Update mode (auto / manual) — 2026.07.16 ─────────────────────
+_UPDATE_CONFIG_PATH = Path("/data/deploy/config.json")
+_DEFAULT_UPDATE_MODE = "manual"
+
+
+def _read_update_config() -> dict:
+    """Read the shared update config file, returning defaults if absent/broken."""
+    if not _UPDATE_CONFIG_PATH.exists():
+        return {"update_mode": _DEFAULT_UPDATE_MODE}
+    try:
+        cfg = json.loads(_UPDATE_CONFIG_PATH.read_text())
+    except Exception:
+        return {"update_mode": _DEFAULT_UPDATE_MODE}
+    if cfg.get("update_mode") not in ("auto", "manual"):
+        cfg["update_mode"] = _DEFAULT_UPDATE_MODE
+    return cfg
+
+
+def _write_update_config(cfg: dict) -> None:
+    _UPDATE_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _UPDATE_CONFIG_PATH.write_text(json.dumps(cfg, indent=2))
+
+
+@app.get("/api/settings/update-mode")
+async def get_update_mode(user=Depends(get_current_user)):
+    """Return the current update mode (shared file, readable by the host updater)."""
+    return {"update_mode": _read_update_config()["update_mode"]}
+
+
+@app.put("/api/settings/update-mode")
+async def set_update_mode(request: Request, user=Depends(get_current_user)):
+    """Set the update mode ('auto' or 'manual'). Writes to shared config."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "JSON body required")
+    mode = (body.get("mode") or "").strip().lower()
+    if mode not in ("auto", "manual"):
+        raise HTTPException(400, "mode must be 'auto' or 'manual'")
+    cfg = _read_update_config()
+    cfg["update_mode"] = mode
+    _write_update_config(cfg)
+    return {"update_mode": mode}
+
+
 # ── DeFi positions (Moralis) — v2.12.8 / fallback gratuit v2.12.9 ──
 
 _defi_cache: dict = {}          # (user_id, address_lower) -> {"data": dict, "ts": float}

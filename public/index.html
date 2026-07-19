@@ -299,8 +299,14 @@ tr.tm-off td{opacity:.45}
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>📦 Version</h2>
-        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">2026.07.15</strong></p>
+        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">2026.07.16</strong></p>
         <p id="verStatus" style="font-size:.85rem"></p>
+        <p id="verAutoMsg" style="font-size:.85rem;color:#6e7681;margin-top:6px"></p>
+        <div style="margin-top:10px;font-size:.85rem">
+          <span id="updModeLabel" style="margin-right:8px">Mise à jour :</span>
+          <label style="margin-right:12px;cursor:pointer"><input type="radio" name="updMode" value="manual" onchange="setUpdateMode(this.value)"> <span id="updManual">Manuelle</span></label>
+          <label style="cursor:pointer"><input type="radio" name="updMode" value="auto" onchange="setUpdateMode(this.value)"> <span id="updAuto">Automatique</span></label>
+        </div>
         <button id="updateBtn" class="hidden" onclick="doUpdate()" style="margin-top:8px;background:#238636;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:.85rem">🔄 Mettre à jour</button>
         <p id="updateMsg" style="margin-top:8px;font-size:.8rem;color:#f0c040"></p>
       </div>
@@ -359,6 +365,8 @@ var T = {
     updRunning: "⏳ Déploiement en cours...", updDone: "✅ Déploiement terminé",
     updReload: "Rechargement...", updFailed: "❌ Échec du déploiement",
     updTimeout: "⏰ Délai d'attente dépassé", updError: "Erreur réseau",
+    updModeLabel: "Mise à jour :", updManual: "Manuelle", updAuto: "Automatique",
+    updAutoMsg: "⚙️ Mises à jour automatiques activées — l'application se met à jour seule",
     verCheckError: "❌ Impossible de vérifier",
     noData: "📭 Aucune donnée",
     swap: "Swap", received: "Reçu", sentLbl: "Envoyé", legsLbl: "jambes",
@@ -544,6 +552,8 @@ var T = {
     updRunning: "⏳ Deploying...", updDone: "✅ Update complete",
     updReload: "Reloading...", updFailed: "❌ Update failed",
     updTimeout: "⏰ Timed out waiting", updError: "Network error",
+    updModeLabel: "Update mode:", updManual: "Manual", updAuto: "Automatic",
+    updAutoMsg: "⚙️ Automatic updates enabled — the app updates itself",
     verCheckError: "❌ Unable to check",
     noData: "📭 No data",
     swap: "Swap", received: "Received", sentLbl: "Sent", legsLbl: "legs",
@@ -1660,6 +1670,7 @@ function onChainFilter(){
 function renderSettingsPage(){
   document.getElementById("setLang").value = LANG;
   document.getElementById("setCurrency").value = currency;
+  loadUpdateMode();
   checkVersion();
   renderApiKeys();
   renderExportSection();
@@ -1723,6 +1734,35 @@ async function doExport(kind){
   if(btn){btn.disabled=false;btn.innerHTML=oldHtml;}
 }
 
+var _updateMode = "manual";  // current update mode, loaded from API
+
+async function loadUpdateMode(){
+  try{
+    var r = await fetch("/api/settings/update-mode");
+    if(r.ok){
+      var d = await r.json();
+      _updateMode = d.update_mode || "manual";
+    }
+  }catch(e){ _updateMode = "manual"; }
+  var radios = document.getElementsByName("updMode");
+  for(var i=0;i<radios.length;i++){
+    radios[i].checked = (radios[i].value === _updateMode);
+  }
+  document.getElementById("verAutoMsg").textContent = (_updateMode==="auto") ? t("updAutoMsg") : "";
+}
+
+async function setUpdateMode(mode){
+  try{
+    var r = await fetch("/api/settings/update-mode",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({mode:mode})});
+    if(r.ok){
+      var d = await r.json();
+      _updateMode = d.update_mode || "manual";
+      document.getElementById("verAutoMsg").textContent = (_updateMode==="auto") ? t("updAutoMsg") : "";
+      checkVersion();  // re-check to hide/show update button
+    }
+  }catch(e){ console.error("setUpdateMode",e); }
+}
+
 async function doUpdate(){
   var btn=document.getElementById("updateBtn"),msg=document.getElementById("updateMsg");
   btn.disabled=true;btn.textContent=t("updating");msg.textContent="";
@@ -1777,9 +1817,10 @@ async function checkVersion(){
       if(mca&&mcb){for(var i=1;i<=3;i++){var na=parseInt(mca[i],10),nb=parseInt(mcb[i],10);if(na>nb)return 1;if(na<nb)return -1}return 0}
       if(mca&&!mcb)return 1;if(!mca&&mcb)return -1;
       if(a>b)return 1;if(a<b)return -1;return 0}
-    if(!latest){el.textContent=t("verCheckError");btn.classList.add("hidden")}
-    else if(_cmpVer(latest,current)<=0){el.innerHTML='<span style="color:#40c463">'+t("verUpToDate")+" ("+latest+")</span>";btn.classList.add("hidden")}
-    else{el.innerHTML='<span style="color:#f0c040">'+t("verOutdated")+": "+latest+"</span>";btn.classList.remove("hidden");btn.textContent=t("updateBtn");msg.textContent=""}
+    if(!latest){el.textContent=t("verCheckError");btn.classList.add("hidden");document.getElementById("verAutoMsg").textContent=""}
+    else if(_cmpVer(latest,current)<=0){el.innerHTML='<span style="color:#40c463">'+t("verUpToDate")+" ("+latest+")</span>";btn.classList.add("hidden");document.getElementById("verAutoMsg").textContent=""}
+    else if(_updateMode==="auto"){el.innerHTML='<span style="color:#f0c040">'+t("verOutdated")+": "+latest+"</span>";btn.classList.add("hidden");document.getElementById("verAutoMsg").textContent=t("updAutoMsg")}
+    else{el.innerHTML='<span style="color:#f0c040">'+t("verOutdated")+": "+latest+"</span>";btn.classList.remove("hidden");btn.textContent=t("updateBtn");msg.textContent="";document.getElementById("verAutoMsg").textContent=""}
   } catch(e) {
     console.error("checkVersion",e);
     el.textContent = t("verCheckError");

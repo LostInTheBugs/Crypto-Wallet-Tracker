@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — 2026.07.15
+# Crypto Wallet Tracker — 2026.07.16
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -145,6 +145,7 @@ Crypto-Wallet-Tracker/
 - [x] 2026.07.13 — Self-update via updater cote hote (bouton Mettre a jour fonctionnel)
 - [x] 2026.07.14 — Updater self-update fiabilise
 - [x] 2026.07.15 — Declencheur self-update fiabilise
+- [x] 2026.07.16 — Choix maj auto/manuelle
 - [ ] 2026.07.15 — Sauvegardes auto + sante + tests/CI
 - [ ] 2026.07.15 — Durcissement auth & comptes
 
@@ -156,6 +157,16 @@ Crypto-Wallet-Tracker/
 - [ ] Airdrops a claim
 
 ## 📋 Changelog
+
+### 2026.07.16 — Mise à jour automatique ou manuelle (au choix, dans Paramètres)
+
+- **Choix du mode de mise à jour** : nouveau paramètre dans ⚙️ Paramètres → carte Version — radio bouton `Manuelle / Automatique`. Persisté dans `/data/deploy/config.json` (volume partagé, lisible par l'updater hôte).
+- **Endpoints API** : `GET /api/settings/update-mode` (lecture), `PUT /api/settings/update-mode {mode:"auto"|"manual"}` (écriture, auth requise).
+- **Mode automatique** : l'updater hôte (`host-updater.sh`) vérifie périodiquement (~3 min) si `origin/main` est en avance via `git fetch` + comparaison de hash. Si une nouvelle version est détectée, le cycle complet de déploiement (reset --hard + rebuild Docker) est déclenché automatiquement, sans clic.
+- **Mode manuel** (défaut) : comportement inchangé — le bouton « Mettre à jour » apparaît quand une nouvelle version est disponible, et le déploiement est déclenché par clic (écriture de `request.json`).
+- **UI** : en mode auto, le bouton « Mettre à jour » est masqué et remplacé par un message « ⚙️ Mises à jour automatiques activées — l'application se met à jour seule ». Le toggle met à jour le fichier de config et rafraîchit l'affichage immédiatement.
+- **i18n** : nouvelles clés `updModeLabel`, `updManual`, `updAuto`, `updAutoMsg` (FR + EN).
+- **Robustesse** : l'updater lit le fichier de config à chaque itération (pas de redémarrage nécessaire). Échec de fetch → pas de blocage. Mode auto → status cohérent (`state:done/failed`, version depuis `verCurrent`). Le mécanisme existant de requêtes manuelles (`request.json`) est préservé et prioritaire.
 
 ### 2026.07.15 — Declencheur de self-update fiabilise (polling, suppression de la demande, version correcte)
 

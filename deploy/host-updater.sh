@@ -15,8 +15,10 @@ APP_DIR="/opt/crypto-wallet-tracker"
 DEPLOY_DIR="/var/lib/docker/volumes/crypto-wallet-tracker_wallet-data/_data/deploy"
 REQUEST_FILE="${DEPLOY_DIR}/request.json"
 STATUS_FILE="${DEPLOY_DIR}/status.json"
+CONFIG_FILE="${DEPLOY_DIR}/config.json"
 LOG_FILE="/var/log/crypto-updater.log"
-POLL_INTERVAL=12   # seconds between polls
+POLL_INTERVAL=12   # seconds between polls (manual-mode requests)
+AUTO_CHECK_INTERVAL=180  # seconds between auto-mode git fetch checks (~3 min)
 
 log() {
     echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] $*" | tee -a "$LOG_FILE"
@@ -32,12 +34,52 @@ read_version() {
     fi
 }
 
+# ── Read the update mode from shared config ──────────────────
+read_update_mode() {
+    if [ -f "$CONFIG_FILE" ]; then
+        python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('update_mode','manual'))" "$CONFIG_FILE" 2>/dev/null || echo "manual"
+    else
+        echo "manual"
+    fi
+}
+
+# ── Auto-deploy: fetch origin/main and deploy if ahead ──────
+# Returns 0 if no deploy needed, 1 on deploy failure, 2 if deployed.
+auto_deploy_if_ahead() {
+    local mode
+    mode="$(read_update_mode)"
+    if [ "$mode" != "auto" ]; then
+        return 0  # manual mode, nothing to do
+    fi
+
+    log "[auto-check] fetching origin/main …"
+    local fetch_ok=true
+    if ! sudo -n env GIT_SSH_COMMAND="$GIT_SSH_CMD" git -C "$APP_DIR" fetch origin main --quiet 2>&1 | tee -a "$LOG_FILE"; then
+        log "[auto-check] WARNING: git fetch failed — will retry next cycle"
+        return 0  # don't block the loop
+    fi
+
+    local local_head remote_head
+    local_head="$(sudo -n git -C "$APP_DIR" rev-parse HEAD 2>/dev/null)" || return 0
+    remote_head="$(sudo -n git -C "$APP_DIR" rev-parse origin/main 2>/dev/null)" || return 0
+
+    if [ "$local_head" = "$remote_head" ]; then
+        log "[auto-check] already at latest ($(echo "$local_head" | head -c 9))"
+        return 0
+    fi
+
+    log "[auto-check] NEW VERSION DETECTED: local=$(echo "$local_head" | head -c 9) remote=$(echo "$remote_head" | head -c 9) — auto-deploy triggered"
+    process_request "auto"
+    return $?
+}
+
 # ── Process one deploy request ──────────────────────────────
-# Returns 0 on success, 1 on failure (always deletes request.json).
+# Accepts optional reason string (e.g. "auto") for logging.
 process_request() {
+    local reason="${1:-manual}"
     local request_payload
     request_payload="$(cat "$REQUEST_FILE" 2>/dev/null || echo "{}")"
-    log "========== Deploy request detected =========="
+    log "========== Deploy request detected (reason: $reason) =========="
     log "Request: $request_payload"
 
     # Write "running" status
@@ -132,17 +174,77 @@ EOF
 }
 
 # ── Main polling loop ───────────────────────────────────────
-log "Crypto-updater daemon started (poll interval: ${POLL_INTERVAL}s)"
+log "Crypto-updater daemon started (poll interval: ${POLL_INTERVAL}s, auto-check: ${AUTO_CHECK_INTERVAL}s)"
 mkdir -p "$DEPLOY_DIR"
 
+# ── SSH key discovery (best-effort, runs once) ──────────────
+DEPLOY_KEY=""
+ROOT_KEY="/tmp/root_deploy_key"
+
+find_and_copy_key() {
+    local src="$1"
+    if [ -f "$src" ] && [ -r "$src" ]; then
+        cp "$src" "$ROOT_KEY"
+        chmod 600 "$ROOT_KEY"
+        chown root:root "$ROOT_KEY"
+        DEPLOY_KEY="$ROOT_KEY"
+        return 0
+    fi
+    return 1
+}
+
+# Pre-discover SSH key for auto-mode git fetches
+find_and_copy_key /tmp/deploy_key || \
+find_and_copy_key /root/.ssh/id_ed25519 || \
+find_and_copy_key /home/cpt-claude/.ssh/id_ed25519 || \
+find_and_copy_key /home/cpt-frederic/.ssh/id_ed25519 || true
+
+GIT_SSH_CMD=""
+if [ -n "$DEPLOY_KEY" ]; then
+    GIT_SSH_CMD="ssh -i ${DEPLOY_KEY} -o StrictHostKeyChecking=no"
+fi
+
+AUTO_TICK=0
+
 while true; do
+    # ── Manual request handling ─────────────────────────────
     if [ -f "$REQUEST_FILE" ]; then
-        process_request
+        process_request "manual"
         # ALWAYS delete request.json — even on failure — so the
         # next click on "Mettre à jour" creates a fresh file and
         # triggers a new deploy cycle.
         rm -f "$REQUEST_FILE"
         log "request.json deleted (next deploy cycle will trigger cleanly)"
+        AUTO_TICK=0  # reset auto timer after a manual deploy
     fi
+
+    # ── Auto-update check (every ~3 min when mode=auto) ─────
+    AUTO_TICK=$((AUTO_TICK + POLL_INTERVAL))
+    if [ "$AUTO_TICK" -ge "$AUTO_CHECK_INTERVAL" ]; then
+        AUTO_TICK=0
+        # Re-discover key on each cycle (it may have been deleted after a deploy)
+        if [ -z "$DEPLOY_KEY" ] || [ ! -f "$ROOT_KEY" ]; then
+            find_and_copy_key /tmp/deploy_key || \
+            find_and_copy_key /root/.ssh/id_ed25519 || \
+            find_and_copy_key /home/cpt-claude/.ssh/id_ed25519 || \
+            find_and_copy_key /home/cpt-frederic/.ssh/id_ed25519 || true
+            if [ -n "$DEPLOY_KEY" ]; then
+                GIT_SSH_CMD="ssh -i ${DEPLOY_KEY} -o StrictHostKeyChecking=no"
+            fi
+        fi
+        auto_deploy_if_ahead
+        # After auto-deploy, refresh SSH key (it may have been deleted)
+        if [ ! -f "$ROOT_KEY" ] || [ ! -r "$ROOT_KEY" ]; then
+            DEPLOY_KEY=""
+            find_and_copy_key /tmp/deploy_key || \
+            find_and_copy_key /root/.ssh/id_ed25519 || \
+            find_and_copy_key /home/cpt-claude/.ssh/id_ed25519 || \
+            find_and_copy_key /home/cpt-frederic/.ssh/id_ed25519 || true
+            if [ -n "$DEPLOY_KEY" ]; then
+                GIT_SSH_CMD="ssh -i ${DEPLOY_KEY} -o StrictHostKeyChecking=no"
+            fi
+        fi
+    fi
+
     sleep "$POLL_INTERVAL"
 done
