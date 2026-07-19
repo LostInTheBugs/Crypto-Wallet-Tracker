@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — 2026.07.20
+# Crypto Wallet Tracker — 2026.07.21
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -155,13 +155,22 @@ Crypto-Wallet-Tracker/
 - [x] 2026.07.20 — Durcissement auth & comptes
 
 ### Phase 2 — Multi-chaines non-EVM & airdrops
-- [ ] Refactor abstraction multi-provider (prerequis)
+- [x] 2026.07.21 — Abstraction multi-provider (fondation non-EVM)
 - [ ] Bitcoin (BTC)
 - [ ] Solana
 - [ ] Cosmos / ATOM
 - [ ] Airdrops a claim
 
 ## 📋 Changelog
+
+### 2026.07.21 — Abstraction multi-provider (ChainProvider) — fondation pour Bitcoin/Solana/Cosmos, zero changement EVM
+
+- **Interface `ChainProvider`** : classe abstraite définissant le contrat commun pour tous les futurs providers de chaîne (`detect()`, `get_portfolio()`, `get_transactions()`, `explorer_url()`, `chain_type`, `native_symbol`). Module `src/services/providers/base.py`.
+- **Registre** : liste ordonnée `PROVIDERS` + fonction `provider_for(address)` qui retourne le premier provider dont `detect()` est vrai, ou `None`. Extensible : ajouter un provider = implémenter l'interface + l'enregistrer.
+- **`EvmProvider`** : wrapper fin qui délègue à `_compute_portfolio` et à la logique de transactions existante SANS RÉÉCRIRE AUCUNE logique métier. Détection `0x...` (42 caractères hex). Module `src/services/providers/evm.py`.
+- **Routage non-cassant** : les endpoints `/api/portfolio` et `/api/transactions` vérifient `provider_for(address)` avant d'exécuter la logique EVM. Adresse EVM → chemin inchangé (zero regression). Adresse non-EVM (`bc1...`, Solana, Cosmos) → réponse propre `{supported: false, message: "Chaine non prise en charge (a venir)"}` sans erreur 400.
+- **Helper `get_portfolio_via_provider(address)`** : point d'entrée canonique pour les futures intégrations multi-chaînes.
+- **Tests** : `tests/test_providers.py` (34 assertions) — détection, registre, extensibilité, délégation, contrat de réponse non-supportée.
 
 ### 2026.07.20 — Durcissement auth : 2FA TOTP optionnelle, anti-brute-force, changement de mot de passe, isolation multi-utilisateurs
 

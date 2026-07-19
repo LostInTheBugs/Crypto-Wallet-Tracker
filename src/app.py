@@ -53,6 +53,8 @@ from services.alerts_service import (
     run_evaluator, evaluate_alerts_for_user, send_alert_notification,
 )
 from services.db import write_locked
+from services.providers import provider_for, PROVIDERS
+from services.providers.evm import wire_evm
 
 # ── Logging configuration ───────────────────────────────────────
 import logging
@@ -341,6 +343,62 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(run_evaluator())
         # Start backup scheduler background task
         asyncio.create_task(_backup_scheduler())
+        # ── Wire EvmProvider (Phase 2, 2026.07.21) ─────────────────
+        async def _evm_portfolio_shim(address: str) -> dict:
+            """Shim: EvmProvider.get_portfolio → _compute_portfolio."""
+            return await _compute_portfolio(address)
+
+        async def _evm_transactions_shim(**kwargs) -> dict:
+            """Shim: EvmProvider.get_transactions → raw DB query + grouping.
+
+            Returns grouped events WITHOUT per-request enrichment (tags,
+            wallet labels, explorer URLs).  Those are added by the FastAPI
+            endpoint layer after the provider returns.
+            """
+            import aiosqlite as _aiosqlite
+            addr = kwargs.get("address", "")
+            wallet = kwargs.get("wallet")
+            chain = kwargs.get("chain")
+            token = kwargs.get("token")
+            direction = kwargs.get("direction")
+            event_type = kwargs.get("event_type")
+            limit = kwargs.get("limit", 100)
+            offset = kwargs.get("offset", 0)
+            user_id = kwargs.get("user_id", 0)
+
+            conditions = ["user_id=?"]
+            params = [user_id]
+            conditions.append(
+                "lower(wallet_address) IN (SELECT lower(address) FROM wallets WHERE user_id=?)"
+            )
+            params.append(user_id)
+            if wallet:
+                conditions.append("lower(wallet_address)=lower(?)")
+                params.append(wallet)
+            if chain:
+                conditions.append("chain=?")
+                params.append(chain)
+            where = " AND ".join(conditions)
+            async with _aiosqlite.connect(DB_PATH) as _db:
+                _db.row_factory = _aiosqlite.Row
+                cur = await _db.execute(
+                    f"SELECT id, wallet_address, token_symbol, token_name, amount, "
+                    f"usd_price, usd_value, chain, tx_hash, block_time, direction, "
+                    f"log_index, gas_fee_usd, contract_address, event_type, event_method "
+                    f"FROM transactions WHERE {where} ORDER BY block_time DESC",
+                    tuple(params))
+                rows = await cur.fetchall()
+            events = group_transaction_events(rows)
+            events = filter_events(events, token=token, direction=direction)
+            counts = {"swap": 0, "send": 0, "receive": 0, "approve": 0, "contract": 0, "native": 0}
+            for ev in events:
+                counts[ev["type"]] = counts.get(ev["type"], 0) + 1
+            events = filter_events(events, event_type=event_type)
+            total = len(events)
+            page = events[offset:offset + limit]
+            return {"total": total, "items": page, "counts": counts}
+
+        wire_evm(_evm_portfolio_shim, _evm_transactions_shim)
     yield
 
 
@@ -1012,6 +1070,19 @@ async def get_transactions(wallet: str = Query(None), chain: str = Query(None), 
                            direction: str = Query(None), event_type: str = Query(None, alias="type"),
                            limit: int = Query(100), offset: int = Query(0),
                            user=Depends(get_current_user), db=Depends(get_db)):
+    # Phase 2 (2026.07.21) — if a non-EVM address is provided as wallet filter,
+    # return a clean unsupported response instead of querying the DB.
+    if wallet and not (wallet.startswith("0x") and len(wallet) == 42):
+        w_prov = provider_for(wallet)
+        if w_prov is not None:
+            return {
+                "supported": False,
+                "chain_type": w_prov.chain_type,
+                "message": "Chaine non prise en charge (a venir)",
+                "total": 0,
+                "items": [],
+                "counts": {},
+            }
     # v2.12.4 — événements regroupés par (wallet, chain, tx_hash) : swap/send/receive.
     # Le REGROUPEMENT se fait AVANT la pagination (sinon les deux jambes d'un swap
     # peuvent tomber sur deux pages différentes). Filtres wallet/chain en SQL ;
@@ -1890,11 +1961,48 @@ async def del_manual_token(request: Request, user=Depends(get_current_user), db=
 
 # ── Portfolio endpoint ───────────────────────────────────────────
 
+async def get_portfolio_via_provider(address: str) -> dict:
+    """Route an address through the registered chain providers.
+
+    If a provider handles the address, delegate to get_portfolio().
+    Otherwise return a clean unsupported response.  This is the canonical
+    entry point for multi-chain portfolio lookups (Phase 2, 2026.07.21).
+    """
+    p = provider_for(address)
+    if p is not None:
+        try:
+            return await p.get_portfolio(address)
+        except Exception as e:
+            logging.getLogger("crypto.providers").warning(
+                "Provider %s failed for %s: %s",
+                type(p).__name__, address[:20], e,
+            )
+            return {
+                "supported": False,
+                "chain_type": p.chain_type,
+                "message": f"Erreur provider {p.chain_type}: {e}",
+            }
+    return {
+        "supported": False,
+        "chain_type": None,
+        "message": "Chaine non prise en charge (a venir)",
+    }
+
+
 @app.get("/api/portfolio")
 async def portfolio(address: str = Query(...), force: bool = Query(False), user=Depends(get_current_user)):
     import logging
     _log = logging.getLogger("crypto.portfolio")
     _log.info(f"[TRACE] /api/portfolio ENTER address={address[:12]}... force={force}")
+
+    p = provider_for(address)
+    if p is None:
+        _log.info(f"[TRACE] /api/portfolio UNSUPPORTED address={address[:20]}...")
+        return {
+            "supported": False,
+            "chain_type": None,
+            "message": "Chaine non prise en charge (a venir)",
+        }
 
     if not address.startswith("0x"):
         raise HTTPException(400, "Adresse invalide")
