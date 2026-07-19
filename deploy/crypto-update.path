@@ -3,7 +3,7 @@ Description=Crypto Wallet Tracker — Deploy request watcher
 After=multi-user.target
 
 [Path]
-PathModified=/var/lib/docker/volumes/crypto-wallet-tracker_wallet-data/_data/deploy/request.json
+PathExists=/var/lib/docker/volumes/crypto-wallet-tracker_wallet-data/_data/deploy/request.json
 
 [Install]
 WantedBy=multi-user.target

@@ -43,23 +43,37 @@ log "Step 1/2: git pull origin main …"
 cd "$APP_DIR"
 
 # Best-effort deploy key setup (VM may not have GitHub SSH key)
+# Systemd runs as root, so we need a root-owned key file.
+# Copy any available key to a root-owned temp location.
 DEPLOY_KEY=""
-if [ -f /tmp/deploy_key ]; then
-    DEPLOY_KEY="/tmp/deploy_key"
-elif [ -f /root/.ssh/id_ed25519 ]; then
-    DEPLOY_KEY="/root/.ssh/id_ed25519"
-elif [ -f /home/cpt-claude/.ssh/id_ed25519 ]; then
-    DEPLOY_KEY="/home/cpt-claude/.ssh/id_ed25519"
-elif [ -f /home/cpt-frederic/.ssh/id_ed25519 ]; then
-    DEPLOY_KEY="/home/cpt-frederic/.ssh/id_ed25519"
-fi
+ROOT_KEY="/tmp/root_deploy_key"
 
-GIT_SSH=""
+find_and_copy_key() {
+    local src="$1"
+    if [ -f "$src" ] && [ -r "$src" ]; then
+        cp "$src" "$ROOT_KEY"
+        chmod 600 "$ROOT_KEY"
+        chown root:root "$ROOT_KEY"
+        DEPLOY_KEY="$ROOT_KEY"
+        return 0
+    fi
+    return 1
+}
+
+find_and_copy_key /tmp/deploy_key || \
+find_and_copy_key /root/.ssh/id_ed25519 || \
+find_and_copy_key /home/cpt-claude/.ssh/id_ed25519 || \
+find_and_copy_key /home/cpt-frederic/.ssh/id_ed25519 || true
+
+# Cleanup old root key if ours
+trap "rm -f $ROOT_KEY" EXIT
+
+GIT_SSH_CMD=""
 if [ -n "$DEPLOY_KEY" ]; then
-    GIT_SSH="GIT_SSH_COMMAND=ssh -i ${DEPLOY_KEY} -o StrictHostKeyChecking=no"
+    GIT_SSH_CMD="ssh -i ${DEPLOY_KEY} -o StrictHostKeyChecking=no"
 fi
 
-if ! sudo -n ${GIT_SSH} git -C "$APP_DIR" pull origin main 2>&1 | tee -a "$LOG_FILE"; then
+if ! sudo -n env GIT_SSH_COMMAND="$GIT_SSH_CMD" git -C "$APP_DIR" pull origin main 2>&1 | tee -a "$LOG_FILE"; then
     log "ERROR: git pull failed"
     cat > "$STATUS_FILE" <<EOF
 {"state":"failed","message":"git pull origin main failed — check /var/log/crypto-updater.log","updated_at":"$(date -u +'%Y-%m-%dT%H:%M:%SZ')","version":""}
@@ -69,7 +83,7 @@ EOF
 fi
 
 # ── Fetch tags (for version detection) ──────────────────────
-sudo -n ${GIT_SSH} git -C "$APP_DIR" fetch --tags origin 2>/dev/null || true
+sudo -n env GIT_SSH_COMMAND="$GIT_SSH_CMD" git -C "$APP_DIR" fetch --tags origin 2>/dev/null || true
 
 # ── Get latest tag as version ───────────────────────────────
 VERSION=$(sudo -n git -C "$APP_DIR" tag --sort=-creatordate 2>/dev/null | head -1 || echo "unknown")
