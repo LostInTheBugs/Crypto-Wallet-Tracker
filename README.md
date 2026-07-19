@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — 2026.07.11
+# Crypto Wallet Tracker — 2026.07.12
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -141,7 +141,7 @@ Crypto-Wallet-Tracker/
 - [x] 2026.07.9 — Pricing multi-sources + test des cles
 - [x] 2026.07.10 — NFT : liens source + fiabilite des floors
 - [x] 2026.07.11 — PWA, theme, recherche, watchlist
-- [ ] 2026.07.12 — Consolidation SQLite (ecritures serialisees)
+- [x] 2026.07.12 — Consolidation SQLite (ecritures serialisees)
 - [ ] 2026.07.13 — Sauvegardes auto + sante + tests/CI
 - [ ] 2026.07.14 — Durcissement auth & comptes
 
@@ -153,6 +153,12 @@ Crypto-Wallet-Tracker/
 - [ ] Airdrops a claim
 
 ## 📋 Changelog
+
+### 2026.07.12 — Consolidation SQLite : ecritures serialisees (fin des "database is locked")
+
+- **Verrou d'ecriture global** : un `asyncio.Lock` partagé (`src/services/db.py`) sérialise TOUTES les écritures SQLite (INSERT/UPDATE/DELETE/CREATE/REPLACE + commit). Les lectures ne prennent PAS le verrou (WAL). Plus aucun « database is locked » sous concurrence (workers de fond : rebuild historique, enrichissement prix, evaluateur d'alertes + requetes utilisateur qui écrivent).
+- **Defense en profondeur** : WAL + busy_timeout=10000 conserves. Sous-processus (rebuild_worker.py, enrich_worker.py) utilisent sqlite3 synchrone avec busy_timeout.
+- **Test de concurrence** : `tests/test_write_lock.py` — 20 workers × 25 ecritures concurrentes = 500 INSERT+COMMIT → 0 erreur « database is locked », toutes les lignes validees.
 
 ### 2026.07.11 — PWA installable, theme clair/sombre, recherche globale, watchlist & groupes
 

@@ -8,6 +8,7 @@ import bisect
 
 import aiosqlite
 import httpx
+from services.db import write_locked
 
 DB_PATH = os.environ.get("DB_PATH", "/data/wallets.db")
 
@@ -138,13 +139,14 @@ async def _save_prices_to_cache(sym_lower: str, prices: dict):
     """Save daily prices to price_history (idempotent: INSERT OR REPLACE)."""
     if not prices:
         return
-    async with aiosqlite.connect(DB_PATH) as db:
-        for ts_ms, price in prices.items():
-            date_str = datetime.datetime.utcfromtimestamp(ts_ms / 1000).strftime("%Y-%m-%d")
-            await db.execute(
-                "INSERT OR REPLACE INTO price_history (token_symbol, date, price_usd) VALUES (?, ?, ?)",
-                (sym_lower, date_str, price))
-        await db.commit()
+    async with write_locked():
+        async with aiosqlite.connect(DB_PATH) as db:
+            for ts_ms, price in prices.items():
+                date_str = datetime.datetime.utcfromtimestamp(ts_ms / 1000).strftime("%Y-%m-%d")
+                await db.execute(
+                    "INSERT OR REPLACE INTO price_history (token_symbol, date, price_usd) VALUES (?, ?, ?)",
+                    (sym_lower, date_str, price))
+            await db.commit()
 
 
 # ── DefiLlama batch fetch ───────────────────────────────────────
@@ -336,26 +338,27 @@ async def _fetch_prices_per_token(user_id: int, wallet_address: str, _get_user_c
 
     # Enrich transactions
     enriched = 0
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute(
-            "SELECT id, LOWER(token_symbol) as sym, amount, block_time FROM transactions WHERE user_id=? AND wallet_address=? AND usd_price=0",
-            (user_id, wallet_address))
-        rows = await cur.fetchall()
-        for r in rows:
-            sym_prices = prices.get(r["sym"], {})
-            if not sym_prices:
-                continue
-            try:
-                ts_ms = int(_time.mktime(_time.strptime(r["block_time"][:19], "%Y-%m-%d %H:%M:%S"))) * 1000
-            except Exception:
-                continue
-            price = _interpolate_price(sym_prices, ts_ms)
-            if price > 0:
-                usd_val = r["amount"] * price
-                await db.execute("UPDATE transactions SET usd_price=?, usd_value=? WHERE id=?", (price, round(usd_val, 2), r["id"]))
-                enriched += 1
-        await db.commit()
+    async with write_locked():
+        async with aiosqlite.connect(DB_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT id, LOWER(token_symbol) as sym, amount, block_time FROM transactions WHERE user_id=? AND wallet_address=? AND usd_price=0",
+                (user_id, wallet_address))
+            rows = await cur.fetchall()
+            for r in rows:
+                sym_prices = prices.get(r["sym"], {})
+                if not sym_prices:
+                    continue
+                try:
+                    ts_ms = int(_time.mktime(_time.strptime(r["block_time"][:19], "%Y-%m-%d %H:%M:%S"))) * 1000
+                except Exception:
+                    continue
+                price = _interpolate_price(sym_prices, ts_ms)
+                if price > 0:
+                    usd_val = r["amount"] * price
+                    await db.execute("UPDATE transactions SET usd_price=?, usd_value=? WHERE id=?", (price, round(usd_val, 2), r["id"]))
+                    enriched += 1
+            await db.commit()
 
     return {
         "enriched": enriched, "unmapped": unmapped, "prices": prices,

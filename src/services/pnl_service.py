@@ -21,6 +21,7 @@ import aiosqlite
 from services.price_service import (
     DB_PATH, SYMBOL_TO_CG, _price_at, _fetch_prices_per_token,
 )
+from services.db import write_locked
 from services.token_prefs import token_tid
 
 logging.basicConfig(
@@ -439,24 +440,23 @@ async def _rebuild_history(
     # ═══════════════════════════════════════════════════════════════
     # 9. Write to daily_history (idempotent)
     # ═══════════════════════════════════════════════════════════════
-    async with aiosqlite.connect(DB_PATH) as db:
-        # Per-connection busy_timeout + single executemany: keeps the write
-        # transaction SHORT so concurrent API writes (token prefs, wallets)
-        # don't hit "database is locked" (v2.12.1).
-        try:
-            await db.execute("PRAGMA busy_timeout=10000")
-        except Exception:
-            pass
-        await db.execute(
-            "DELETE FROM daily_history WHERE user_id=? AND wallet_address=?",
-            (user_id, wallet_address))
-        await db.executemany(
-            "INSERT INTO daily_history "
-            "(user_id, wallet_address, date, value_usd, cost_basis_usd, "
-            "net_flows_usd, token_symbol, chain) "
-            "VALUES (?,?,?,?,?,?,?,?)",
-            daily_rows)
-        await db.commit()
+    async with write_locked():
+        async with aiosqlite.connect(DB_PATH) as db:
+            # Per-connection busy_timeout for defence in depth.
+            try:
+                await db.execute("PRAGMA busy_timeout=10000")
+            except Exception:
+                pass
+            await db.execute(
+                "DELETE FROM daily_history WHERE user_id=? AND wallet_address=?",
+                (user_id, wallet_address))
+            await db.executemany(
+                "INSERT INTO daily_history "
+                "(user_id, wallet_address, date, value_usd, cost_basis_usd, "
+                "net_flows_usd, token_symbol, chain) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                daily_rows)
+            await db.commit()
 
     # ═══════════════════════════════════════════════════════════════
     # 10. Debug diagnostics

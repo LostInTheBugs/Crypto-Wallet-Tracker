@@ -14,6 +14,7 @@ No imports from other services (keeps the dependency graph acyclic).
 import os
 
 import aiosqlite
+from services.db import write_locked
 
 DB_PATH = os.environ.get("DB_PATH", "/data/wallets.db")
 
@@ -150,16 +151,17 @@ async def insert_default_prefs(rows: list) -> None:
     """
     if not rows:
         return
-    db = await _connect()
-    try:
-        await db.executemany(
-            "INSERT OR IGNORE INTO user_token_prefs "
-            "(user_id, tid, enabled, source, chain, contract_address, symbol, "
-            "name, reason, default_enabled) VALUES (?,?,?,?,?,?,?,?,?,?)",
-            rows)
-        await db.commit()
-    finally:
-        await db.close()
+    async with write_locked():
+        db = await _connect()
+        try:
+            await db.executemany(
+                "INSERT OR IGNORE INTO user_token_prefs "
+                "(user_id, tid, enabled, source, chain, contract_address, symbol, "
+                "name, reason, default_enabled) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                rows)
+            await db.commit()
+        finally:
+            await db.close()
 
 
 async def reclassify_prefs(rows: list) -> None:
@@ -174,13 +176,14 @@ async def reclassify_prefs(rows: list) -> None:
     """
     if not rows:
         return
-    db = await _connect()
-    try:
-        await db.executemany(
-            "UPDATE user_token_prefs SET enabled=0, reason=?, default_enabled=0 "
-            "WHERE user_id=? AND tid=? AND enabled=1 AND reason='' "
-            "AND (updated_at IS NULL OR updated_at = created_at)",
-            rows)
-        await db.commit()
-    finally:
-        await db.close()
+    async with write_locked():
+        db = await _connect()
+        try:
+            await db.executemany(
+                "UPDATE user_token_prefs SET enabled=0, reason=?, default_enabled=0 "
+                "WHERE user_id=? AND tid=? AND enabled=1 AND reason='' "
+                "AND (updated_at IS NULL OR updated_at = created_at)",
+                rows)
+            await db.commit()
+        finally:
+            await db.close()

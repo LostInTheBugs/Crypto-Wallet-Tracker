@@ -3,6 +3,7 @@ Alert evaluator, notification channels, and digest sender.
 Pure service module — no FastAPI imports (stdlib + httpx + aiosqlite only).
 """
 import asyncio, httpx, aiosqlite, os, datetime, time as _time, json, math, logging
+from services.db import write_locked
 
 _log = logging.getLogger("crypto.alerts")
 
@@ -204,10 +205,11 @@ async def send_alert_notification(user_id: int, alert_id: int, title: str, body:
 
     async with aiosqlite.connect(DB_PATH) as db:
         # Create in-app notification
-        await db.execute(
-            "INSERT INTO notifications (user_id, alert_id, title, body) VALUES (?, ?, ?, ?)",
-            (user_id, alert_id, title, body))
-        await db.commit()
+        async with write_locked():
+            await db.execute(
+                "INSERT INTO notifications (user_id, alert_id, title, body) VALUES (?, ?, ?, ?)",
+                (user_id, alert_id, title, body))
+            await db.commit()
         result["in_app"] = True
 
         # Load active channels
@@ -374,10 +376,11 @@ async def evaluate_alerts_for_user(user_id: int) -> int:
 
             # Update last_triggered_at
             async with aiosqlite.connect(DB_PATH) as db:
-                await db.execute(
-                    "UPDATE alerts SET last_triggered_at=? WHERE id=?",
-                    (now.isoformat(), alert_id))
-                await db.commit()
+                async with write_locked():
+                    await db.execute(
+                        "UPDATE alerts SET last_triggered_at=? WHERE id=?",
+                        (now.isoformat(), alert_id))
+                    await db.commit()
 
     return triggered
 

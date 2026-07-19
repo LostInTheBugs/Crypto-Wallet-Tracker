@@ -50,6 +50,7 @@ from services.export_service import (
 from services.alerts_service import (
     run_evaluator, evaluate_alerts_for_user, send_alert_notification,
 )
+from services.db import write_locked
 
 # ── Logging configuration ───────────────────────────────────────
 import logging
@@ -375,8 +376,9 @@ async def register(request: Request, db=Depends(get_db)):
     if await (await db.execute("SELECT id FROM users WHERE username=?", (username,))).fetchone():
         raise HTTPException(409, "Ce compte existe déjà")
     h = bcrypt.hashpw(password.encode(), bcrypt.gensalt())
-    await db.execute("INSERT INTO users (username, password_hash) VALUES (?, ?)", (username, h.decode()))
-    await db.commit()
+    async with write_locked():
+        await db.execute("INSERT INTO users (username, password_hash) VALUES (?, ?)", (username, h.decode()))
+        await db.commit()
     return {"ok": True, "msg": "Compte créé"}
 
 
@@ -421,8 +423,9 @@ async def change_password(request: Request, user=Depends(get_current_user), db=D
     if not row or not bcrypt.checkpw(old.encode(), row["password_hash"].encode()):
         raise HTTPException(401, "Ancien mot de passe incorrect")
     h = bcrypt.hashpw(new.encode(), bcrypt.gensalt())
-    await db.execute("UPDATE users SET password_hash=? WHERE id=?", (h.decode(), user["id"]))
-    await db.commit()
+    async with write_locked():
+        await db.execute("UPDATE users SET password_hash=? WHERE id=?", (h.decode(), user["id"]))
+        await db.commit()
     return {"ok": True, "msg": "Mot de passe modifié"}
 
 
@@ -443,9 +446,10 @@ async def add_wallet(request: Request, user=Depends(get_current_user), db=Depend
     group_label = (data.get("group_label") or "").strip()[:50]
     if not address.startswith("0x") or len(address) != 42:
         raise HTTPException(400, "Adresse EVM invalide")
-    await db.execute("INSERT INTO wallets (user_id, address, label, watch_only, group_label) VALUES (?, ?, ?, ?, ?)",
-                     (user["id"], address, label, watch_only, group_label))
-    await db.commit()
+    async with write_locked():
+        await db.execute("INSERT INTO wallets (user_id, address, label, watch_only, group_label) VALUES (?, ?, ?, ?, ?)",
+                         (user["id"], address, label, watch_only, group_label))
+        await db.commit()
     asyncio.create_task(_fetch_then_rebuild(user["id"], address))
     return {"ok": True}
 
@@ -461,14 +465,15 @@ async def del_wallet(wallet_id: int, user=Depends(get_current_user), db=Depends(
     # écrire wallet_address avec une casse (checksum) différente de wallets.address ;
     # une comparaison exacte laissait des lignes orphelines dans transactions et
     # daily_history, qui restaient visibles dans Transactions/Statistiques.
-    await db.execute("DELETE FROM transactions WHERE user_id=? AND lower(wallet_address)=lower(?)", (user["id"], address))
-    await db.execute("DELETE FROM daily_history WHERE user_id=? AND lower(wallet_address)=lower(?)", (user["id"], address))
-    await db.execute("DELETE FROM snapshots WHERE user_id=?", (user["id"],))
+    async with write_locked():
+        await db.execute("DELETE FROM transactions WHERE user_id=? AND lower(wallet_address)=lower(?)", (user["id"], address))
+        await db.execute("DELETE FROM daily_history WHERE user_id=? AND lower(wallet_address)=lower(?)", (user["id"], address))
+        await db.execute("DELETE FROM snapshots WHERE user_id=?", (user["id"],))
+        await db.execute("DELETE FROM wallets WHERE id=? AND user_id=?", (wallet_id, user["id"]))
+        await db.commit()
     # Purge du cache portfolio, insensible à la casse également.
     for _k in [k for k in list(_portfolio_cache) if isinstance(k, str) and k.lower() == address.lower()]:
         _portfolio_cache.pop(_k, None)
-    await db.execute("DELETE FROM wallets WHERE id=? AND user_id=?", (wallet_id, user["id"]))
-    await db.commit()
     return {"ok": True}
 
 
@@ -485,8 +490,9 @@ async def edit_wallet(wallet_id: int, request: Request, user=Depends(get_current
         updates.append("group_label=?")
         params.append((data["group_label"] or "").strip()[:50])
     params.extend([wallet_id, user["id"]])
-    await db.execute(f"UPDATE wallets SET {', '.join(updates)} WHERE id=? AND user_id=?", params)
-    await db.commit()
+    async with write_locked():
+        await db.execute(f"UPDATE wallets SET {', '.join(updates)} WHERE id=? AND user_id=?", params)
+        await db.commit()
     return {"ok": True}
 
 
@@ -580,40 +586,41 @@ async def _fetch_transactions_for_wallet(user_id: int, address: str) -> int:
                         break
 
                     async with aiosqlite.connect(DB_PATH) as db:
-                        for item in items:
-                            token = item.get("token") or {}
-                            tx_hash = item.get("transaction_hash") or item.get("tx_hash", "")
-                            log_index = int(item.get("log_index") or 0)
-                            contract = (token.get("address") or token.get("address_hash") or "")
-                            # Dedup on (tx_hash, log_index, user_id)
-                            if tx_hash:
-                                cur2 = await db.execute(
-                                    "SELECT id, contract_address FROM transactions WHERE tx_hash=? AND log_index=? AND user_id=?",
-                                    (tx_hash, log_index, user_id))
-                                existing = await cur2.fetchone()
-                                if existing:
-                                    # Backfill contract_address if missing
-                                    if contract and not (existing[1] or ""):
-                                        await db.execute(
-                                            "UPDATE transactions SET contract_address=? WHERE tx_hash=? AND log_index=? AND user_id=?",
-                                            (contract, tx_hash, log_index, user_id))
+                        async with write_locked():
+                            for item in items:
+                                token = item.get("token") or {}
+                                tx_hash = item.get("transaction_hash") or item.get("tx_hash", "")
+                                log_index = int(item.get("log_index") or 0)
+                                contract = (token.get("address") or token.get("address_hash") or "")
+                                # Dedup on (tx_hash, log_index, user_id)
+                                if tx_hash:
+                                    cur2 = await db.execute(
+                                        "SELECT id, contract_address FROM transactions WHERE tx_hash=? AND log_index=? AND user_id=?",
+                                        (tx_hash, log_index, user_id))
+                                    existing = await cur2.fetchone()
+                                    if existing:
+                                        # Backfill contract_address if missing
+                                        if contract and not (existing[1] or ""):
+                                            await db.execute(
+                                                "UPDATE transactions SET contract_address=? WHERE tx_hash=? AND log_index=? AND user_id=?",
+                                                (contract, tx_hash, log_index, user_id))
+                                        continue
+                                try:
+                                    amount = int(item.get("total", {}).get("value", "0") or "0") / (10 ** (int(token.get("decimals") or 18)))
+                                except Exception:
+                                    amount = 0
+                                if amount == 0:
                                     continue
-                            try:
-                                amount = int(item.get("total", {}).get("value", "0") or "0") / (10 ** (int(token.get("decimals") or 18)))
-                            except Exception:
-                                amount = 0
-                            if amount == 0:
-                                continue
-                            symbol = token.get("symbol", "?")
-                            name = token.get("name", "Unknown")
-                            ts = item.get("timestamp", "")
-                            to_addr = (item.get("to") or {}).get("hash", "")
-                            direction = "in" if to_addr.lower() == address.lower() else "out"
-                            await db.execute(
-                                "INSERT INTO transactions (user_id, wallet_address, token_symbol, token_name, amount, chain, tx_hash, block_time, direction, log_index, contract_address) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                                (user_id, address, symbol, name, amount, chain, tx_hash, ts[:19].replace("T", " ") if ts else "", direction, log_index, contract))
-                            total_tx += 1
-                        await db.commit()
+                                symbol = token.get("symbol", "?")
+                                name = token.get("name", "Unknown")
+                                ts = item.get("timestamp", "")
+                                to_addr = (item.get("to") or {}).get("hash", "")
+                                direction = "in" if to_addr.lower() == address.lower() else "out"
+                                await db.execute(
+                                    "INSERT INTO transactions (user_id, wallet_address, token_symbol, token_name, amount, chain, tx_hash, block_time, direction, log_index, contract_address) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                    (user_id, address, symbol, name, amount, chain, tx_hash, ts[:19].replace("T", " ") if ts else "", direction, log_index, contract))
+                                total_tx += 1
+                            await db.commit()
 
                     nxt = data.get("next_page_params")
                     if not nxt:
@@ -681,85 +688,86 @@ async def _fetch_full_address_transactions(user_id: int, address: str) -> int:
                         break
 
                     async with aiosqlite.connect(DB_PATH) as db:
-                        for item in items:
-                            if not item:
-                                continue
-                            tx_hash = item.get("hash") or item.get("tx_hash", "")
-                            if not tx_hash:
-                                continue
+                        async with write_locked():
+                            for item in items:
+                                if not item:
+                                    continue
+                                tx_hash = item.get("hash") or item.get("tx_hash", "")
+                                if not tx_hash:
+                                    continue
 
-                            # Skip if already in DB
-                            cur2 = await db.execute(
-                                "SELECT id, event_type FROM transactions WHERE tx_hash=? AND user_id=? LIMIT 1",
-                                (tx_hash, user_id))
-                            existing = await cur2.fetchone()
-                            if existing:
+                                # Skip if already in DB
+                                cur2 = await db.execute(
+                                    "SELECT id, event_type FROM transactions WHERE tx_hash=? AND user_id=? LIMIT 1",
+                                    (tx_hash, user_id))
+                                existing = await cur2.fetchone()
+                                if existing:
+                                    method = (item.get("method") or "").strip().lower()
+                                    if method and not (existing[1] or "").strip():
+                                        await db.execute(
+                                            "UPDATE transactions SET event_method=? WHERE tx_hash=? AND user_id=? AND id=?",
+                                            (method, tx_hash, user_id, existing[0]))
+                                    continue
+
+                                # Classify
                                 method = (item.get("method") or "").strip().lower()
-                                if method and not (existing[1] or "").strip():
-                                    await db.execute(
-                                        "UPDATE transactions SET event_method=? WHERE tx_hash=? AND user_id=? AND id=?",
-                                        (method, tx_hash, user_id, existing[0]))
-                                continue
+                                ts = item.get("timestamp", "")
+                                to_addr = (item.get("to") or {}).get("hash", "")
+                                from_addr = (item.get("from") or {}).get("hash", "")
+                                value_raw = item.get("value", "0")
 
-                            # Classify
-                            method = (item.get("method") or "").strip().lower()
-                            ts = item.get("timestamp", "")
-                            to_addr = (item.get("to") or {}).get("hash", "")
-                            from_addr = (item.get("from") or {}).get("hash", "")
-                            value_raw = item.get("value", "0")
-
-                            typ = None
-                            amount = 0.0
-                            token_sym = ""
-                            direction = ""
-                            usd_price = 0.0
-
-                            if method in ("approve", "increaseallowance"):
-                                typ = "approve"
-                                token_sym = "?"
-                                try:
-                                    tok_cur = await db.execute(
-                                        "SELECT DISTINCT token_symbol FROM transactions "
-                                        "WHERE contract_address=? AND user_id=? AND chain=? LIMIT 1",
-                                        (to_addr.lower() if to_addr else "", user_id, chain))
-                                    tok_row = await tok_cur.fetchone()
-                                    if tok_row:
-                                        token_sym = tok_row[0] or "?"
-                                except Exception:
-                                    pass
-                            elif value_raw and value_raw != "0":
-                                typ = "native"
-                                try:
-                                    amount = int(value_raw) / 1e18
-                                except Exception:
-                                    amount = 0.0
-                                nc = NATIVE_COIN.get(chain, {"symbol": "?"})
-                                token_sym = nc["symbol"] if nc else "?"
-                                direction = "in" if to_addr.lower() == address.lower() else "out"
-                                try:
-                                    usd_price = await _get_native_price(chain, host)
-                                except Exception:
-                                    usd_price = 0.0
-                            elif method:
-                                typ = "contract"
-                                token_sym = method[:20]
+                                typ = None
+                                amount = 0.0
+                                token_sym = ""
                                 direction = ""
+                                usd_price = 0.0
 
-                            if not typ:
-                                continue
+                                if method in ("approve", "increaseallowance"):
+                                    typ = "approve"
+                                    token_sym = "?"
+                                    try:
+                                        tok_cur = await db.execute(
+                                            "SELECT DISTINCT token_symbol FROM transactions "
+                                            "WHERE contract_address=? AND user_id=? AND chain=? LIMIT 1",
+                                            (to_addr.lower() if to_addr else "", user_id, chain))
+                                        tok_row = await tok_cur.fetchone()
+                                        if tok_row:
+                                            token_sym = tok_row[0] or "?"
+                                    except Exception:
+                                        pass
+                                elif value_raw and value_raw != "0":
+                                    typ = "native"
+                                    try:
+                                        amount = int(value_raw) / 1e18
+                                    except Exception:
+                                        amount = 0.0
+                                    nc = NATIVE_COIN.get(chain, {"symbol": "?"})
+                                    token_sym = nc["symbol"] if nc else "?"
+                                    direction = "in" if to_addr.lower() == address.lower() else "out"
+                                    try:
+                                        usd_price = await _get_native_price(chain, host)
+                                    except Exception:
+                                        usd_price = 0.0
+                                elif method:
+                                    typ = "contract"
+                                    token_sym = method[:20]
+                                    direction = ""
 
-                            block_time = ts[:19].replace("T", " ") if ts else ""
-                            await db.execute(
-                                "INSERT INTO transactions (user_id, wallet_address, token_symbol, token_name, "
-                                "amount, usd_value, usd_price, chain, tx_hash, block_time, direction, "
-                                "log_index, event_type, event_method, event_to) "
-                                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                                (user_id, address, token_sym, typ, round(amount, 8),
-                                 round(amount * usd_price, 2), usd_price,
-                                 chain, tx_hash, block_time, direction, 0,
-                                 typ, method, to_addr.lower() if to_addr else ""))
-                            total_new += 1
-                        await db.commit()
+                                if not typ:
+                                    continue
+
+                                block_time = ts[:19].replace("T", " ") if ts else ""
+                                await db.execute(
+                                    "INSERT INTO transactions (user_id, wallet_address, token_symbol, token_name, "
+                                    "amount, usd_value, usd_price, chain, tx_hash, block_time, direction, "
+                                    "log_index, event_type, event_method, event_to) "
+                                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                    (user_id, address, token_sym, typ, round(amount, 8),
+                                     round(amount * usd_price, 2), usd_price,
+                                     chain, tx_hash, block_time, direction, 0,
+                                     typ, method, to_addr.lower() if to_addr else ""))
+                                total_new += 1
+                            await db.commit()
 
                     nxt = data.get("next_page_params")
                     if not nxt:
@@ -987,13 +995,14 @@ async def _fetch_gas_for_user(user_id: int) -> int:
                     usd_fee = round(eth_fee * native_price, 2) if (paid and native_price > 0) else 0.0
                     # Always mark tx as processed (gas_fee_eth); USD=0 for receipts
                     async with aiosqlite.connect(DB_PATH) as db:
-                        await db.execute(
-                            "UPDATE transactions SET gas_fee_eth=?, gas_fee_usd=? "
-                            "WHERE id=(SELECT id FROM transactions "
-                            "WHERE tx_hash=? AND user_id=? AND wallet_address=? "
-                            "ORDER BY log_index ASC LIMIT 1)",
-                            (round(eth_fee, 8), usd_fee, tx_hash, user_id, wallet_address))
-                        await db.commit()
+                        async with write_locked():
+                            await db.execute(
+                                "UPDATE transactions SET gas_fee_eth=?, gas_fee_usd=? "
+                                "WHERE id=(SELECT id FROM transactions "
+                                "WHERE tx_hash=? AND user_id=? AND wallet_address=? "
+                                "ORDER BY log_index ASC LIMIT 1)",
+                                (round(eth_fee, 8), usd_fee, tx_hash, user_id, wallet_address))
+                            await db.commit()
                     if usd_fee > 0:
                         chain_updated += 1
                 except Exception:
@@ -1124,11 +1133,12 @@ async def set_transaction_tag(request: Request, user=Depends(get_current_user), 
     note = (data.get("note") or "").strip()[:500]
     if not tx_hash or not chain:
         raise HTTPException(400, "tx_hash et chain requis")
-    await db.execute(
-        "INSERT OR REPLACE INTO user_tx_tags (user_id, tx_hash, chain, category, note) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (user["id"], tx_hash, chain, category, note))
-    await db.commit()
+    async with write_locked():
+        await db.execute(
+            "INSERT OR REPLACE INTO user_tx_tags (user_id, tx_hash, chain, category, note) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (user["id"], tx_hash, chain, category, note))
+        await db.commit()
     return {"ok": True, "tx_hash": tx_hash, "chain": chain, "category": category, "note": note}
 
 
@@ -1558,16 +1568,19 @@ async def toggle_token(request: Request, user=Depends(get_current_user), db=Depe
         "SELECT tid FROM user_token_prefs WHERE user_id=? AND tid=?", (user["id"], tid))
     row = await cur.fetchone()
     if row:
-        await db.execute(
-            "UPDATE user_token_prefs SET enabled=?, updated_at=datetime('now') "
-            "WHERE user_id=? AND tid=?",
-            (enabled, user["id"], tid))
+        async with write_locked():
+            await db.execute(
+                "UPDATE user_token_prefs SET enabled=?, updated_at=datetime('now') "
+                "WHERE user_id=? AND tid=?",
+                (enabled, user["id"], tid))
+            await db.commit()
     else:
-        await db.execute(
-            "INSERT INTO user_token_prefs (user_id, tid, enabled, source, reason, default_enabled) "
-            "VALUES (?,?,?,?,?,?)",
-            (user["id"], tid, enabled, "detected", "", 1))
-    await db.commit()
+        async with write_locked():
+            await db.execute(
+                "INSERT INTO user_token_prefs (user_id, tid, enabled, source, reason, default_enabled) "
+                "VALUES (?,?,?,?,?,?)",
+                (user["id"], tid, enabled, "detected", "", 1))
+            await db.commit()
     asyncio.create_task(_run_history_rebuild(user["id"]))
     return {"ok": True, "tid": tid, "enabled": bool(enabled)}
 
@@ -1580,11 +1593,12 @@ async def bulk_toggle_tokens(request: Request, user=Depends(get_current_user), d
     enabled = 1 if data.get("enabled") else 0
     if scope not in ("detected", "manual"):
         raise HTTPException(400, "scope doit être 'detected' ou 'manual'")
-    await db.execute(
-        "UPDATE user_token_prefs SET enabled=?, updated_at=datetime('now') "
-        "WHERE user_id=? AND source=?",
-        (enabled, user["id"], scope))
-    await db.commit()
+    async with write_locked():
+        await db.execute(
+            "UPDATE user_token_prefs SET enabled=?, updated_at=datetime('now') "
+            "WHERE user_id=? AND source=?",
+            (enabled, user["id"], scope))
+        await db.commit()
     asyncio.create_task(_run_history_rebuild(user["id"]))
     return {"ok": True, "scope": scope, "enabled": bool(enabled)}
 
@@ -1623,18 +1637,21 @@ async def add_manual_token(request: Request, user=Depends(get_current_user), db=
         "SELECT tid FROM user_token_prefs WHERE user_id=? AND tid=?", (user["id"], tid))
     exists = await cur.fetchone()
     if exists:
-        await db.execute(
-            "UPDATE user_token_prefs SET enabled=1, source='manual', chain=?, "
-            "contract_address=?, symbol=?, name=?, reason='manual', "
-            "updated_at=datetime('now') WHERE user_id=? AND tid=?",
-            (chain, contract, symbol, name, user["id"], tid))
+        async with write_locked():
+            await db.execute(
+                "UPDATE user_token_prefs SET enabled=1, source='manual', chain=?, "
+                "contract_address=?, symbol=?, name=?, reason='manual', "
+                "updated_at=datetime('now') WHERE user_id=? AND tid=?",
+                (chain, contract, symbol, name, user["id"], tid))
+            await db.commit()
     else:
-        await db.execute(
-            "INSERT INTO user_token_prefs (user_id, tid, enabled, source, chain, "
-            "contract_address, symbol, name, reason, default_enabled) "
-            "VALUES (?,?,1,'manual',?,?,?,?,'manual',1)",
-            (user["id"], tid, chain, contract, symbol, name))
-    await db.commit()
+        async with write_locked():
+            await db.execute(
+                "INSERT INTO user_token_prefs (user_id, tid, enabled, source, chain, "
+                "contract_address, symbol, name, reason, default_enabled) "
+                "VALUES (?,?,1,'manual',?,?,?,?,'manual',1)",
+                (user["id"], tid, chain, contract, symbol, name))
+            await db.commit()
 
     # Best-effort live data across the user's wallets
     item = {"tid": tid, "chain": chain, "symbol": symbol, "name": name,
@@ -1669,10 +1686,11 @@ async def del_manual_token(request: Request, user=Depends(get_current_user), db=
     tid = (data.get("tid") or "").strip().lower()
     if not tid:
         raise HTTPException(400, "tid requis")
-    await db.execute(
-        "DELETE FROM user_token_prefs WHERE user_id=? AND tid=? AND source='manual'",
-        (user["id"], tid))
-    await db.commit()
+    async with write_locked():
+        await db.execute(
+            "DELETE FROM user_token_prefs WHERE user_id=? AND tid=? AND source='manual'",
+            (user["id"], tid))
+        await db.commit()
     for k in list(_manual_token_cache.keys()):
         if k[1] == tid:
             _manual_token_cache.pop(k, None)
@@ -1837,10 +1855,11 @@ async def portfolio(address: str = Query(...), force: bool = Query(False), user=
                 (user["id"],))
             last = await cur.fetchone()
             if not last or (_time.time() - _time.mktime(_time.strptime(last["created_at"], "%Y-%m-%d %H:%M:%S"))) > 600:
-                await db.execute(
-                    "INSERT INTO snapshots (user_id, total_usd, token_count) VALUES (?, ?, ?)",
-                    (user["id"], data["total_usd"], data["token_count"]))
-                await db.commit()
+                async with write_locked():
+                    await db.execute(
+                        "INSERT INTO snapshots (user_id, total_usd, token_count) VALUES (?, ?, ?)",
+                        (user["id"], data["total_usd"], data["token_count"]))
+                    await db.commit()
     except Exception:
         pass
 
@@ -3362,10 +3381,11 @@ async def set_api_key(provider: str, request: Request, user=Depends(get_current_
     if not valid:
         raise HTTPException(400, msg)
     
-    await db.execute(
-        "INSERT OR REPLACE INTO user_api_keys (user_id, provider, api_key) VALUES (?, ?, ?)",
-        (user["id"], provider, api_key))
-    await db.commit()
+    async with write_locked():
+        await db.execute(
+            "INSERT OR REPLACE INTO user_api_keys (user_id, provider, api_key) VALUES (?, ?, ?)",
+            (user["id"], provider, api_key))
+        await db.commit()
     if provider == "moralis":
         _invalidate_defi_cache(user["id"])
     if provider in ("opensea", "moralis"):
@@ -3375,8 +3395,9 @@ async def set_api_key(provider: str, request: Request, user=Depends(get_current_
 
 @app.delete("/api/settings/keys/{provider}")
 async def delete_api_key(provider: str, user=Depends(get_current_user), db=Depends(get_db)):
-    await db.execute("DELETE FROM user_api_keys WHERE user_id=? AND provider=?", (user["id"], provider))
-    await db.commit()
+    async with write_locked():
+        await db.execute("DELETE FROM user_api_keys WHERE user_id=? AND provider=?", (user["id"], provider))
+        await db.commit()
     if provider == "moralis":
         _invalidate_defi_cache(user["id"])
     if provider in ("opensea", "moralis"):
@@ -3575,10 +3596,11 @@ async def create_alert(request: Request, user=Depends(get_current_user), db=Depe
         except Exception: raise HTTPException(400, "params_json invalide")
     enabled = 1 if data.get("enabled", True) else 0
     cooldown = int(data.get("cooldown_min") or 60)
-    cur = await db.execute(
-        "INSERT INTO alerts (user_id, type, params_json, enabled, cooldown_min) VALUES (?, ?, ?, ?, ?)",
-        (user["id"], alert_type, json.dumps(params), enabled, max(1, cooldown)))
-    await db.commit()
+    async with write_locked():
+        cur = await db.execute(
+            "INSERT INTO alerts (user_id, type, params_json, enabled, cooldown_min) VALUES (?, ?, ?, ?, ?)",
+            (user["id"], alert_type, json.dumps(params), enabled, max(1, cooldown)))
+        await db.commit()
     return {"ok": True, "id": cur.lastrowid}
 
 
@@ -3603,17 +3625,19 @@ async def update_alert(alert_id: int, request: Request, user=Depends(get_current
     if not updates:
         raise HTTPException(400, "Aucun champ à modifier")
     params_list.extend([alert_id, user["id"]])
-    await db.execute(
-        f"UPDATE alerts SET {', '.join(updates)} WHERE id=? AND user_id=?",
-        tuple(params_list))
-    await db.commit()
+    async with write_locked():
+        await db.execute(
+            f"UPDATE alerts SET {', '.join(updates)} WHERE id=? AND user_id=?",
+            tuple(params_list))
+        await db.commit()
     return {"ok": True}
 
 
 @app.delete("/api/alerts/{alert_id}")
 async def delete_alert(alert_id: int, user=Depends(get_current_user), db=Depends(get_db)):
-    await db.execute("DELETE FROM alerts WHERE id=? AND user_id=?", (alert_id, user["id"]))
-    await db.commit()
+    async with write_locked():
+        await db.execute("DELETE FROM alerts WHERE id=? AND user_id=?", (alert_id, user["id"]))
+        await db.commit()
     return {"ok": True}
 
 
@@ -3642,13 +3666,16 @@ async def mark_notifications_read(request: Request, user=Depends(get_current_use
     data = await request.json()
     ids = data.get("ids") or data.get("all")
     if ids == "all":
-        await db.execute("UPDATE notifications SET read=1 WHERE user_id=?", (user["id"],))
+        async with write_locked():
+            await db.execute("UPDATE notifications SET read=1 WHERE user_id=?", (user["id"],))
+            await db.commit()
     elif isinstance(ids, list) and ids:
         placeholders = ",".join(["?"] * len(ids))
-        await db.execute(
-            f"UPDATE notifications SET read=1 WHERE user_id=? AND id IN ({placeholders})",
-            [user["id"]] + ids)
-    await db.commit()
+        async with write_locked():
+            await db.execute(
+                f"UPDATE notifications SET read=1 WHERE user_id=? AND id IN ({placeholders})",
+                [user["id"]] + ids)
+            await db.commit()
     return {"ok": True}
 
 
@@ -3681,10 +3708,11 @@ async def put_notif_channels(request: Request, user=Depends(get_current_user), d
         raise HTTPException(400, "Canal invalide (webhook, telegram, email)")
     config = data.get("config") or {}
     enabled = 1 if data.get("enabled", False) else 0
-    await db.execute(
-        "INSERT OR REPLACE INTO notif_channels (user_id, channel, config_json, enabled) VALUES (?, ?, ?, ?)",
-        (user["id"], channel, json.dumps(config), enabled))
-    await db.commit()
+    async with write_locked():
+        await db.execute(
+            "INSERT OR REPLACE INTO notif_channels (user_id, channel, config_json, enabled) VALUES (?, ?, ?, ?)",
+            (user["id"], channel, json.dumps(config), enabled))
+        await db.commit()
     return {"ok": True}
 
 
@@ -3707,10 +3735,11 @@ async def put_digest_prefs(request: Request, user=Depends(get_current_user), db=
     if frequency not in ("off", "daily", "weekly"):
         raise HTTPException(400, "Fréquence invalide (off, daily, weekly)")
     channel = (data.get("channel") or "").strip().lower()
-    await db.execute(
-        "INSERT OR REPLACE INTO digest_prefs (user_id, frequency, channel) VALUES (?, ?, ?)",
-        (user["id"], frequency, channel))
-    await db.commit()
+    async with write_locked():
+        await db.execute(
+            "INSERT OR REPLACE INTO digest_prefs (user_id, frequency, channel) VALUES (?, ?, ?)",
+            (user["id"], frequency, channel))
+        await db.commit()
     return {"ok": True}
 
 
