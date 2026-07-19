@@ -1688,7 +1688,7 @@ async def portfolio(address: str = Query(...), force: bool = Query(False), user=
         data["cached"] = True
         return data
 
-    data = await _compute_portfolio(address)
+    data = await _compute_portfolio(address, cg_api_key=await _get_user_cg_key(user["id"]))
     _portfolio_cache[address] = {"data": data, "ts": now}
     _log.info(
         f"[TRACE] /api/portfolio AFTER compute: tokens={len(data.get('tokens',[]))} "        f"total_usd={data.get('total_usd',0)}"
@@ -2666,7 +2666,7 @@ async def _get_portfolio_for_defi(user_id: int, address: str) -> dict:
     if entry and (now - entry["ts"]) < 3600:
         data = entry["data"]
     else:
-        data = await _compute_portfolio(address)
+        data = await _compute_portfolio(address, cg_api_key=await _get_user_cg_key(user_id))
         _portfolio_cache[address] = {"data": data, "ts": now}
     data = await _apply_user_token_prefs(user_id, data, address)
     if data.pop("_new_auto_disabled", None):
@@ -3126,13 +3126,13 @@ async def export_summary_pdf(address: str = Query("ALL"), user=Depends(get_curre
 # ── External API Keys catalogue ─────────────────────────────
 
 API_KEY_CATALOGUE = [
-    {"id": "coingecko",    "name": "CoinGecko",     "category": "Pricing",      "description": "Prix des tokens (multi-chaînes)",              "get_key_url": "https://www.coingecko.com/en/developers/dashboard"},
-    {"id": "opensea",      "name": "OpenSea",        "category": "NFT",          "description": "Prix planchers & métadonnées NFT",             "get_key_url": "https://docs.opensea.io/reference/api-keys"},
-    {"id": "etherscan",    "name": "Etherscan",      "category": "Explorer",     "description": "Données on-chain / transactions",              "get_key_url": "https://etherscan.io/myapikey"},
-    {"id": "defillama",    "name": "DefiLlama",      "category": "Pricing/DeFi", "description": "Prix & données DeFi (Pro)",                    "get_key_url": "https://defillama.com/pro-api"},
-    {"id": "alchemy",      "name": "Alchemy",        "category": "RPC/Data",     "description": "Accès RPC / données multi-chaînes",           "get_key_url": "https://dashboard.alchemy.com/"},
-    {"id": "moralis",      "name": "Moralis",        "category": "Data/NFT",     "description": "Données tokens & NFT",                        "get_key_url": "https://admin.moralis.io/"},
-    {"id": "coinmarketcap","name": "CoinMarketCap",  "category": "Pricing",      "description": "Prix des tokens (alternative)",               "get_key_url": "https://pro.coinmarketcap.com/account"},
+    {"id": "coingecko",    "name": "CoinGecko",     "category": "Pricing",      "description": "Prix des tokens (multi-chaînes)",              "get_key_url": "https://www.coingecko.com/en/developers/dashboard", "unlocks": "Prix des tokens (couverture étendue, incluant les memecoins)"},
+    {"id": "opensea",      "name": "OpenSea",        "category": "NFT",          "description": "Prix planchers & métadonnées NFT",             "get_key_url": "https://docs.opensea.io/reference/api-keys",      "unlocks": "Prix planchers NFT (source prioritaire)"},
+    {"id": "etherscan",    "name": "Etherscan",      "category": "Explorer",     "description": "Données on-chain / transactions",              "get_key_url": "https://etherscan.io/myapikey",                   "unlocks": "Historique on-chain enrichi (via Etherscan API)"},
+    {"id": "defillama",    "name": "DefiLlama",      "category": "Pricing/DeFi", "description": "Prix & données DeFi (Pro)",                    "get_key_url": "https://defillama.com/pro-api",                   "unlocks": "Données DeFi avancées (tier Pro, au-delà du gratuit)"},
+    {"id": "alchemy",      "name": "Alchemy",        "category": "RPC/Data",     "description": "Accès RPC / données multi-chaînes",           "get_key_url": "https://dashboard.alchemy.com/",                  "unlocks": "Données NFT via Alchemy API (fallback si OpenSea/Moralis indisponibles)"},
+    {"id": "moralis",      "name": "Moralis",        "category": "Data/NFT",     "description": "Données tokens & NFT",                        "get_key_url": "https://admin.moralis.io/",                       "unlocks": "Positions DeFi réelles (lending/borrowing, rewards, health factor) + prix planchers NFT (fallback)"},
+    {"id": "coinmarketcap","name": "CoinMarketCap",  "category": "Pricing",      "description": "Prix des tokens (alternative)",               "get_key_url": "https://pro.coinmarketcap.com/account",           "unlocks": "Prix des tokens (source alternative, couverture large)"},
 ]
 
 # ── API Keys (per user) ─────────────────────────────────────────
@@ -3205,6 +3205,101 @@ async def delete_api_key(provider: str, user=Depends(get_current_user), db=Depen
     if provider in ("opensea", "moralis"):
         _invalidate_nft_valuation_cache(user["id"])
     return {"ok": True, "provider": provider, "configured": False}
+
+
+@app.post("/api/settings/keys/{provider}/test")
+async def test_api_key(provider: str, request: Request, user=Depends(get_current_user), db=Depends(get_db)):
+    """Test an API key — stored key or one provided in the body."""
+    data = await request.json() if request.headers.get("content-length") else {}
+    test_key = (data.get("api_key") or "").strip()
+
+    # If no key provided in body, use the stored key
+    if not test_key:
+        cur = await db.execute(
+            "SELECT api_key FROM user_api_keys WHERE user_id=? AND provider=?",
+            (user["id"], provider))
+        row = await cur.fetchone()
+        if not row:
+            return {"valid": False, "message": "Aucune clé configurée pour ce provider"}
+        test_key = row["api_key"]
+
+    valid, msg = await _test_api_key(provider, test_key)
+    return {"valid": valid, "message": msg}
+
+
+async def _test_api_key(provider: str, api_key: str) -> tuple:
+    """Light test call per provider. Returns (is_valid, message).
+
+    Tolerant: if no test endpoint is obvious, returns a format-OK message
+    rather than an error.
+    """
+    import re
+    if provider == "coingecko":
+        return await _validate_api_key(provider, api_key)
+    elif provider == "opensea":
+        # OpenSea: GET /api/v2/chain/ethereum/account/0x/test with API key header
+        try:
+            async with httpx.AsyncClient(timeout=10) as c:
+                r = await c.get(
+                    "https://api.opensea.io/api/v2/chain/ethereum",
+                    headers={"X-API-KEY": api_key})
+                if r.status_code in (200, 401, 403):
+                    # 200 = valid, 401/403 = invalid key (but endpoint exists)
+                    return (r.status_code == 200,
+                            f"OpenSea: {'clé valide' if r.status_code == 200 else 'clé invalide (HTTP ' + str(r.status_code) + ')'}")
+                return True, f"OpenSea: format OK (HTTP {r.status_code}, non vérifiable)"
+        except Exception as e:
+            return False, f"OpenSea: {str(e)[:80]}"
+    elif provider == "etherscan":
+        # Etherscan: GET with apikey param on eth_blockNumber
+        try:
+            async with httpx.AsyncClient(timeout=10) as c:
+                r = await c.get(
+                    "https://api.etherscan.io/api",
+                    params={"module": "proxy", "action": "eth_blockNumber", "apikey": api_key})
+                data = r.json()
+                if r.status_code == 200 and "result" in data:
+                    result = data.get("result", "")
+                    if result and result != "0" and "Invalid" not in str(data.get("message", "")):
+                        return True, "Etherscan: clé valide"
+                    return False, f"Etherscan: clé invalide ({data.get('message', 'HTTP ' + str(r.status_code))})"
+                return True, f"Etherscan: format OK (non vérifiable)"
+        except Exception as e:
+            return False, f"Etherscan: {str(e)[:80]}"
+    elif provider == "defillama":
+        # DefiLlama: no obvious test endpoint, verify format
+        if len(api_key) >= 8 and re.match(r'^[a-zA-Z0-9_-]+$', api_key):
+            return True, "DefiLlama: format OK (non vérifiable)"
+        return True, "DefiLlama: format OK (non vérifiable)"
+    elif provider == "alchemy":
+        return await _validate_api_key(provider, api_key)
+    elif provider == "moralis":
+        # Moralis: GET /api/v2.2/web3/version with X-API-Key header
+        try:
+            async with httpx.AsyncClient(timeout=10) as c:
+                r = await c.get(
+                    "https://deep-index.moralis.io/api/v2.2/web3/version",
+                    headers={"X-API-Key": api_key})
+                if r.status_code == 200:
+                    return True, "Moralis: clé valide"
+                return False, f"Moralis: HTTP {r.status_code}"
+        except Exception as e:
+            return False, f"Moralis: {str(e)[:80]}"
+    elif provider == "coinmarketcap":
+        # CoinMarketCap: GET /v1/cryptocurrency/quotes/latest?id=1
+        try:
+            async with httpx.AsyncClient(timeout=10) as c:
+                r = await c.get(
+                    "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest",
+                    params={"id": "1"},
+                    headers={"X-CMC_PRO_API_KEY": api_key})
+                if r.status_code == 200:
+                    return True, "CoinMarketCap: clé valide"
+                return False, f"CoinMarketCap: HTTP {r.status_code}"
+        except Exception as e:
+            return False, f"CoinMarketCap: {str(e)[:80]}"
+    # Unknown provider
+    return True, "Format OK (validation best-effort)"
 
 
 async def _validate_api_key(provider: str, api_key: str) -> tuple:

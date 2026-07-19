@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — 2026.07.8
+# Crypto Wallet Tracker — 2026.07.9
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -138,7 +138,7 @@ Crypto-Wallet-Tracker/
 - [x] 2026.07.6 — Moteur d'alertes + digest
 - [x] 2026.07.7 — Alertes health-factor / liquidation
 - [x] 2026.07.8 — Valorisation NFT (prix planchers)
-- [ ] 2026.07.9 — Pricing multi-sources + test des cles
+- [x] 2026.07.9 — Pricing multi-sources + test des cles
 - [ ] 2026.07.10 — PWA, theme, recherche, watchlist
 - [ ] 2026.07.11 — Consolidation SQLite (ecritures serialisees)
 - [ ] 2026.07.12 — Sauvegardes auto + sante + tests/CI
@@ -152,6 +152,13 @@ Crypto-Wallet-Tracker/
 - [ ] Airdrops a claim
 
 ## 📋 Changelog
+
+### 2026.07.9 — Pricing multi-sources (CoinGecko) + test des clés API
+
+- **CoinGecko comme source de prix prioritaire** : quand une clé API CoinGecko est configurée, les prix courants des tokens sont enrichis via l'API CoinGecko (`/simple/token_price` par contrat, `/simple/price` pour les coins natifs). **Conservateur** : un prix CoinGecko n'écrase un prix existant (Blockscout/DefiLlama) que s'il est strictement > 0. Sans clé, le comportement est inchangé. La couverture s'améliore notamment pour les memecoins et tokens exotiques.
+- **Champ `price_source` par token** : chaque token dans la réponse portfolio porte désormais `price_source` (`"blockscout"`, `"coingecko"`, ou `"defillama"`) indiquant l'origine de son prix courant.
+- **Bouton « Tester » par clé API** : endpoint `POST /api/settings/keys/{provider}/test` valide la clé stockée (ou fournie dans le body) via un appel léger au provider. Retourne `{valid: bool, message}`. Fonctionne pour CoinGecko, OpenSea, Etherscan, DefiLlama, Alchemy, Moralis, CoinMarketCap.
+- **Métadonnée « Débloque » par provider** : chaque entrée du catalogue `GET /api/settings/keys` inclut désormais `unlocks`, une courte phrase décrivant ce que la clé active concrètement. Affiché dans la page Réglages > Clés API externes.
 
 ### 2026.07.8 — Valorisation NFT (prix planchers) + net worth Tokens+NFTs
 

@@ -127,7 +127,10 @@ tr.tm-off td{opacity:.45}
 .btn-api-save:hover{opacity:.9}
 .btn-api-del{background:var(--red);color:#fff}
 .btn-api-del:hover{opacity:.9}
+.btn-api-test{background:transparent;color:#8b949e;border:1px solid #30363d}
+.btn-api-test:hover{background:#1a2332;color:var(--title)}
 .api-msg{font-size:.75rem;min-height:1.2em;transition:color .2s}
+.api-card-unlocks{font-size:.72rem;color:#6e7681;margin-top:4px;line-height:1.3}
 .api-get-key{font-size:.72rem;color:var(--accent);text-decoration:none;margin-top:2px;display:inline-block}
 .api-get-key:hover{text-decoration:underline}
 @media(max-width:768px){
@@ -261,7 +264,7 @@ tr.tm-off td{opacity:.45}
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>📦 Version</h2>
-        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">2026.07.8</strong></p>
+        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">2026.07.9</strong></p>
         <p id="verStatus" style="font-size:.85rem"></p>
         <button id="updateBtn" class="hidden" onclick="doUpdate()" style="margin-top:8px;background:#238636;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:.85rem">🔄 Mettre à jour</button>
         <p id="updateMsg" style="margin-top:8px;font-size:.8rem;color:#f0c040"></p>
@@ -380,6 +383,11 @@ var T = {
     apiKeyNotConfigured: "Non configuré",
     apiKeySaved: "✅ Clé enregistrée",
     apiKeyDeleted: "Clé supprimée",
+    apiKeyTest: "Tester",
+    apiKeyTesting: "Test...",
+    apiKeyUnlocks: "Débloque :",
+    apiKeyValid: "✅ Valide",
+    apiKeyInvalid: "❌ Invalide",
     exportTitle: "📤 Export / Sauvegarde",
     expDesc: "Téléchargez vos données (CSV / PDF).",
     expScope: "Périmètre",
@@ -555,6 +563,11 @@ var T = {
     apiKeyNotConfigured: "Not configured",
     apiKeySaved: "✅ Key saved",
     apiKeyDeleted: "Key deleted",
+    apiKeyTest: "Test",
+    apiKeyTesting: "Testing...",
+    apiKeyUnlocks: "Unlocks:",
+    apiKeyValid: "✅ Valid",
+    apiKeyInvalid: "❌ Invalid",
     exportTitle: "📤 Export / Backup",
     expDesc: "Download your data (CSV / PDF).",
     expScope: "Scope",
@@ -1743,6 +1756,8 @@ async function renderApiKeys(){
       var statusCls = k.configured ? "api-configured" : "api-unconfigured";
       var statusTxt = k.configured ? t("apiKeyConfigured")+(k.masked?" ("+esc(k.masked)+")":"") : t("apiKeyNotConfigured");
       var delBtn = k.configured ? '<button class="btn-api btn-api-del" onclick="deleteApiKey(\''+k.id+'\')">'+esc(t("apiKeyDelete"))+'</button>' : "";
+      var testBtn = k.configured ? '<button class="btn-api btn-api-test" onclick="testApiKey(\''+k.id+'\')">'+esc(t("apiKeyTest"))+'</button>' : "";
+      var unlocksTxt = k.unlocks ? esc(t("apiKeyUnlocks"))+" "+esc(k.unlocks) : "";
       html += '<div class="api-card">';
       html += '<div class="api-card-head">';
       html += '<div class="api-logo-wrap">'+svgLogo(k.id)+'</div>';
@@ -1751,11 +1766,13 @@ async function renderApiKeys(){
       html += '<span class="api-badge-cat">'+esc(k.category)+'</span>';
       html += '</div></div>';
       html += '<div class="api-card-desc">'+esc(k.description)+'</div>';
+      if (unlocksTxt) html += '<div class="api-card-unlocks">'+unlocksTxt+'</div>';
       html += '<div class="api-card-status"><span class="api-status-dot '+statusCls+'"></span> '+statusTxt+'</div>';
       html += '<div class="api-card-form">';
       html += '<input type="password" id="key_'+k.id+'" placeholder="'+esc(t("apiKeyPlaceholder"))+'" class="api-key-input">';
       html += '<div class="api-card-actions">';
       html += '<button class="btn-api btn-api-save" onclick="saveApiKey(\''+k.id+'\')">'+esc(t("apiKeySave"))+'</button>';
+      html += testBtn;
       html += delBtn;
       html += '</div></div>';
       html += '<div id="keyMsg_'+k.id+'" class="api-msg"></div>';
@@ -1764,6 +1781,27 @@ async function renderApiKeys(){
     }
     document.getElementById("apiKeysSection").innerHTML = html;
   } catch(e) {console.error("renderApiKeys",e)}
+}
+
+async function testApiKey(provider){
+  var msg = document.getElementById("keyMsg_"+provider);
+  msg.textContent = t("apiKeyTesting");
+  msg.style.color = "#f0c040";
+  try {
+    var r = await fetch("/api/settings/keys/"+provider+"/test", {method:"POST", headers:{"Content-Type":"application/json"}, body:"{}"});
+    var d = await r.json();
+    if (d.valid) {
+      msg.textContent = t("apiKeyValid")+" — "+esc(d.message);
+      msg.style.color = "#40c463";
+    } else {
+      msg.textContent = t("apiKeyInvalid")+" — "+esc(d.message);
+      msg.style.color = "#f85149";
+    }
+  } catch(e) {
+    console.error("testApiKey",e);
+    msg.textContent = "❌ Erreur réseau";
+    msg.style.color = "#f85149";
+  }
 }
 
 async function saveApiKey(provider){

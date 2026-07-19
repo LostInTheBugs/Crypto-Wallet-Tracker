@@ -472,10 +472,162 @@ async def _fetch_defillama_current_prices(queries: list[tuple[str, str, str]]) -
 
 
 # ═══════════════════════════════════════════════════════════════════
+# CoinGecko current-price fallback (API key required)
+# ═══════════════════════════════════════════════════════════════════
+
+# Our chain names → CoinGecko asset_platform IDs
+CHAIN_TO_CG_PLATFORM = {
+    "ethereum":   "ethereum",
+    "base":       "base",
+    "optimism":   "optimism",
+    "arbitrum":   "arbitrum-one",
+    "polygon":    "polygon-pos",
+    "gnosis":     "xdai",
+    "zksync":     "zksync",
+    "celo":       "celo",
+    "scroll":     "scroll",
+    "soneium":    "soneium",
+    "ink":        "ink",
+    "mode":       "mode",
+    "unichain":   "unichain",
+    "lisk":       "lisk",
+    "linea":      "linea",
+    "etherlink":  "etherlink",
+    "metis":      "metis",
+    "manta":      "manta-pacific",
+    "bob":        "bob",
+    "zora":       "zora",
+    "worldchain": "world-chain",
+    "hyperevm":  "hyperliquid",
+}
+
+# CoinGecko native coin IDs (for native coins without contract addresses)
+NATIVE_COIN_CG_ID = {
+    "ETH": "ethereum",
+    "POL": "matic-network",
+    "xDAI": "xdai",
+    "CELO": "celo",
+    "XTZ": "tezos",
+    "METIS": "metis-token",
+    "HYPE": "hyperliquid",
+}
+
+
+async def _fetch_coingecko_current_prices(
+    queries: list[tuple[str, str, str]],
+    api_key: str,
+) -> dict[str, dict]:
+    """Batch-fetch current prices from CoinGecko /simple/token_price.
+
+    Args:
+        queries: list of (chain, contract_address, symbol) tuples.
+        api_key: CoinGecko demo API key.
+
+    Returns:
+        {contract_address_lower: {"price": float, "source": "coingecko"}}
+        for tokens that CoinGecko priced successfully.
+    """
+    if not queries or not api_key:
+        return {}
+
+    prices = {}
+
+    # Group by CG platform
+    by_platform: dict[str, list[tuple[str, str]]] = {}
+    for chain, contract_addr, symbol in queries:
+        platform = CHAIN_TO_CG_PLATFORM.get(chain)
+        if not platform:
+            continue
+        if contract_addr:
+            addr = contract_addr.lower()
+            by_platform.setdefault(platform, []).append((addr, symbol))
+
+    if not by_platform:
+        return {}
+
+    async with httpx.AsyncClient(timeout=20) as c:
+        for platform, tokens in by_platform.items():
+            # CoinGecko /simple/token_price: max ~30 addresses per call
+            for i in range(0, len(tokens), 30):
+                batch = tokens[i:i + 30]
+                addr_list = ",".join(addr for addr, _ in batch)
+                url = (
+                    f"https://api.coingecko.com/api/v3/simple/token_price/"
+                    f"{platform}?contract_addresses={addr_list}&vs_currencies=usd"
+                )
+                try:
+                    resp = await c.get(url, headers={"x-cg-demo-api-key": api_key})
+                    if resp.status_code != 200:
+                        continue
+                    data = resp.json()
+                    for addr, coin_data in data.items():
+                        price = coin_data.get("usd", 0)
+                        if price > 0:
+                            prices[addr.lower()] = {
+                                "price": float(price),
+                                "source": "coingecko",
+                            }
+                except Exception:
+                    continue
+
+                # Rate limit between batches
+                if i + 30 < len(tokens):
+                    await asyncio.sleep(1.5)
+
+    return prices
+
+
+async def _fetch_coingecko_native_prices(
+    symbols: list[str],
+    api_key: str,
+) -> dict[str, dict]:
+    """Fetch current prices for native coins via CoinGecko /simple/price.
+
+    Returns {symbol: {"price": float, "source": "coingecko"}}
+    """
+    if not symbols or not api_key:
+        return {}
+
+    cg_ids = []
+    sym_to_id = {}
+    for sym in symbols:
+        cg_id = NATIVE_COIN_CG_ID.get(sym)
+        if cg_id:
+            cg_ids.append(cg_id)
+            sym_to_id[cg_id] = sym
+
+    if not cg_ids:
+        return {}
+
+    prices = {}
+    ids_str = ",".join(cg_ids)
+    url = (
+        f"https://api.coingecko.com/api/v3/simple/price?"
+        f"ids={ids_str}&vs_currencies=usd"
+    )
+    try:
+        async with httpx.AsyncClient(timeout=15) as c:
+            resp = await c.get(url, headers={"x-cg-demo-api-key": api_key})
+            if resp.status_code != 200:
+                return {}
+            data = resp.json()
+            for cg_id, coin_data in data.items():
+                price = coin_data.get("usd", 0)
+                if price > 0:
+                    sym = sym_to_id.get(cg_id)
+                    if sym:
+                        prices[sym] = {"price": float(price), "source": "coingecko"}
+    except Exception:
+        pass
+
+    return prices
+
+
+# ═══════════════════════════════════════════════════════════════════
 # Portfolio computation
 # ═══════════════════════════════════════════════════════════════════
 
-async def _compute_portfolio(address: str) -> dict:
+async def _compute_portfolio(address: str, cg_api_key: str = "") -> dict:
     logger.info(f"[TRACE] _compute_portfolio ENTER address={address[:12]}...")
 
     # 1. Fetch all chains in parallel
@@ -519,6 +671,7 @@ async def _compute_portfolio(address: str) -> dict:
                 "contract_address": t.get("contract_address", ""),
                 "price_unknown": False,
                 "price_confidence": None,  # set when the price comes from DefiLlama
+                "price_source": "blockscout",  # default source
                 "category": _token_category(sym) if not _is_spam(sym) else "wallet",
             })
 
@@ -533,7 +686,84 @@ async def _compute_portfolio(address: str) -> dict:
         f"total_usd={total:.2f} unpriced={len(unpriced_tokens)}"
     )
 
-    # 3. DefiLlama fallback for tokens without Blockscout price
+    # 2b. CoinGecko current-price enrichment (priority when API key is available)
+    # Overrides both priced and unpriced tokens conservatively: only when CG
+    # returns a price > 0. Native coins priced via /simple/price, token
+    # contracts via /simple/token_price.
+    if cg_api_key:
+        cg_queries = []
+        cg_native_syms = set()
+        for item in items:
+            if item.get("type") == "native":
+                cg_native_syms.add(item["symbol"])
+            elif item.get("contract_address"):
+                cg_queries.append((item["chain"], item["contract_address"], item["symbol"]))
+
+        cg_prices = {}
+
+        # Native coins
+        if cg_native_syms:
+            np = await _fetch_coingecko_native_prices(list(cg_native_syms), cg_api_key)
+            cg_prices.update(np)
+
+        # Token contracts
+        if cg_queries:
+            tp = await _fetch_coingecko_current_prices(cg_queries, cg_api_key)
+            # Merge: contract-address-based prices (key = address)
+            for addr, entry in tp.items():
+                cg_prices[addr] = entry
+
+        if cg_prices:
+            cg_enriched = 0
+            cg_overrides = 0
+            for item in items:
+                if item.get("type") == "native":
+                    sym = item["symbol"]
+                    if sym in cg_prices:
+                        entry = cg_prices[sym]
+                        new_price = entry["price"]
+                        if new_price > 0:
+                            old_price = item["usd_price"]
+                            item["usd_price"] = new_price
+                            new_usd = item["balance"] * new_price
+                            delta = new_usd - item["usd_value"]
+                            item["usd_value"] = round(new_usd, 2)
+                            item["price_unknown"] = False
+                            item["price_source"] = entry.get("source", "coingecko")
+                            total += delta
+                            if old_price > 0:
+                                cg_overrides += 1
+                            else:
+                                cg_enriched += 1
+                else:
+                    addr = item.get("contract_address", "").lower()
+                    if addr and addr in cg_prices:
+                        entry = cg_prices[addr]
+                        new_price = entry["price"]
+                        if new_price > 0:
+                            old_price = item["usd_price"]
+                            item["usd_price"] = new_price
+                            new_usd = item["balance"] * new_price
+                            delta = new_usd - item["usd_value"]
+                            item["usd_value"] = round(new_usd, 2)
+                            item["price_unknown"] = False
+                            item["price_source"] = entry.get("source", "coingecko")
+                            total += delta
+                            if old_price > 0:
+                                cg_overrides += 1
+                            else:
+                                cg_enriched += 1
+            logger.info(
+                f"[TRACE] CoinGecko enriched={cg_enriched} overrides={cg_overrides} items"
+            )
+
+    # Rebuild unpriced list after CoinGecko pass
+    unpriced_tokens = []
+    for item in items:
+        if item["usd_price"] <= 0 and item["balance"] > 0 and not _is_spam(item.get("symbol", "")):
+            addr = item.get("contract_address", "")
+            if addr:
+                unpriced_tokens.append((item["chain"], addr, item["symbol"]))
     if unpriced_tokens:
         llama_prices = await _fetch_defillama_current_prices(unpriced_tokens)
         if llama_prices:
@@ -551,6 +781,7 @@ async def _compute_portfolio(address: str) -> dict:
                     item["usd_value"] = round(new_usd, 2)
                     item["price_unknown"] = False
                     item["price_confidence"] = entry.get("confidence")
+                    item["price_source"] = "defillama"
                     total += delta
                     enriched += 1
             logger.info(
@@ -587,6 +818,7 @@ async def _compute_portfolio(address: str) -> dict:
                                 item["usd_value"] = round(new_usd, 2)
                                 item["price_unknown"] = False
                                 item["price_confidence"] = entry.get("confidence")
+                                item["price_source"] = "defillama"
                                 total += delta
                                 enriched_native += 1
                     logger.info(
