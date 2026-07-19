@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — 2026.07.6
+# Crypto Wallet Tracker — 2026.07.7
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -27,7 +27,7 @@ Dashboard agrégé, graphiques d'évolution, historique des prix via DefiLlama, 
 - 🔑 **Clés API par utilisateur** — catalogue de 7 services (CoinGecko, OpenSea, Etherscan, DefiLlama, Alchemy, Moralis, CoinMarketCap) avec validation best-effort et interface en cartes avec logos
 - 📦 **Vérification de version** — compare avec le dernier tag GitHub
 - ⚡ **Cache prix** — table `price_history`, 2ᵉ rebuild ~0 appel réseau
-- 🔔 **Alertes** — prix, valeur portefeuille, mouvements (> X% en 24h) avec notifications in-app + canaux externes (webhook, Telegram, e-mail)
+- 🔔 **Alertes** — prix, valeur portefeuille, mouvements (> X% en 24h), **health factor / risque de liquidation** avec notifications in-app + canaux externes (webhook, Telegram, e-mail)
 - 📬 **Digest** — résumé quotidien ou hebdo du portefeuille
 - 🐳 **Docker** — une commande pour déployer
 
@@ -135,7 +135,7 @@ Crypto-Wallet-Tracker/
 - [x] 2026.07.4 — Export CSV/PDF (holdings, tx, PnL fiscal)
 - [x] 2026.07.5 — Transactions : approbations, interactions, gaz
 - [x] 2026.07.6 — Moteur d'alertes + digest
-- [ ] 2026.07.7 — Alertes health-factor / liquidation
+- [x] 2026.07.7 — Alertes health-factor / liquidation
 - [ ] 2026.07.8 — Valorisation NFT (prix planchers)
 - [ ] 2026.07.9 — Pricing multi-sources + test des cles
 - [ ] 2026.07.10 — PWA, theme, recherche, watchlist
@@ -151,6 +151,15 @@ Crypto-Wallet-Tracker/
 - [ ] Airdrops a claim
 
 ## 📋 Changelog
+
+### 2026.07.7 — Alertes health-factor / risque de liquidation
+
+- **Nouveau type d'alerte « health »** : surveille le health factor des positions de lending (lending/borrowing) via l'API Moralis. Déclenche une notification quand le health factor d'au moins une position passe sous le seuil configuré (défaut 1.2).
+- **Intégration Moralis** : réutilise la source de données DeFi existante (`/api/defi/positions`). Sans clé Moralis, l'alerte est marquée « Nécessite une clé Moralis » — jamais de faux positifs ni de 500.
+- **Message d'alerte** inclut le protocole, la chaîne, le health factor courant, le seuil et les montants fournis/empruntés.
+- **UI** : nouveau type « Health / Liquidation » dans le formulaire de création d'alerte, champ seuil (défaut 1.2), scope protocole (tous ou spécifique). Badge « ⚠️ Nécessite une clé Moralis » sur les alertes health sans clé configurée.
+- **Correctif** : `POST /api/alerts` renvoie désormais le vrai `id` inséré (via `cursor.lastrowid` au lieu de `connection.last_insert_rowid`).
+- **i18n** FR/EN, `esc()` partout, défensif total (pas de clé → état lisible, pas de plantage).
 
 ### 2026.07.6 — Moteur d'alertes (prix, portefeuille, mouvements) + notifications + digest
 

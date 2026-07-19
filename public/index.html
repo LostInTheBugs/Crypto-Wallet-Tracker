@@ -260,7 +260,7 @@ tr.tm-off td{opacity:.45}
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>📦 Version</h2>
-        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">2026.07.6</strong></p>
+        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">2026.07.7</strong></p>
         <p id="verStatus" style="font-size:.85rem"></p>
         <button id="updateBtn" class="hidden" onclick="doUpdate()" style="margin-top:8px;background:#238636;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:.85rem">🔄 Mettre à jour</button>
         <p id="updateMsg" style="margin-top:8px;font-size:.8rem;color:#f0c040"></p>
@@ -445,6 +445,13 @@ var T = {
     alPriceDesc: "Se déclenche quand le prix d'un token franchit un seuil.",
     alPortfolioDesc: "Se déclenche quand la valeur totale du portefeuille franchit un seuil.",
     alMoveDesc: "Se déclenche quand la valeur du portefeuille varie de plus de X% sur 24h.",
+    alHealth: "Health / Liquidation",
+    alHealthDesc: "Se déclenche quand le health factor d'une position de lending passe sous le seuil (nécessite une clé API Moralis).",
+    alHealthThresh: "Seuil health factor",
+    alHealthScope: "Protocole",
+    alHealthAny: "Tous les protocoles",
+    alHealthStatusNeedsMoralis: "⚠️ Nécessite une clé Moralis",
+    alHealthFmt: "Health factor {0} sur {1}",
     notifTitle: "Centre de notifications",
     notifNone: "Aucune notification",
     notifMarkAll: "Tout marquer lu",
@@ -610,6 +617,13 @@ var T = {
     alPriceDesc: "Triggers when a token price crosses a threshold.",
     alPortfolioDesc: "Triggers when total portfolio value crosses a threshold.",
     alMoveDesc: "Triggers when portfolio value changes by more than X% in 24h.",
+    alHealth: "Health / Liquidation",
+    alHealthDesc: "Triggers when a lending position's health factor drops below the threshold (requires a Moralis API key).",
+    alHealthThresh: "Health factor threshold",
+    alHealthScope: "Protocol",
+    alHealthAny: "All protocols",
+    alHealthStatusNeedsMoralis: "⚠️ Moralis key required",
+    alHealthFmt: "Health factor {0} on {1}",
     notifTitle: "Notification Center",
     notifNone: "No notifications",
     notifMarkAll: "Mark all read",
@@ -2201,6 +2215,7 @@ function renderAlerts(){
   h+='<option value="price">'+esc(t("alPrice"))+'</option>';
   h+='<option value="portfolio">'+esc(t("alPortfolio"))+'</option>';
   h+='<option value="move">'+esc(t("alMove"))+'</option>';
+  h+='<option value="health">'+esc(t("alHealth"))+'</option>';
   h+='</select>';
   h+='<span id="alNewParams">';
   h+='<input id="alNewSymbol" placeholder="ETH" style="width:80px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 8px;border-radius:6px;font-size:.8rem">';
@@ -2219,12 +2234,14 @@ function renderAlerts(){
     h+='<table><thead><tr><th>'+esc(t("alType"))+'</th><th>'+esc(t("alEnabled"))+'</th><th>'+esc(t("alActions"))+'</th></tr></thead><tbody>';
     for(var i=0;i<alertsData.length;i++){
       var a=alertsData[i];
-      var typeLabel=a.type==="price"?t("alPrice"):a.type==="portfolio"?t("alPortfolio"):t("alMove");
+      var typeLabel=a.type==="price"?t("alPrice"):a.type==="portfolio"?t("alPortfolio"):a.type==="move"?t("alMove"):t("alHealth");
       var paramsDesc="";
       if(a.type==="price") paramsDesc=(a.params.symbol||"?").toUpperCase()+" "+(a.params.direction==="below"?esc(t("alBelow")):esc(t("alAbove")))+" $"+String(a.params.threshold_usd||"");
       else if(a.type==="portfolio") paramsDesc=(a.params.direction==="below"?esc(t("alBelow")):esc(t("alAbove")))+" $"+String(a.params.threshold_usd||"");
+      else if(a.type==="health"){paramsDesc=t("alHealthThresh")+": "+String(a.params.threshold||"1.2")+" • "+(a.params.scope&&a.params.scope!=="any"?a.params.scope:t("alHealthAny"));}
       else paramsDesc="±"+String(a.params.pct||"")+"%";
-      h+='<tr><td><strong>'+esc(typeLabel)+'</strong><br><span style="font-size:.72rem;color:#6e7681">'+esc(paramsDesc)+'</span></td>';
+      var statusLine="";if(a.type==="health"&&a.status==="missing_moralis")statusLine=' <span style="font-size:.68rem;color:#f0883e">'+esc(t("alHealthStatusNeedsMoralis"))+'</span>';
+      h+='<tr><td><strong>'+esc(typeLabel)+'</strong><br><span style="font-size:.72rem;color:#6e7681">'+esc(paramsDesc)+statusLine+'</span></td>';
       h+='<td><input type="checkbox"'+(a.enabled?" checked":"")+' onchange="toggleAlert('+a.id+',this.checked)"></td>';
       h+='<td><button class="btn" style="padding:4px 10px;font-size:.72rem;background:#f85149;color:#fff;border:none;border-radius:4px;cursor:pointer" onclick="deleteAlert('+a.id+')">'+esc(t("alDelete"))+'</button></td></tr>';
     }
@@ -2319,6 +2336,7 @@ function onAlTypeChange(){
   var desc=document.getElementById("alNewDesc");
   if(typ==="price"){params.innerHTML='<input id="alNewSymbol" placeholder="ETH" style="width:80px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 8px;border-radius:6px;font-size:.8rem"><select id="alNewDir" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 8px;border-radius:6px;font-size:.8rem"><option value="above">'+esc(t("alAbove"))+'</option><option value="below">'+esc(t("alBelow"))+'</option></select><input id="alNewThresh" type="number" placeholder="$0.00" step="any" style="width:100px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 8px;border-radius:6px;font-size:.8rem">';desc.textContent=t("alPriceDesc")}
   else if(typ==="portfolio"){params.innerHTML='<select id="alNewDir" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 8px;border-radius:6px;font-size:.8rem"><option value="above">'+esc(t("alAbove"))+'</option><option value="below">'+esc(t("alBelow"))+'</option></select><input id="alNewThresh" type="number" placeholder="$0.00" step="any" style="width:120px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 8px;border-radius:6px;font-size:.8rem">';desc.textContent=t("alPortfolioDesc")}
+  else if(typ==="health"){params.innerHTML='<input id="alNewThresh" type="number" placeholder="1.2" step="any" style="width:80px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 8px;border-radius:6px;font-size:.8rem"><select id="alNewScope" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 8px;border-radius:6px;font-size:.8rem"><option value="any">'+esc(t("alHealthAny"))+'</option></select>';desc.textContent=t("alHealthDesc")}
   else{params.innerHTML='<input id="alNewPct" type="number" placeholder="5" step="any" style="width:80px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 8px;border-radius:6px;font-size:.8rem"><span style="font-size:.8rem;color:var(--text)">%</span>';desc.textContent=t("alMoveDesc")}
 }
 
@@ -2327,7 +2345,7 @@ async function createAlert(){
   var params={};
   if(typ==="price"){params.symbol=String(document.getElementById("alNewSymbol")?document.getElementById("alNewSymbol").value:"").trim();params.direction=String(document.getElementById("alNewDir")?document.getElementById("alNewDir").value:"above");params.threshold_usd=parseFloat(String(document.getElementById("alNewThresh")?document.getElementById("alNewThresh").value:"0"))}
   else if(typ==="portfolio"){params.direction=String(document.getElementById("alNewDir")?document.getElementById("alNewDir").value:"above");params.threshold_usd=parseFloat(String(document.getElementById("alNewThresh")?document.getElementById("alNewThresh").value:"0"))}
-  else{params.pct=parseFloat(String(document.getElementById("alNewPct")?document.getElementById("alNewPct").value:"5"))}
+  else if(typ==="health"){params.threshold=parseFloat(String(document.getElementById("alNewThresh")?document.getElementById("alNewThresh").value:"1.2"));params.scope=String(document.getElementById("alNewScope")?document.getElementById("alNewScope").value:"any")}
   try{await fetch("/api/alerts",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({type:typ,params:params})})}catch(e){console.error(e)}
   await loadAlerts();
 }

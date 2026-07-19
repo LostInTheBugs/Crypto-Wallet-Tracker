@@ -279,6 +279,8 @@ async def evaluate_alerts_for_user(user_id: int) -> int:
     current_prices = None
     total_value = None
     move_change = None
+    health_positions = None
+    health_moralis_checked = False
 
     for al in alerts:
         alert_id = al["id"]
@@ -335,6 +337,33 @@ async def evaluate_alerts_for_user(user_id: int) -> int:
                 direction_str = "hausse" if move_change > 0 else "baisse"
                 title = f"🚨 Mouvement de portefeuille"
                 body = f"{direction_str} de {abs(move_change):.1f}% sur 24h (seuil: {pct}%)"
+
+        elif alert_type == "health":
+            if not health_moralis_checked:
+                # Check Moralis key once for all health alerts of this user
+                moralis_key = await _get_moralis_key_for_user(user_id)
+                if moralis_key:
+                    health_positions = await _fetch_health_factors_for_user(moralis_key, user_id)
+                else:
+                    health_positions = []
+                health_moralis_checked = True
+            # Only evaluate if Moralis key is available (health_positions is non-empty list from API)
+            if health_positions:
+                threshold = float(params.get("threshold") or 1.2)
+                scope = (params.get("scope") or "any").strip().lower()
+                for pos in health_positions:
+                    hf = pos.get("health_factor")
+                    if hf is not None and isinstance(hf, (int, float)) and hf < threshold:
+                        if scope == "any" or scope == pos.get("protocol_id", "") or scope == pos.get("protocol", "").lower():
+                            triggered_now = True
+                            title = "⚠️ Risque de liquidation"
+                            body = (
+                                f"Position {pos.get('protocol', '')} ({pos.get('chain', '')}) "
+                                f"health factor {hf:.2f} < seuil {threshold}\n"
+                                f"Fourni: ${pos.get('supplied_usd', 0):,.2f} "
+                                f"Emprunté: ${pos.get('borrowed_usd', 0):,.2f}"
+                            )
+                            break
 
         if triggered_now:
             triggered += 1
@@ -491,3 +520,77 @@ async def _send_digest(user_id: int, frequency: str, channel: str):
 
     # Also create an in-app notification
     await send_alert_notification(user_id, 0, title, body)
+
+
+# ── Health alert helpers ──────────────────────────────────────
+
+
+async def _get_moralis_key_for_user(user_id: int) -> str:
+    """Get Moralis API key for user, fallback to env var."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT api_key FROM user_api_keys WHERE user_id=? AND provider='moralis'",
+            (user_id,))
+        row = await cur.fetchone()
+    if row:
+        return row["api_key"] or ""
+    return os.environ.get("MORALIS_API_KEY", "")
+
+
+async def _fetch_health_factors_for_user(api_key: str, user_id: int) -> list[dict]:
+    """Fetch DeFi positions with health_factor across all user wallets via Moralis.
+
+    Returns list of {protocol, protocol_id, chain, health_factor, supplied_usd, borrowed_usd}.
+    Empty list if no positions have health_factor or API fails.
+    """
+    import sys as _sys, os as _os
+    _abs = _os.path.dirname(_os.path.abspath(__file__))
+    if _abs not in _sys.path:
+        _sys.path.insert(0, _abs)
+    from defi_service import MORALIS_DEFI_CHAINS, normalize_defi_positions
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT address FROM wallets WHERE user_id=?", (user_id,))
+        wallets = await cur.fetchall()
+
+    if not wallets:
+        return []
+
+    base = "https://deep-index.moralis.io/api/v2.2"
+    headers = {"X-API-Key": api_key, "Accept": "application/json"}
+    all_positions = []
+
+    try:
+        async with httpx.AsyncClient(timeout=25, follow_redirects=True) as client:
+            for w in wallets:
+                addr = w["address"]
+                for chain in MORALIS_DEFI_CHAINS:
+                    try:
+                        r = await client.get(
+                            f"{base}/wallets/{addr}/defi/positions",
+                            params={"chain": chain}, headers=headers)
+                        if r.status_code != 200:
+                            continue
+                        payload = r.json()
+                    except Exception:
+                        continue
+                    try:
+                        positions = normalize_defi_positions(payload, chain=chain)
+                    except Exception:
+                        continue
+                    for pos in positions:
+                        if isinstance(pos, dict) and pos.get("health_factor") is not None:
+                            all_positions.append({
+                                "protocol": pos.get("protocol", ""),
+                                "protocol_id": pos.get("protocol_id", ""),
+                                "chain": pos.get("chain", ""),
+                                "health_factor": pos["health_factor"],
+                                "supplied_usd": pos.get("supplied_usd", 0),
+                                "borrowed_usd": pos.get("borrowed_usd", 0),
+                            })
+    except Exception as e:
+        _log.warning("Health factor fetch failed for user %d: %s", user_id, e)
+
+    return all_positions

@@ -2938,17 +2938,28 @@ async def list_alerts(user=Depends(get_current_user), db=Depends(get_db)):
         "FROM alerts WHERE user_id=? ORDER BY created_at DESC",
         (user["id"],))
     rows = await cur.fetchall()
+
+    # For health alerts, check Moralis key availability
+    has_health = any(r["type"] == "health" for r in rows)
+    moralis_available = None
+    if has_health:
+        api_key = await _get_user_moralis_key(user["id"])
+        moralis_available = bool(api_key)
+
     result = []
     for r in rows:
         try:
             params = json.loads(r["params_json"] or "{}")
         except Exception:
             params = {}
-        result.append({
+        entry = {
             "id": r["id"], "type": r["type"], "params": params,
             "enabled": bool(r["enabled"]), "cooldown_min": r["cooldown_min"],
             "last_triggered_at": r["last_triggered_at"], "created_at": r["created_at"],
-        })
+        }
+        if r["type"] == "health":
+            entry["status"] = "ok" if moralis_available else "missing_moralis"
+        result.append(entry)
     return result
 
 
@@ -2956,19 +2967,19 @@ async def list_alerts(user=Depends(get_current_user), db=Depends(get_db)):
 async def create_alert(request: Request, user=Depends(get_current_user), db=Depends(get_db)):
     data = await request.json()
     alert_type = (data.get("type") or "").strip().lower()
-    if alert_type not in ("price", "portfolio", "move"):
-        raise HTTPException(400, "Type invalide (price, portfolio, move)")
+    if alert_type not in ("price", "portfolio", "move", "health"):
+        raise HTTPException(400, "Type invalide (price, portfolio, move, health)")
     params = data.get("params") or data.get("params_json") or {}
     if isinstance(params, str):
         try: params = json.loads(params)
         except Exception: raise HTTPException(400, "params_json invalide")
     enabled = 1 if data.get("enabled", True) else 0
     cooldown = int(data.get("cooldown_min") or 60)
-    await db.execute(
+    cur = await db.execute(
         "INSERT INTO alerts (user_id, type, params_json, enabled, cooldown_min) VALUES (?, ?, ?, ?, ?)",
         (user["id"], alert_type, json.dumps(params), enabled, max(1, cooldown)))
     await db.commit()
-    return {"ok": True, "id": db.last_insert_rowid if hasattr(db, 'last_insert_rowid') else None}
+    return {"ok": True, "id": cur.lastrowid}
 
 
 @app.put("/api/alerts/{alert_id}")
