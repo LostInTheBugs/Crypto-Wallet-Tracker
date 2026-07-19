@@ -296,7 +296,12 @@ async def lifespan(app: FastAPI):
                 FOREIGN KEY(user_id) REFERENCES users(id)
             )
         """)
-        # v2.12.5 — sweep idempotent des lignes orphelines au démarrage : purge
+        # 2026.07.11 -- watch_only + group_label on wallets (idempotent)
+        try: await db.execute("ALTER TABLE wallets ADD COLUMN watch_only INTEGER DEFAULT 0")
+        except: pass
+        try: await db.execute("ALTER TABLE wallets ADD COLUMN group_label TEXT DEFAULT ''")
+        except: pass
+        # v2.12.5 -- sweep idempotent des lignes orphelines au demarrage : purge
         # toute donnée dont le wallet n'existe plus dans wallets (comparaison
         # insensible à la casse — le worker de reconstruction a pu écrire des
         # adresses en casse checksum). Protège contre d'anciens cascades ratés.
@@ -425,8 +430,8 @@ async def change_password(request: Request, user=Depends(get_current_user), db=D
 
 @app.get("/api/wallets")
 async def list_wallets(user=Depends(get_current_user), db=Depends(get_db)):
-    cur = await db.execute("SELECT id, address, label FROM wallets WHERE user_id=? ORDER BY created_at", (user["id"],))
-    return [{"id": r["id"], "address": r["address"], "label": r["label"]} for r in await cur.fetchall()]
+    cur = await db.execute("SELECT id, address, label, watch_only, group_label FROM wallets WHERE user_id=? ORDER BY created_at", (user["id"],))
+    return [{"id": r["id"], "address": r["address"], "label": r["label"], "watch_only": bool(r["watch_only"]), "group_label": r["group_label"] or ""} for r in await cur.fetchall()]
 
 
 @app.post("/api/wallets")
@@ -434,9 +439,12 @@ async def add_wallet(request: Request, user=Depends(get_current_user), db=Depend
     data = await request.json()
     address = (data.get("address") or "").strip()
     label = (data.get("label") or "").strip()[:50]
+    watch_only = 1 if data.get("watch_only") else 0
+    group_label = (data.get("group_label") or "").strip()[:50]
     if not address.startswith("0x") or len(address) != 42:
         raise HTTPException(400, "Adresse EVM invalide")
-    await db.execute("INSERT INTO wallets (user_id, address, label) VALUES (?, ?, ?)", (user["id"], address, label))
+    await db.execute("INSERT INTO wallets (user_id, address, label, watch_only, group_label) VALUES (?, ?, ?, ?, ?)",
+                     (user["id"], address, label, watch_only, group_label))
     await db.commit()
     asyncio.create_task(_fetch_then_rebuild(user["id"], address))
     return {"ok": True}
@@ -468,7 +476,16 @@ async def del_wallet(wallet_id: int, user=Depends(get_current_user), db=Depends(
 async def edit_wallet(wallet_id: int, request: Request, user=Depends(get_current_user), db=Depends(get_db)):
     data = await request.json()
     label = (data.get("label") or "").strip()[:50]
-    await db.execute("UPDATE wallets SET label=? WHERE id=? AND user_id=?", (label, wallet_id, user["id"]))
+    updates = ["label=?"]
+    params = [label]
+    if "watch_only" in data:
+        updates.append("watch_only=?")
+        params.append(1 if data["watch_only"] else 0)
+    if "group_label" in data:
+        updates.append("group_label=?")
+        params.append((data["group_label"] or "").strip()[:50])
+    params.extend([wallet_id, user["id"]])
+    await db.execute(f"UPDATE wallets SET {', '.join(updates)} WHERE id=? AND user_id=?", params)
     await db.commit()
     return {"ok": True}
 

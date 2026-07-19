@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — 2026.07.10
+# Crypto Wallet Tracker — 2026.07.11
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -140,7 +140,7 @@ Crypto-Wallet-Tracker/
 - [x] 2026.07.8 — Valorisation NFT (prix planchers)
 - [x] 2026.07.9 — Pricing multi-sources + test des cles
 - [x] 2026.07.10 — NFT : liens source + fiabilite des floors
-- [ ] 2026.07.11 — PWA, theme, recherche, watchlist
+- [x] 2026.07.11 — PWA, theme, recherche, watchlist
 - [ ] 2026.07.12 — Consolidation SQLite (ecritures serialisees)
 - [ ] 2026.07.13 — Sauvegardes auto + sante + tests/CI
 - [ ] 2026.07.14 — Durcissement auth & comptes
@@ -153,6 +153,14 @@ Crypto-Wallet-Tracker/
 - [ ] Airdrops a claim
 
 ## 📋 Changelog
+
+### 2026.07.11 — PWA installable, theme clair/sombre, recherche globale, watchlist & groupes
+
+- **PWA installable** : manifest.json, service worker (cache app shell, network-first pour API), icônes 192×192 et 512×512. L'app est installable sur mobile/desktop avec affichage hors-ligne basique.
+- **Thème clair / sombre** : variables CSS pour les deux thèmes, bouton bascule 🌙/☀️ dans la sidebar, choix persisté dans localStorage. Vérifié pour la lisibilité (contraste des textes, badges, graphiques Chart.js).
+- **Recherche / filtre global** : champ de recherche dans la topbar qui filtre instantanément (côté client) les tokens (par symbole/nom/chaîne/wallet) et les transactions (par symbole/nom/hash/adresse/chaîne). Insensible à la casse.
+- **Watchlist (lecture seule)** : colonne `watch_only` sur les wallets. Une adresse en surveillance est affichée et consultable mais **exclue des totaux** (net worth, dashboard, analytics, snapshots). Badge « 👁 surveillance » et bouton pour basculer.
+- **Groupes de wallets** : champ `group_label` optionnel sur les wallets. Affichage groupé dans la liste des wallets (ligne de séparation par groupe). Sans impact sur les totaux.
 
 ### 2026.07.10 — NFT : liens source directs + fiabilite des floors (liquidite)
 

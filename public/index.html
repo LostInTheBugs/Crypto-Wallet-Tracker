@@ -4,9 +4,31 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Crypto Wallet Tracker</title>
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#0a0e14">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.min.js"></script>
 <style>
 :root{--bg:#0a0e14;--card:#12161c;--border:#1e2530;--text:#b0b8c4;--title:#e6edf3;--accent:#4dabf7;--green:#40c463;--red:#f85149}
+/* Light theme */
+html.light{--bg:#f0f2f5;--card:#ffffff;--border:#d0d7de;--text:#57606a;--title:#1f2328;--accent:#0969da;--green:#1a7f37;--red:#cf222e}
+html.light .sidebar a:hover,html.light .sidebar a.active,html.light .wallet-tab.active{color:var(--accent);background:#ddf4ff;border-left-color:var(--accent)}
+html.light .wallet-tab{background:var(--card)}
+html.light .wallet-tab.all{background:#dafbe1;border-color:#4ade80;font-weight:700}
+html.light tr:hover td{background:#f6f8fa}
+html.light input{background:var(--card);border-color:var(--border);color:var(--title)}
+html.light select{background:var(--card);border-color:var(--border);color:var(--accent)}
+html.light .modal-box{background:var(--card)}
+html.light .spinner{border-color:var(--border);border-top-color:var(--accent)}
+html.light .chain-tag{background:#eef0f4;border-color:var(--border);color:#57606a}
+html.light .range-pill:hover{background:#eef0f4;color:var(--title)}
+html.light .switch .slider{background:#d0d7de}
+html.light .tok-chip-off{background:#eceff4;color:#57606a}
+html.light .tm-badge{background:#fff3cd;color:#9a6700}
+html.light #viewLogin .card{background:rgba(255,255,255,.9)}
+html.light .api-card:hover{border-color:#afb8c1}
+html.light .api-badge-cat{background:#eef0f4;color:#57606a}
+html.light .btn-api-test{background:transparent;color:#57606a;border:1px solid #d0d7de}
+html.light .btn-api-test:hover{background:#f0f2f5;color:var(--title)}
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;font-size:14px;display:flex}
 .sidebar{width:220px;background:var(--card);border-right:1px solid var(--border);height:100vh;padding:20px 0;flex-shrink:0;display:flex;flex-direction:column;position:sticky;top:0;align-self:flex-start;overflow-y:auto}
@@ -22,6 +44,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 .topbar .user{color:var(--accent);font-size:.8rem}
 .topbar button{background:var(--card);border:1px solid var(--border);color:var(--text);padding:5px 12px;border-radius:5px;cursor:pointer;font-size:.8rem}
 .topbar button:hover{background:#1a2332}
+html.light .topbar button:hover{background:#eef0f4}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:20px}
 .stat-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px 18px}
 .stat-card .label{font-size:.7rem;color:#6e7681;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
@@ -151,6 +174,7 @@ tr.tm-off td{opacity:.45}
   <a href="#" onclick="switchPage('txns')" data-page="txns">📜 <span>Transactions</span></a>
   <a href="#" onclick="switchPage('alerts')" data-page="alerts">🔔 <span>Alertes</span></a>
   <a href="#" onclick="switchPage('wallets')" data-page="wallets">💼 <span>Wallets</span></a>
+  <a href="#" onclick="toggleTheme()" id="themeBtn" style="padding:10px 20px;color:var(--text);text-decoration:none;font-size:.85rem;cursor:pointer">🌙 <span>Sombre</span></a>
   <a href="#" onclick="switchPage('settings')" data-page="settings" style="margin-top:auto">⚙️ <span>Paramètres</span></a>
 </div>
 
@@ -168,6 +192,16 @@ tr.tm-off td{opacity:.45}
   </div>
 
   <div id="viewDash" class="hidden">
+    <div class="topbar">
+      <h1 id="pageTitle">📊 Dashboard <span id="walletBadge"></span></h1>
+      <div class="topbar-right">
+        <input id="globalSearch" type="text" placeholder="Rechercher... (symbole, nom, hash)" style="max-width:260px;font-size:.78rem" oninput="applyGlobalSearch()">
+        <span class="user" id="currentUser"></span>
+        <select id="quickWallet" onchange="changeWallet()" style="max-width:180px;font-size:.75rem"></select>
+        <button onclick="logout()" style="margin-left:4px" id="btnLogout">Déconnexion</button>
+      </div>
+    </div>
+    <div class="wallets-bar" id="walletTabs"></div>
 
     <div id="importModal" class="modal-overlay hidden">
       <div class="modal-box">
@@ -264,7 +298,7 @@ tr.tm-off td{opacity:.45}
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>📦 Version</h2>
-        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">2026.07.10</strong></p>
+        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">2026.07.11</strong></p>
         <p id="verStatus" style="font-size:.85rem"></p>
         <button id="updateBtn" class="hidden" onclick="doUpdate()" style="margin-top:8px;background:#238636;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:.85rem">🔄 Mettre à jour</button>
         <p id="updateMsg" style="margin-top:8px;font-size:.8rem;color:#f0c040"></p>
@@ -670,8 +704,8 @@ var T = {
 function t(key) { return (T[LANG] && T[LANG][key]) || key; }
 function applyLang() {
   document.getElementById("setLang").value = LANG;
-  // Update sidebar
-  var links = document.querySelectorAll(".sidebar a");
+  // Update sidebar (only data-page links, skip themeBtn)
+  var links = document.querySelectorAll(".sidebar a[data-page]");
   var keys = ["dashboard","stats","analytics","tokens","defi","nfts","txns","alerts","wallets","settings"];
   for (var i=0;i<Math.min(links.length,keys.length);i++) {
     var span = links[i].querySelector("span");
@@ -731,8 +765,41 @@ try{
   })}
 }catch(e){}
 
-// Tri générique, ne mute pas le tableau d'origine.
-// null/undefined/"" (et NaN en numérique) vont TOUJOURS en fin de liste,
+// ── Theme toggle ──────────────────────────────────────────────
+(function(){
+  var savedTheme = localStorage.getItem("theme") || "dark";
+  if (savedTheme === "light") document.documentElement.classList.add("light");
+  function _updateBtn() {
+    var btn = document.querySelector("#themeBtn");
+    if (!btn) return;
+    var isLight = document.documentElement.classList.contains("light");
+    btn.innerHTML = isLight ? "☀️ <span>Clair</span>" : "🌙 <span>Sombre</span>";
+  }
+  window.toggleTheme = function(){
+    document.documentElement.classList.toggle("light");
+    var isLight = document.documentElement.classList.contains("light");
+    localStorage.setItem("theme", isLight ? "light" : "dark");
+    _updateBtn();
+  };
+  _updateBtn();
+})();
+
+// ── Global search ─────────────────────────────────────────────
+function applyGlobalSearch(){
+  var q = (document.getElementById("globalSearch").value || "").toLowerCase().trim();
+  // Filter token table rows
+  if (currentPage === "tokens" && lastResult) renderTokenTable(lastResult, q);
+  // Filter transaction rows
+  if (currentPage === "txns" && txnData) renderTxnTable(q);
+}
+
+// ── Service Worker registration ───────────────────────────────
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(function(e) { console.warn('sw:', e.message); });
+}
+
+// ── Tri des colonnes (v2.12.3) -- 100% cote client ─────────────
+var SORT_DEFAULTS={act:{key:"usd_value",dir:-1,type:"num"},inact:{key:"usd_value",dir:-1,type:"num"},txn:{key:"block_time",dir:-1,type:"date"}};
 // quel que soit le sens (ex. PNL inconnu «—»).
 function sortRows(arr,key,dir,type){
   var out=(arr||[]).slice();
@@ -830,18 +897,28 @@ async function logout(){await fetch("/api/auth/logout",{method:"POST"});try{Obje
 
 async function showDash(){
   document.getElementById("viewLogin").classList.add("hidden");document.getElementById("viewDash").classList.remove("hidden");document.getElementById("sidebar").classList.remove("hidden");document.getElementById("btnLogout").classList.remove("hidden");
-  var r=await fetch("/api/auth/me");if(r.ok){var u=await r.json();var ui=document.getElementById("userInfo");if(ui)ui.textContent=u.username}
+  var r=await fetch("/api/auth/me");if(r.ok){var u=await r.json();var ui=document.getElementById("userInfo");if(ui)ui.textContent=u.username;var cu=document.getElementById("currentUser");if(cu)cu.textContent=u.username}
   applyLang();
   await loadWallets();
 }
 
-async function loadWallets(){var r=await fetch("/api/wallets");wallets=await r.json();renderWalletTabs();loadView()}
+async function loadWallets(){var r=await fetch("/api/wallets");wallets=await r.json();renderWalletTabs();populateQuickWallet();loadView()}
+
+function populateQuickWallet(){
+  var sel=document.getElementById("quickWallet");
+  if(!sel)return;
+  sel.innerHTML='<option value="ALL">🏠 Tous</option>';
+  for(var i=0;i<wallets.length;i++){var w=wallets[i];sel.innerHTML+='<option value="'+w.address+'">'+(w.watch_only?"👁 ":"")+(w.label||w.address.slice(0,10)+"...")+'</option>'}
+  sel.value=activeWallet;
+}
+
+function changeWallet(){var v=document.getElementById("quickWallet").value;if(v)selectWallet(v)}
 
 function renderWalletTabs(){
   var el=document.getElementById("walletTabs");
   if(!el)return;
-  var html='<div class="wallet-tab all'+(activeWallet=="ALL"?" active":"")+'" onclick="selectWallet(\"ALL\")">🏠 Tous</div>';
-  for(var i=0;i<wallets.length;i++){var w=wallets[i];html+='<div class="wallet-tab'+(w.address==activeWallet?" active":"")+'" onclick="selectWallet(\"'+w.address+'\")">'+(w.label||w.address.slice(0,10)+"...")+'<span class="del" onclick="event.stopPropagation();delWallet('+w.id+')">&times;</span></div>'}
+  var html='<div class="wallet-tab all'+(activeWallet=="ALL"?" active":"")+'" onclick="selectWallet(\'ALL\')">🏠 Tous</div>';
+  for(var i=0;i<wallets.length;i++){var w=wallets[i];html+='<div class="wallet-tab'+(w.address==activeWallet?" active":"")+'" onclick="selectWallet(\''+w.address+'\')">'+(w.watch_only?"👁 ":"")+(w.label||w.address.slice(0,10)+"...")+'<span class="del" onclick="event.stopPropagation();delWallet('+w.id+')">&times;</span></div>'}
   el.innerHTML=html;
 }
 
@@ -850,6 +927,8 @@ function selectWallet(addr){activeWallet=addr;renderWalletTabs();loadView()}
 async function delWallet(id){if(!confirm("Supprimer ?"))return;await fetch("/api/wallets/"+id,{method:"DELETE"});if(wallets.find(function(w){return w.id==id&&w.address==activeWallet}))activeWallet="ALL";await loadWallets();if(currentPage=="wallets")renderWalletPage()}
 
 function renderWalletPage(){
+  // Sort by group then label
+  var sorted=wallets.slice().sort(function(a,b){var ga=(a.group_label||"").toLowerCase(),gb=(b.group_label||"").toLowerCase();if(ga!==gb)return ga.localeCompare(gb);return (a.label||"").localeCompare(b.label||"")});
   var html = '<div class="card" style="margin-bottom:16px"><h2>+ Ajouter un wallet</h2><div class="add-form">'+
     '<input id="walletAddr" type="text" placeholder="Adresse EVM (0x...)">'+
     '<input id="walletLabel" type="text" placeholder="Label">'+
@@ -858,16 +937,25 @@ function renderWalletPage(){
   if (wallets.length == 0) {
     html += '<div class="loading">Aucun wallet</div>';
   } else {
-    html += '<table><thead><tr><th>Label</th><th>Adresse</th><th>Montant</th><th>Tokens</th><th>Chaînes</th><th>Gaz</th><th style="width:80px"></th></tr></thead><tbody>';
-    for (var i=0;i<wallets.length;i++) {
-      html += '<tr><td><span id="wlbl_'+wallets[i].id+'" onclick="editLabel('+wallets[i].id+')" style="cursor:pointer;color:var(--accent)" title="Cliquer pour éditer">'+(wallets[i].label||"—")+' ✎</span></td>'+
-        '<td style="font-family:monospace;font-size:.8rem">'+wallets[i].address+'</td>'+
-        '<td class="usd" id="wamt_'+wallets[i].id+'">…</td>'+
-        '<td id="wtok_'+wallets[i].id+'">…</td>'+
-        '<td id="wchain_'+wallets[i].id+'" style="max-width:340px">…</td>'+'<td class="usd" id="wgas_'+wallets[i].id+'">…</td>'+'<td><button class="btn btn-red" style="padding:4px 10px;font-size:.7rem" onclick="delWallet('+wallets[i].id+')">✕</button></td></tr>';
+    html += '<table><thead><tr><th>Label</th><th>Adresse</th><th>Groupe</th><th>Montant</th><th>Tokens</th><th>Chaînes</th><th>Gaz</th><th style="width:50px">Surv.</th><th style="width:50px"></th></tr></thead><tbody>';
+    var curGroup="";
+    for (var i=0;i<sorted.length;i++) {
+      var showGroup=(sorted[i].group_label||"")!==curGroup;
+      curGroup=sorted[i].group_label||"";
+      if(showGroup&&curGroup) html+='<tr style="background:var(--bg)"><td colspan="9" style="font-weight:700;color:var(--accent);font-size:.78rem;padding:6px 12px;border-bottom:2px solid var(--accent)">📁 '+curGroup+'</td></tr>';
+      html += '<tr'+(sorted[i].watch_only?' style="opacity:.7"':'')+'><td><span id="wlbl_'+sorted[i].id+'" onclick="editLabel('+sorted[i].id+')" style="cursor:pointer;color:var(--accent)" title="Cliquer pour éditer">'+(sorted[i].label||"—")+' ✎</span>'+
+        (sorted[i].watch_only?' <span class="tm-badge" style="background:#1a2332;color:#8b949e;font-size:.62rem;padding:1px 6px;border-radius:8px">👁 surveillance</span>':'')+
+        '</td>'+
+        '<td style="font-family:monospace;font-size:.8rem">'+sorted[i].address+'</td>'+
+        '<td style="color:var(--text);font-size:.78rem">'+esc(sorted[i].group_label||"—")+'</td>'+
+        '<td class="usd" id="wamt_'+sorted[i].id+'">…</td>'+
+        '<td id="wtok_'+sorted[i].id+'">…</td>'+
+        '<td id="wchain_'+sorted[i].id+'" style="max-width:340px">…</td>'+'<td class="usd" id="wgas_'+sorted[i].id+'">…</td>'+
+        '<td><button id="wo_'+sorted[i].id+'" class="btn '+(sorted[i].watch_only?'btn-blue':'')+'" style="padding:4px 8px;font-size:.65rem" onclick="toggleWatchOnly('+sorted[i].id+')">'+(sorted[i].watch_only?'👁':'👁‍🗨')+'</button></td>'+
+        '<td><button class="btn btn-red" style="padding:4px 10px;font-size:.7rem" onclick="delWallet('+sorted[i].id+')">✕</button></td></tr>';
     }
     html += '</tbody>';
-    if(wallets.length>1)html+='<tfoot><tr><td style="font-weight:600">Total</td><td></td><td class="usd" id="wtotal_amt">…</td><td></td><td></td><td class="usd" id="wtotal_gas">…</td><td></td></tr></tfoot>';
+    if(wallets.length>1)html+='<tfoot><tr><td style="font-weight:600">Total</td><td></td><td></td><td class="usd" id="wtotal_amt">…</td><td></td><td></td><td class="usd" id="wtotal_gas">…</td><td></td><td></td></tr></tfoot>';
     html += '</table>';
   }
   html += '</div>';
@@ -875,8 +963,19 @@ function renderWalletPage(){
   if(wallets.length)fillWalletRows();
 }
 
+// ── Toggle watch-only ─────────────────────────────────────────
+async function toggleWatchOnly(id){
+  var w=wallets.find(function(x){return x.id===id});if(!w)return;
+  var wo=w.watch_only?0:1;
+  await fetch("/api/wallets/"+id,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({watch_only:wo})});
+  await loadWallets();
+  if(currentPage=="wallets") renderWalletPage();
+  else loadView();
+}
+
 // ── Détails par wallet (montant, tokens, chaînes détectées) ──────
 var _wPageTotals={};
+var _wWatchOnly={};
 function _wRowFill(id,d){
   var amt=document.getElementById("wamt_"+id),tok=document.getElementById("wtok_"+id),ch=document.getElementById("wchain_"+id);
   if(!amt||!tok||!ch||!d)return;
@@ -887,7 +986,8 @@ function _wRowFill(id,d){
   names.sort(function(a,b){return (d.chains[b]||0)-(d.chains[a]||0)});
   var n=(d.chain_count!=null)?d.chain_count:names.length;
   ch.innerHTML='<b>'+n+'</b>'+(names.length?' <span style="color:#6e7681;font-size:.68rem">'+names.join(", ")+'</span>':'');
-  _wPageTotals[id]=d.total_usd||0;
+  var isWo=_wWatchOnly[id]||false;
+  if(!isWo)_wPageTotals[id]=d.total_usd||0;
   var tot=document.getElementById("wtotal_amt");
   if(tot){var s=0;for(var k in _wPageTotals)if(_wPageTotals.hasOwnProperty(k))s+=_wPageTotals[k];tot.textContent=fmtCurr(s)}
 }
@@ -896,7 +996,9 @@ function _wRowErr(id){
 }
 function fillWalletRows(){
   _wPageTotals={};
+  _wWatchOnly={};
   wallets.forEach(function(w){
+    _wWatchOnly[w.id]=w.watch_only||false;
     var cached=pfCacheRead(w.address);
     if(cached)_wRowFill(w.id,cached.data);
     fetch("/api/portfolio?address="+w.address)
@@ -1002,8 +1104,11 @@ async function loadAllWallets(force){
   try{
     var promises=wallets.map(function(w){return fetch("/api/portfolio?address="+w.address+(force?"&force=true":"")).then(function(r){return r.json()})});
     var results=await Promise.all(promises);
-    var totalUsd=0,defiUsd=0,allTokens=[],chainTotals={},chainSet={},allErrors=[],defiBreakdown={},activeCount=0,inactiveCount=0;
-    for(var i=0;i<results.length;i++){var d=results[i],w=wallets[i];totalUsd+=d.total_usd||0;defiUsd+=d.defi_usd||d.staked_usd||0;activeCount+=d.active_count||0;inactiveCount+=d.inactive_count||0;for(var j=0;j<d.tokens.length;j++){var tk=d.tokens[j];tk._wallet=w.label||w.address.slice(0,10)+"...";allTokens.push(tk)}for(var c in d.chains){if(d.chains.hasOwnProperty(c)){chainTotals[c]=(chainTotals[c]||0)+d.chains[c];chainSet[c]=true}}if(d.errors)for(var k=0;k<d.errors.length;k++)allErrors.push({wallet:w.label||w.address.slice(0,10)+"...",chain:d.errors[k].chain,error:d.errors[k].error});if(d.defi_breakdown)for(var dc in d.defi_breakdown){if(d.defi_breakdown.hasOwnProperty(dc))defiBreakdown[dc]=(defiBreakdown[dc]||0)+d.defi_breakdown[dc]}}
+    var totalUsd=0,defiUsd=0,watchOnlyUsd=0,allTokens=[],chainTotals={},chainSet={},allErrors=[],defiBreakdown={},activeCount=0,inactiveCount=0,activeWalletCount=0;
+    for(var i=0;i<results.length;i++){var d=results[i],w=wallets[i];
+      if(w.watch_only){watchOnlyUsd+=d.total_usd||0;continue}
+      activeWalletCount++;
+      totalUsd+=d.total_usd||0;defiUsd+=d.defi_usd||d.staked_usd||0;activeCount+=d.active_count||0;inactiveCount+=d.inactive_count||0;for(var j=0;j<d.tokens.length;j++){var tk=d.tokens[j];tk._wallet=w.label||w.address.slice(0,10)+"...";allTokens.push(tk)}for(var c in d.chains){if(d.chains.hasOwnProperty(c)){chainTotals[c]=(chainTotals[c]||0)+d.chains[c];chainSet[c]=true}}if(d.errors)for(var k=0;k<d.errors.length;k++)allErrors.push({wallet:w.label||w.address.slice(0,10)+"...",chain:d.errors[k].chain,error:d.errors[k].error});if(d.defi_breakdown)for(var dc in d.defi_breakdown){if(d.defi_breakdown.hasOwnProperty(dc))defiBreakdown[dc]=(defiBreakdown[dc]||0)+d.defi_breakdown[dc]}}
     allTokens.sort(function(a,b){return (b.usd_value||0)-(a.usd_value||0)});
     // Actives first (all, value desc), then inactives (value desc, capped) —
     // same layout as the single-wallet backend response.
@@ -1051,9 +1156,17 @@ function renderResult(d){
   if(currentPage=="txns") loadTransactions();
 }
 
-function renderTokenTable(d){
+function renderTokenTable(d,q){
   var sym=currSymbol(),showWallet=activeWallet=="ALL"&&wallets.length>1;
-  var toks=d.tokens||[];
+  var toks=(d.tokens||[]).slice();
+  // Apply search filter
+  q=(q||"").toLowerCase().trim();
+  if(q) toks=toks.filter(function(tk){
+    return (tk.symbol||"").toLowerCase().indexOf(q)!==-1||
+           (tk.name||"").toLowerCase().indexOf(q)!==-1||
+           (tk._wallet||"").toLowerCase().indexOf(q)!==-1||
+           (tk.chain||"").toLowerCase().indexOf(q)!==-1;
+  });
   // Split active / inactive (a token is active unless enabled===false)
   var actArr=[],inactArr=[];
   for(var si=0;si<toks.length;si++){var stk=toks[si];if(stk.enabled===false)inactArr.push(stk);else actArr.push(stk)}
@@ -1899,10 +2012,18 @@ async function loadTransactions(page){
 // Variable de boucle nommée `tx` — JAMAIS `t` (masquerait la fonction i18n t()).
 // Quantité de token lisible (helper dédié — ne pas nommer t/esc/fmtCurr, cf. pitfalls).
 function fmtAmt(n){n=Number(n);if(!isFinite(n))n=0;return n.toLocaleString(undefined,{maximumFractionDigits:6})}
-function renderTxnTable(){
+function renderTxnTable(q){
   if(!txnData)return;
   var sym=currSymbol(),page=txnData.page||0;
+  q=(q||"").toLowerCase().trim();
   var items=sortRows(txnData.items,sortState.txn.key,sortState.txn.dir,sortState.txn.type);
+  if(q) items=items.filter(function(tx){
+    return (tx.token_symbol||"").toLowerCase().indexOf(q)!==-1||
+           (tx.token_name||"").toLowerCase().indexOf(q)!==-1||
+           (tx.tx_hash||"").toLowerCase().indexOf(q)!==-1||
+           (tx.wallet_address||"").toLowerCase().indexOf(q)!==-1||
+           (tx.chain||"").toLowerCase().indexOf(q)!==-1;
+  });
   var html='<table><thead><tr>'+
     sortTh("txn","block_time","date","Date")+
     '<th>Wallet</th>'+
