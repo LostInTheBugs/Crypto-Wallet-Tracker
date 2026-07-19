@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — 2026.07.9
+# Crypto Wallet Tracker — 2026.07.10
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -139,6 +139,7 @@ Crypto-Wallet-Tracker/
 - [x] 2026.07.7 — Alertes health-factor / liquidation
 - [x] 2026.07.8 — Valorisation NFT (prix planchers)
 - [x] 2026.07.9 — Pricing multi-sources + test des cles
+- [x] 2026.07.10 — NFT : liens source + fiabilite des floors
 - [ ] 2026.07.10 — PWA, theme, recherche, watchlist
 - [ ] 2026.07.11 — Consolidation SQLite (ecritures serialisees)
 - [ ] 2026.07.12 — Sauvegardes auto + sante + tests/CI
@@ -152,6 +153,14 @@ Crypto-Wallet-Tracker/
 - [ ] Airdrops a claim
 
 ## 📋 Changelog
+
+### 2026.07.10 — NFT : liens source directs + fiabilite des floors (liquidite)
+
+- **Liens source directs** : chaque NFT affiche désormais un lien direct vers sa source marketplace (`market_url`), en plus du lien explorer Blockscout (`explorer_url`). Si le floor vient d'OpenSea, le lien pointe vers la page de l'asset ou de la collection. Dans `/api/nfts`, chaque item a `market_url` (OpenSea) ET `explorer_url` (Blockscout). La collection de valorisation a aussi les deux liens. **Plus jamais de « source OpenSea » alors que l'item est introuvable sur OpenSea** — le lien pointe vers la vraie source.
+- **Fiabilité des floors (liquidité)** : chaque collection valorisée porte désormais `floor_reliable` (bool) + `floor_confidence` ("high"/"low"/"none"), déterminés par des signaux de liquidité récupérés des APIs sources : volume 24h, nombre de listings actifs, meilleure offre (top bid), nombre de propriétaires. Règles conservatrices : un floor sans volume, sans listings et sans offre = non fiable (confidence "none"), exclu du total.
+- **Totaux séparés** : `nft_total_value_usd` = somme des floors **fiables** uniquement. `nft_indicative_value_usd` = somme des floors non fiables. Le net worth Tokens+NFTs sur le dashboard n'utilise QUE les floors fiables — **plus jamais de net worth gonflé par des collections zombies**.
+- **UI enrichie** : badge de confiance par collection (✓ vert si fiable, « ⚠ indicatif » orange si non fiable, gris si low). Boutons directs « OS » (OpenSea) et « 🔗 » (Explorer) sur chaque carte NFT et chaque ligne de valorisation. La valeur indicative est affichée séparément en orange.
+- **APIs sources enrichies** : OpenSea remonte désormais listings_count, best_offer, volume_24h, num_owners. Reservoir remonte volume_24h, listings_count, best_offer_eth. Moralis inchangé (endpoint floor simple).
 
 ### 2026.07.9 — Pricing multi-sources (CoinGecko) + test des clés API
 

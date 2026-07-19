@@ -1878,14 +1878,23 @@ async def _fetch_nfts_chain(client, chain: str, host: str, address: str, max_pag
                 img = it.get("image_url") or it.get("media_url") or ""
                 if isinstance(img, str) and img.startswith("ipfs://"):
                     img = "https://ipfs.io/ipfs/" + img[7:]
+                contract_addr = (t.get("address") or t.get("address_hash") or "")
+                token_id = str(it.get("id") or "")
+                explorer_url = f"https://{host}/token/{contract_addr}" if contract_addr else ""
+                market_url = ""
+                os_slug_map = _OS_URL_SLUG.get(chain)
+                if os_slug_map and contract_addr and token_id:
+                    market_url = f"https://opensea.io/assets/{os_slug_map}/{contract_addr}/{token_id}"
                 out.append({
                     "chain": chain,
                     "collection": coll,
                     "token_type": it.get("token_type") or t.get("type") or "",
-                    "id": str(it.get("id") or ""),
+                    "id": token_id,
                     "name": name,
                     "image": img,
-                    "contract": (t.get("address") or t.get("address_hash") or ""),
+                    "contract": contract_addr,
+                    "explorer_url": explorer_url,
+                    "market_url": market_url,
                 })
             except Exception:
                 continue
@@ -1919,6 +1928,13 @@ async def get_nfts(address: str = Query(...), user=Depends(get_current_user)):
 # OpenSea: uses our chain names mostly as-is with a few exceptions.
 _OS_CHAIN = {
     "ethereum": "ethereum", "polygon": "polygon", "arbitrum": "arbitrum",
+    "optimism": "optimism", "base": "base", "zora": "zora",
+    "soneium": "soneium", "unichain": "unichain", "linea": "linea",
+    "scroll": "scroll", "gnosis": "gnosis", "bob": "bob",
+}
+# OpenSea URL slug for building market links (differs from API chain names).
+_OS_URL_SLUG = {
+    "ethereum": "ethereum", "polygon": "matic", "arbitrum": "arbitrum",
     "optimism": "optimism", "base": "base", "zora": "zora",
     "soneium": "soneium", "unichain": "unichain", "linea": "linea",
     "scroll": "scroll", "gnosis": "gnosis", "bob": "bob",
@@ -1958,10 +1974,11 @@ async def _get_user_opensea_key(user_id: int) -> str:
 
 async def _fetch_opensea_floor(client, api_key: str, chain: str,
                                 contract: str) -> dict | None:
-    """Fetch floor price from OpenSea API v2.
+    """Fetch floor price + liquidity signals from OpenSea API v2.
 
-    Two-step: contract → collection slug, then best listing.
-    Returns {floor_eth, floor_usd} or None on any error.
+    Three-step: contract → collection slug, best listing, collection stats.
+    Returns {floor_eth, floor_usd, slug, listings_count, best_offer_eth,
+             volume_24h, num_owners} or None on any error.
     """
     os_chain = _OS_CHAIN.get(chain)
     if not os_chain:
@@ -1979,7 +1996,7 @@ async def _fetch_opensea_floor(client, api_key: str, chain: str,
         if not slug:
             return None
 
-        # Step 2 — get best listing (floor)
+        # Step 2 — get best listing (floor) + listings count
         r2 = await client.get(
             f"https://api.opensea.io/api/v2/listings/collection/{slug}/all",
             params={"limit": 1},
@@ -1987,19 +2004,64 @@ async def _fetch_opensea_floor(client, api_key: str, chain: str,
             timeout=12)
         if r2.status_code != 200:
             return None
-        listings = (r2.json().get("listings") or [])
-        if not listings:
-            return None
-        price = (listings[0].get("price") or {}).get("current") or {}
-        raw = price.get("value", "0")
-        if raw is None:
-            return None
-        val = int(raw)
-        decimals = int(price.get("decimals", 18))
-        eth = val / (10 ** decimals)
-        usd_raw = price.get("usd_value")
-        usd = float(usd_raw) if usd_raw is not None else None
-        return {"floor_eth": eth, "floor_usd": usd}
+        listings_data = r2.json()
+        listings = (listings_data.get("listings") or [])
+        listings_count = int(listings_data.get("total", 0) or 0) if listings else 0
+        floor_eth = None
+        floor_usd = None
+        if listings:
+            price = (listings[0].get("price") or {}).get("current") or {}
+            raw = price.get("value", "0")
+            if raw is not None:
+                val = int(raw)
+                decimals = int(price.get("decimals", 18))
+                floor_eth = val / (10 ** decimals)
+                usd_raw = price.get("usd_value")
+                floor_usd = float(usd_raw) if usd_raw is not None else None
+
+        # Step 3 — best offer (top bid)
+        best_offer_eth = None
+        try:
+            r3 = await client.get(
+                f"https://api.opensea.io/api/v2/offers/collection/{slug}/all",
+                params={"limit": 1},
+                headers={"X-API-KEY": api_key, "Accept": "application/json"},
+                timeout=12)
+            if r3.status_code == 200:
+                od = r3.json()
+                olist = (od.get("offers") or [])
+                if olist:
+                    op = (olist[0].get("price") or {}).get("current") or {}
+                    oraw = op.get("value")
+                    if oraw is not None:
+                        oval = int(oraw)
+                        odec = int(op.get("decimals", 18))
+                        best_offer_eth = oval / (10 ** odec)
+        except Exception:
+            pass
+
+        # Step 4 — collection stats (volume, num_owners)
+        volume_24h = None
+        num_owners = None
+        try:
+            r4 = await client.get(
+                f"https://api.opensea.io/api/v2/collections/{slug}/stats",
+                headers={"X-API-KEY": api_key, "Accept": "application/json"},
+                timeout=12)
+            if r4.status_code == 200:
+                sd = r4.json()
+                tot = sd.get("total") or {}
+                volume_24h = float(tot.get("volume", 0) or 0)
+                num_owners = int(tot.get("num_owners", 0) or 0)
+        except Exception:
+            pass
+
+        return {
+            "floor_eth": floor_eth, "floor_usd": floor_usd,
+            "slug": slug, "listings_count": listings_count,
+            "best_offer_eth": best_offer_eth,
+            "volume_24h": volume_24h, "num_owners": num_owners,
+        }
     except Exception:
         return None
 
@@ -2032,9 +2094,10 @@ async def _fetch_moralis_floor(client, api_key: str, chain: str,
 
 
 async def _fetch_reservoir_floor(client, contract: str) -> dict | None:
-    """Fetch floor price from Reservoir (free tier, public demo key).
+    """Fetch floor price + liquidity from Reservoir (free tier, public demo key).
 
-    Returns {floor_eth, floor_usd} or None.
+    Returns {floor_eth, floor_usd, volume_24h, listings_count, best_offer_eth}
+    or None.
     """
     try:
         r = await client.get(
@@ -2047,13 +2110,32 @@ async def _fetch_reservoir_floor(client, contract: str) -> dict | None:
         collections = (r.json().get("collections") or [])
         if not collections:
             return None
-        fa = (collections[0].get("floorAsk") or {}).get("price") or {}
+        c = collections[0]
+        fa = (c.get("floorAsk") or {}).get("price") or {}
         amt = fa.get("amount") or {}
         eth = float(amt.get("native", 0) or 0)
         usd = float(amt.get("usd", 0) or 0)
+        # Volume and offer data
+        volumes = c.get("volume") or {}
+        volume_24h = float(volumes.get("1day", 0) or 0)
+        listings_count = int(c.get("tokenCount", 0) or 0)  # total items in collection
+        on_sale_count = int(c.get("onSaleCount", 0) or 0)
+        # Top bid
+        tb = (c.get("topBid") or {}).get("price") or {}
+        bo = tb.get("amount") or {}
+        best_offer_eth = float(bo.get("native", 0) or 0) if bo else None
         if eth <= 0 and usd <= 0:
-            return None
-        return {"floor_eth": eth, "floor_usd": usd}
+            # Even if no floor, still return liquidity data
+            return {
+                "floor_eth": None, "floor_usd": None,
+                "volume_24h": volume_24h, "listings_count": on_sale_count,
+                "best_offer_eth": best_offer_eth if best_offer_eth and best_offer_eth > 0 else None,
+            }
+        return {
+            "floor_eth": eth, "floor_usd": usd,
+            "volume_24h": volume_24h, "listings_count": on_sale_count,
+            "best_offer_eth": best_offer_eth if best_offer_eth and best_offer_eth > 0 else None,
+        }
     except Exception:
         return None
 
@@ -2150,6 +2232,7 @@ async def nft_valuation(address: str = Query(...),
 
     collections = []
     total_usd = 0.0
+    total_indicative_usd = 0.0
     total_eth = 0.0
     floor_source = "none"
     os_used = False
@@ -2160,6 +2243,11 @@ async def nft_valuation(address: str = Query(...),
             floor_eth = None
             floor_usd = None
             src = "none"
+            slug = None
+            listings_count = None
+            best_offer_eth = None
+            volume_24h = None
+            num_owners = None
 
             # Tier 1: OpenSea
             if opensea_key and floor_eth is None:
@@ -2170,6 +2258,11 @@ async def nft_valuation(address: str = Query(...),
                     floor_usd = res.get("floor_usd")
                     if floor_usd is None and floor_eth:
                         floor_usd = _eth_to_usd_for_nft(floor_eth, eth_price)
+                    slug = res.get("slug")
+                    listings_count = res.get("listings_count")
+                    best_offer_eth = res.get("best_offer_eth")
+                    volume_24h = res.get("volume_24h")
+                    num_owners = res.get("num_owners")
                     src = "opensea"
                     os_used = True
 
@@ -2191,11 +2284,57 @@ async def nft_valuation(address: str = Query(...),
                     floor_usd = res.get("floor_usd")
                     if floor_usd is None and floor_eth:
                         floor_usd = _eth_to_usd_for_nft(floor_eth, eth_price)
+                    if not listings_count:
+                        listings_count = res.get("listings_count")
+                    if not best_offer_eth:
+                        best_offer_eth = res.get("best_offer_eth")
+                    if volume_24h is None:
+                        volume_24h = res.get("volume_24h")
                     src = "reservoir"
+
+            # ── Reliability computation ──
+            has_volume = isinstance(volume_24h, (int, float)) and volume_24h > 0
+            has_listings = isinstance(listings_count, (int, float)) and listings_count > 0
+            has_best_offer = isinstance(best_offer_eth, (int, float)) and best_offer_eth > 0
+            has_floor = isinstance(floor_eth, (int, float)) and floor_eth > 0
+
+            if has_floor and (has_volume or has_listings or has_best_offer):
+                if has_volume:
+                    floor_reliable = True
+                    floor_confidence = "high"
+                elif has_best_offer:
+                    floor_reliable = True
+                    floor_confidence = "high"
+                else:
+                    floor_reliable = True
+                    floor_confidence = "low"
+            elif has_floor:
+                # Floor exists but zero listings, zero offers, zero volume
+                floor_reliable = False
+                floor_confidence = "none"
+            else:
+                # No floor at all
+                floor_reliable = False
+                floor_confidence = "none"
+
+            # ── Build URLs ──
+            explorer_url = f"https://{CHAINS.get(chain, '')}/token/{contract}" if chain in CHAINS else ""
+            market_url = ""
+            if src == "opensea" and slug:
+                market_url = f"https://opensea.io/collection/{slug}"
+            elif contract:
+                os_slug = _OS_URL_SLUG.get(chain)
+                if os_slug:
+                    market_url = f"https://opensea.io/assets/{os_slug}/{contract}"
 
             count = info["count"]
             value_usd = round((floor_usd or 0) * count, 2)
-            total_usd += value_usd
+
+            if floor_reliable and has_floor:
+                total_usd += value_usd
+            elif has_floor:
+                total_indicative_usd += value_usd
+
             if floor_eth:
                 total_eth += floor_eth * count
 
@@ -2208,6 +2347,14 @@ async def nft_valuation(address: str = Query(...),
                 "floor_usd": floor_usd,
                 "value_usd": value_usd if value_usd > 0 else 0.0,
                 "source": src,
+                "floor_reliable": floor_reliable,
+                "floor_confidence": floor_confidence,
+                "volume_24h": round(volume_24h, 2) if volume_24h is not None else None,
+                "best_offer_eth": round(best_offer_eth, 6) if best_offer_eth is not None else None,
+                "listings_count": listings_count,
+                "num_owners": num_owners,
+                "market_url": market_url,
+                "explorer_url": explorer_url,
             })
 
     # Determine overall floor_source
@@ -2232,6 +2379,7 @@ async def nft_valuation(address: str = Query(...),
         "collections": collections,
         "nft_total_value_usd": round(total_usd, 2),
         "nft_total_value_eth": round(total_eth, 6),
+        "nft_indicative_value_usd": round(total_indicative_usd, 2),
     }
     if msg:
         resp["message"] = msg

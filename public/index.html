@@ -264,7 +264,7 @@ tr.tm-off td{opacity:.45}
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>📦 Version</h2>
-        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">2026.07.9</strong></p>
+        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">2026.07.10</strong></p>
         <p id="verStatus" style="font-size:.85rem"></p>
         <button id="updateBtn" class="hidden" onclick="doUpdate()" style="margin-top:8px;background:#238636;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:.85rem">🔄 Mettre à jour</button>
         <p id="updateMsg" style="margin-top:8px;font-size:.8rem;color:#f0c040"></p>
@@ -481,6 +481,8 @@ var T = {
     nftValuation: "Valorisation NFT", nftFloor: "Prix plancher",
     nftTotalValue: "Valeur totale NFT", nftNoKey: "Ajoute une clé OpenSea/Moralis pour les prix planchers",
     nftTokens: "Tokens", nftTotal: "Total",
+    nftIndicative: "Valeur indicative",
+    nftIndicativeBadge: "indicatif", nftLowLiquidity: "Liquidité faible — valeur non fiable, exclue du total",
   },
   en: {
     dashboard: "Dashboard", stats: "Statistics", tokens: "Token Details", nfts: "NFTs",
@@ -661,6 +663,8 @@ var T = {
     nftValuation: "NFT Valuation", nftFloor: "Floor price",
     nftTotalValue: "Total NFT Value", nftNoKey: "Add an OpenSea/Moralis key for floor prices",
     nftTokens: "Tokens", nftTotal: "Total",
+    nftIndicative: "Indicative value",
+    nftIndicativeBadge: "indicative", nftLowLiquidity: "Low liquidity — unreliable, excluded from total",
   }
 };
 function t(key) { return (T[LANG] && T[LANG][key]) || key; }
@@ -1173,10 +1177,11 @@ async function loadNFTs(){
     var valResults=await Promise.all(addrs.map(function(a){
       return fetch("/api/nfts/valuation?address="+encodeURIComponent(a)).then(function(r){return r.json()}).catch(function(){return {collections:[],nft_total_value_usd:0}});
     }));
-    var valAgg={collections:[],nft_total_value_usd:0,floor_source:"none",message:null};
-    valResults.forEach(function(v){if(v&&v.collections)v.collections.forEach(function(c){valAgg.collections.push(c)});valAgg.nft_total_value_usd+=v.nft_total_value_usd||0;if(v&&v.floor_source&&v.floor_source!=="none")valAgg.floor_source=v.floor_source;if(v&&v.message)valAgg.message=v.message});
+    var valAgg={collections:[],nft_total_value_usd:0,nft_indicative_value_usd:0,floor_source:"none",message:null};
+    valResults.forEach(function(v){if(v&&v.collections)v.collections.forEach(function(c){valAgg.collections.push(c)});valAgg.nft_total_value_usd+=v.nft_total_value_usd||0;valAgg.nft_indicative_value_usd+=v.nft_indicative_value_usd||0;if(v&&v.floor_source&&v.floor_source!=="none")valAgg.floor_source=v.floor_source;if(v&&v.message)valAgg.message=v.message});
 
     var totalVal=Math.round(valAgg.nft_total_value_usd*100)/100;
+    var totalIndic=Math.round((valAgg.nft_indicative_value_usd||0)*100)/100;
     var sym=currSymbol();
     var html='<div class="card"><h2>🖼️ NFTs <span style="font-weight:400;font-size:.7rem;color:#6e7681">('+all.length+')</span></h2>';
 
@@ -1184,6 +1189,7 @@ async function loadNFTs(){
     if(valAgg.floor_source!=="none"){
       html+='<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;padding:10px;background:rgba(88,166,255,.06);border:1px solid var(--border);border-radius:8px">'+
         '<div style="min-width:110px"><div style="font-size:.65rem;color:#6e7681">'+esc(t("nftTotalValue"))+'</div><div style="font-size:1.05rem;font-weight:700;color:var(--title)">'+fmtCurr(totalVal)+'</div></div>'+
+        (totalIndic>0?'<div style="min-width:110px"><div style="font-size:.65rem;color:#ffab40">'+esc(t("nftIndicative"))+'</div><div style="font-size:.85rem;color:#ffab40">'+fmtCurr(totalIndic)+'</div></div>':'')+
         '<div style="min-width:100px"><div style="font-size:.65rem;color:#6e7681">Source</div><div style="font-size:.8rem;color:#6e7681;text-transform:capitalize">'+esc(valAgg.floor_source)+'</div></div>'+
         '<div style="min-width:90px"><div style="font-size:.65rem;color:#6e7681">Collections</div><div style="font-size:.8rem;color:var(--title)">'+valAgg.collections.filter(function(c){return c.value_usd>0||c.floor_eth!==null}).length+'</div></div>'+
       '</div>';
@@ -1192,22 +1198,39 @@ async function loadNFTs(){
       if(pricedCols.length>0){
         pricedCols.sort(function(a,b){return (b.value_usd||0)-(a.value_usd||0)});
         html+='<h3 style="font-size:.8rem;margin-bottom:8px">'+esc(t("nftValuation"))+'</h3>'+
-          '<div style="overflow-x:auto;margin-bottom:12px"><table style="font-size:.75rem;min-width:550px"><thead><tr>'+
+          '<div style="overflow-x:auto;margin-bottom:12px"><table style="font-size:.75rem;min-width:600px"><thead><tr>'+
           '<th style="text-align:left;padding:6px 8px">Collection</th><th style="text-align:left;padding:6px 8px">Chaîne</th>'+
           '<th style="text-align:right;padding:6px 8px">'+esc(t("nftFloor"))+'</th>'+
           '<th style="text-align:right;padding:6px 8px">Items</th>'+
           '<th style="text-align:right;padding:6px 8px">'+esc(t("nftTotalValue"))+'</th>'+
-          '<th style="text-align:center;padding:6px 8px">Source</th></tr></thead><tbody>';
+          '<th style="text-align:center;padding:6px 8px">Confiance</th>'+
+          '<th style="text-align:center;padding:6px 8px">Liens</th></tr></thead><tbody>';
         for(var i=0;i<pricedCols.length;i++){
           var pc=pricedCols[i];
           var floorStr=pc.floor_usd?fmtCurr(pc.floor_usd):(pc.floor_eth!=null?(pc.floor_eth.toFixed(4)+' ETH'):'—');
+          var confBadge='';
+          if(pc.floor_confidence==='none'||!pc.floor_reliable){
+            confBadge='<span style="font-size:.6rem;background:rgba(255,171,64,.15);color:#ffab40;padding:1px 5px;border-radius:3px" title="'+esc(t("nftLowLiquidity"))+'">⚠ '+esc(t("nftIndicativeBadge"))+'</span>';
+          }else if(pc.floor_confidence==='low'){
+            confBadge='<span style="font-size:.6rem;background:rgba(110,118,129,.15);color:#6e7681;padding:1px 5px;border-radius:3px">'+esc(t("nftIndicativeBadge"))+'</span>';
+          }else{
+            confBadge='<span style="font-size:.6rem;background:rgba(63,185,80,.15);color:#3fb950;padding:1px 5px;border-radius:3px">✓</span>';
+          }
+          var linkBtns='';
+          if(pc.market_url){
+            linkBtns+='<a href="'+esc(pc.market_url)+'" target="_blank" rel="noopener" style="font-size:.6rem;padding:2px 5px;color:var(--accent);border:1px solid var(--accent);border-radius:3px;margin-right:3px;text-decoration:none" title="OpenSea">OS</a>';
+          }
+          if(pc.explorer_url){
+            linkBtns+='<a href="'+esc(pc.explorer_url)+'" target="_blank" rel="noopener" style="font-size:.6rem;padding:2px 5px;color:#6e7681;border:1px solid var(--border);border-radius:3px;text-decoration:none" title="Explorer">🔗</a>';
+          }
           html+='<tr>'+
             '<td style="padding:4px 8px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(pc.name)+'">'+esc(pc.name)+'</td>'+
             '<td style="padding:4px 8px;color:#6e7681;text-transform:capitalize">'+esc(pc.chain)+'</td>'+
             '<td style="padding:4px 8px;text-align:right;font-weight:600">'+floorStr+'</td>'+
             '<td style="padding:4px 8px;text-align:right">'+pc.count+'</td>'+
-            '<td style="padding:4px 8px;text-align:right;font-weight:600;color:var(--title)">'+(pc.value_usd?fmtCurr(pc.value_usd):'—')+'</td>'+
-            '<td style="padding:4px 8px;text-align:center;font-size:.65rem;color:#6e7681">'+esc(pc.source||'')+'</td>'+
+            '<td style="padding:4px 8px;text-align:right;font-weight:600;color:'+(pc.floor_reliable?'var(--title)':'#6e7681')+'">'+(pc.value_usd?fmtCurr(pc.value_usd):'—')+'</td>'+
+            '<td style="padding:4px 8px;text-align:center">'+confBadge+'</td>'+
+            '<td style="padding:4px 8px;text-align:center">'+(linkBtns||'—')+'</td>'+
           '</tr>';
         }
         html+='</tbody></table></div>';
@@ -1221,10 +1244,17 @@ async function loadNFTs(){
 
     if(!all.length){el.innerHTML=html+'<div class="loading" style="padding:24px">Aucun NFT trouvé sur ce wallet.</div></div>';return}
     html+='<h3 style="font-size:.8rem;margin:12px 0 8px">'+esc(t("nftTokens"))+'</h3>'+
-    '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-top:6px">';
+    '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-top:6px">';
     for(var i=0;i<all.length;i++){
       var n=all[i];
       var media=n.image?'<img src="'+esc(n.image)+'" loading="lazy" referrerpolicy="no-referrer" onerror="this.onerror=null;this.style.display=\'none\';this.parentElement.querySelector(\'.noimg\').style.display=\'flex\'" style="width:100%;height:150px;object-fit:cover;display:block;background:#0d1117">':'';
+      var btns='';
+      if(n.market_url){
+        btns+='<a href="'+esc(n.market_url)+'" target="_blank" rel="noopener" style="display:inline-block;font-size:.6rem;padding:2px 6px;color:var(--accent);border:1px solid var(--accent);border-radius:4px;margin-right:3px;text-decoration:none" title="OpenSea">OS</a>';
+      }
+      if(n.explorer_url){
+        btns+='<a href="'+esc(n.explorer_url)+'" target="_blank" rel="noopener" style="display:inline-block;font-size:.6rem;padding:2px 6px;color:#6e7681;border:1px solid var(--border);border-radius:4px;text-decoration:none" title="Explorer">🔗</a>';
+      }
       html+='<div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;overflow:hidden">'+
         '<div style="position:relative">'+media+
           '<div class="noimg" style="display:'+(n.image?'none':'flex')+';width:100%;height:150px;align-items:center;justify-content:center;background:#0d1117;color:#6e7681;font-size:1.6rem">🖼️</div>'+
@@ -1233,6 +1263,7 @@ async function loadNFTs(){
           '<div style="font-size:.78rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="'+esc(n.name)+'">'+esc(n.name)+'</div>'+
           '<div style="font-size:.68rem;color:#6e7681;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="'+esc(n.collection)+'">'+esc(n.collection)+'</div>'+
           '<div style="font-size:.6rem;color:#6e7681;margin-top:3px">'+esc(n.chain)+' · '+esc(n.token_type)+'</div>'+
+          (btns?'<div style="margin-top:4px">'+btns+'</div>':'')+
         '</div>'+
       '</div>';
     }
