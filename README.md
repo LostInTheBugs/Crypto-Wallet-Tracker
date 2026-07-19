@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — 2026.07.5
+# Crypto Wallet Tracker — 2026.07.6
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -27,6 +27,8 @@ Dashboard agrégé, graphiques d'évolution, historique des prix via DefiLlama, 
 - 🔑 **Clés API par utilisateur** — catalogue de 7 services (CoinGecko, OpenSea, Etherscan, DefiLlama, Alchemy, Moralis, CoinMarketCap) avec validation best-effort et interface en cartes avec logos
 - 📦 **Vérification de version** — compare avec le dernier tag GitHub
 - ⚡ **Cache prix** — table `price_history`, 2ᵉ rebuild ~0 appel réseau
+- 🔔 **Alertes** — prix, valeur portefeuille, mouvements (> X% en 24h) avec notifications in-app + canaux externes (webhook, Telegram, e-mail)
+- 📬 **Digest** — résumé quotidien ou hebdo du portefeuille
 - 🐳 **Docker** — une commande pour déployer
 
 ---
@@ -132,7 +134,7 @@ Crypto-Wallet-Tracker/
 - [x] 2026.07.3 — Analytics (repartition & performance)
 - [x] 2026.07.4 — Export CSV/PDF (holdings, tx, PnL fiscal)
 - [x] 2026.07.5 — Transactions : approbations, interactions, gaz
-- [ ] 2026.07.6 — Moteur d'alertes + digest
+- [x] 2026.07.6 — Moteur d'alertes + digest
 - [ ] 2026.07.7 — Alertes health-factor / liquidation
 - [ ] 2026.07.8 — Valorisation NFT (prix planchers)
 - [ ] 2026.07.9 — Pricing multi-sources + test des cles
@@ -149,6 +151,16 @@ Crypto-Wallet-Tracker/
 - [ ] Airdrops a claim
 
 ## 📋 Changelog
+
+### 2026.07.6 — Moteur d'alertes (prix, portefeuille, mouvements) + notifications + digest
+
+- **Moteur d'alertes** : création/suppression/activation d'alertes de 3 types — **prix** (token au-dessus/en-dessous d'un seuil), **portefeuille** (valeur totale au-dessus/en-dessous d'un seuil), **mouvement** (variation > X% sur 24h). Évaluateur asynchrone toutes les 10 minutes (cooldown par alerte, jamais de re-déclenchement en rafale).
+- **Centre de notifications in-app** : une notification est créée à chaque alerte déclenchée (titre + description). Interface dédiée avec marquage « lu », badge de compteur non-lu.
+- **Canaux externes** : **Webhook** (POST JSON), **Telegram** (API Bot), **E-mail** (SMTP, optionnel). Configuration par canal (URL, token, credentials), secrets masqués en GET, test d'envoi (`POST /api/alerts/test-channel`), robustes — un canal qui échoue ne bloque pas les autres.
+- **Digest** : résumé quotidien ou hebdomadaire du portefeuille (valeur, variations 24h/7j) envoyé via le canal choisi.
+- **Page 🔔 Alertes** dans le menu latéral — 4 sections : mes alertes (création + liste), centre de notifications, canaux de notification, digest. i18n FR/EN, `esc()` partout, états vides propres.
+- **APIs** : `GET/POST/PUT/DELETE /api/alerts`, `GET /api/notifications`, `POST /api/notifications/read`, `GET/PUT /api/settings/notif-channels`, `GET/PUT /api/settings/digest`, `POST /api/alerts/test-channel`, `GET /api/notifications/count`.
+- Base de données : 4 nouvelles tables `alerts`, `notifications`, `notif_channels`, `digest_prefs` (migrations idempotentes).
 
 ### 2026.07.5 — Transactions enrichies (approve, contract interactions, gas analytics, tags/notes)
 

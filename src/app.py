@@ -7,7 +7,7 @@ from fastapi import FastAPI, Query, HTTPException, Request, Depends
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse, Response
 from contextlib import asynccontextmanager
-import httpx, asyncio, jwt, bcrypt, aiosqlite, os, datetime, calendar, time as _time, bisect, math, subprocess, re
+import httpx, asyncio, jwt, bcrypt, aiosqlite, os, datetime, calendar, time as _time, bisect, math, subprocess, re, json
 
 # Service imports
 import sys, os
@@ -46,6 +46,9 @@ from services.export_service import (
     rows_to_csv, aggregate_holdings, build_holdings_rows, build_pnl_rows,
     build_transaction_rows, build_summary_pdf,
     HOLDINGS_HEADERS, TRANSACTIONS_HEADERS, PNL_HEADERS,
+)
+from services.alerts_service import (
+    run_evaluator, evaluate_alerts_for_user, send_alert_notification,
 )
 
 # ── Logging configuration ───────────────────────────────────────
@@ -249,6 +252,50 @@ async def lifespan(app: FastAPI):
                 FOREIGN KEY(user_id) REFERENCES users(id)
             )
         """)
+        # Alerts system (2026.07.6)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS alerts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                type TEXT NOT NULL,
+                params_json TEXT DEFAULT '{}',
+                enabled INTEGER DEFAULT 1,
+                cooldown_min INTEGER DEFAULT 60,
+                last_triggered_at TEXT DEFAULT NULL,
+                created_at TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS notifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                alert_id INTEGER DEFAULT 0,
+                title TEXT NOT NULL,
+                body TEXT DEFAULT '',
+                created_at TEXT DEFAULT (datetime('now')),
+                read INTEGER DEFAULT 0,
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS notif_channels (
+                user_id INTEGER NOT NULL,
+                channel TEXT NOT NULL,
+                config_json TEXT DEFAULT '{}',
+                enabled INTEGER DEFAULT 0,
+                PRIMARY KEY(user_id, channel),
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS digest_prefs (
+                user_id INTEGER NOT NULL PRIMARY KEY,
+                frequency TEXT DEFAULT 'off',
+                channel TEXT DEFAULT '',
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            )
+        """)
         # v2.12.5 — sweep idempotent des lignes orphelines au démarrage : purge
         # toute donnée dont le wallet n'existe plus dans wallets (comparaison
         # insensible à la casse — le worker de reconstruction a pu écrire des
@@ -273,6 +320,8 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logging.getLogger("crypto.app").warning("[SWEEP] orphan sweep failed: %s", e)
         await db.commit()
+        # Start alert evaluator background task
+        asyncio.create_task(run_evaluator())
     yield
 
 
@@ -2859,6 +2908,264 @@ async def _validate_api_key(provider: str, api_key: str) -> tuple:
             return False, f"Alchemy: {str(e)[:80]}"
     # Unknown providers / no validator: store without blocking
     return True, "Clé enregistrée (validation best-effort)"
+
+
+# ══════════════════════════════════════════════════════════════════
+# Alerts + Notifications + Digest (2026.07.6)
+# ══════════════════════════════════════════════════════════════════
+
+def _mask_config(channel: str, config: dict) -> dict:
+    """Mask secrets in channel config before returning to client."""
+    masked = dict(config)
+    if channel == "telegram":
+        if "bot_token" in masked and masked["bot_token"]:
+            masked["bot_token"] = "..." + masked["bot_token"][-4:] if len(masked["bot_token"]) > 4 else "..."
+    elif channel == "email":
+        if "password" in masked and masked["password"]:
+            masked["password"] = "..." + masked["password"][-2:] if len(masked["password"]) > 2 else "..."
+    if channel == "webhook":
+        if "url" in masked:
+            masked["url"] = masked["url"][:60] + "..." if len(masked.get("url", "")) > 63 else masked.get("url", "")
+    return masked
+
+
+# ── Alerts CRUD ──────────────────────────────────────────────────
+
+@app.get("/api/alerts")
+async def list_alerts(user=Depends(get_current_user), db=Depends(get_db)):
+    cur = await db.execute(
+        "SELECT id, type, params_json, enabled, cooldown_min, last_triggered_at, created_at "
+        "FROM alerts WHERE user_id=? ORDER BY created_at DESC",
+        (user["id"],))
+    rows = await cur.fetchall()
+    result = []
+    for r in rows:
+        try:
+            params = json.loads(r["params_json"] or "{}")
+        except Exception:
+            params = {}
+        result.append({
+            "id": r["id"], "type": r["type"], "params": params,
+            "enabled": bool(r["enabled"]), "cooldown_min": r["cooldown_min"],
+            "last_triggered_at": r["last_triggered_at"], "created_at": r["created_at"],
+        })
+    return result
+
+
+@app.post("/api/alerts")
+async def create_alert(request: Request, user=Depends(get_current_user), db=Depends(get_db)):
+    data = await request.json()
+    alert_type = (data.get("type") or "").strip().lower()
+    if alert_type not in ("price", "portfolio", "move"):
+        raise HTTPException(400, "Type invalide (price, portfolio, move)")
+    params = data.get("params") or data.get("params_json") or {}
+    if isinstance(params, str):
+        try: params = json.loads(params)
+        except Exception: raise HTTPException(400, "params_json invalide")
+    enabled = 1 if data.get("enabled", True) else 0
+    cooldown = int(data.get("cooldown_min") or 60)
+    await db.execute(
+        "INSERT INTO alerts (user_id, type, params_json, enabled, cooldown_min) VALUES (?, ?, ?, ?, ?)",
+        (user["id"], alert_type, json.dumps(params), enabled, max(1, cooldown)))
+    await db.commit()
+    return {"ok": True, "id": db.last_insert_rowid if hasattr(db, 'last_insert_rowid') else None}
+
+
+@app.put("/api/alerts/{alert_id}")
+async def update_alert(alert_id: int, request: Request, user=Depends(get_current_user), db=Depends(get_db)):
+    cur = await db.execute("SELECT id FROM alerts WHERE id=? AND user_id=?", (alert_id, user["id"]))
+    if not await cur.fetchone():
+        raise HTTPException(404, "Alerte introuvable")
+    data = await request.json()
+    updates = []
+    params_list = []
+    if "enabled" in data:
+        updates.append("enabled=?")
+        params_list.append(1 if data["enabled"] else 0)
+    if "cooldown_min" in data:
+        updates.append("cooldown_min=?")
+        params_list.append(max(1, int(data["cooldown_min"])))
+    if "params" in data or "params_json" in data:
+        params = data.get("params") or data.get("params_json") or {}
+        updates.append("params_json=?")
+        params_list.append(json.dumps(params))
+    if not updates:
+        raise HTTPException(400, "Aucun champ à modifier")
+    params_list.extend([alert_id, user["id"]])
+    await db.execute(
+        f"UPDATE alerts SET {', '.join(updates)} WHERE id=? AND user_id=?",
+        tuple(params_list))
+    await db.commit()
+    return {"ok": True}
+
+
+@app.delete("/api/alerts/{alert_id}")
+async def delete_alert(alert_id: int, user=Depends(get_current_user), db=Depends(get_db)):
+    await db.execute("DELETE FROM alerts WHERE id=? AND user_id=?", (alert_id, user["id"]))
+    await db.commit()
+    return {"ok": True}
+
+
+# ── Notifications ────────────────────────────────────────────────
+
+@app.get("/api/notifications")
+async def list_notifications(limit: int = Query(50), unread_only: bool = Query(False),
+                             user=Depends(get_current_user), db=Depends(get_db)):
+    where = "user_id=?"
+    params: list = [user["id"]]
+    if unread_only:
+        where += " AND read=0"
+    cur = await db.execute(
+        f"SELECT id, alert_id, title, body, created_at, read FROM notifications "
+        f"WHERE {where} ORDER BY created_at DESC LIMIT ?",
+        tuple(params + [limit]))
+    rows = await cur.fetchall()
+    return [{
+        "id": r["id"], "alert_id": r["alert_id"], "title": r["title"],
+        "body": r["body"], "created_at": r["created_at"], "read": bool(r["read"]),
+    } for r in rows]
+
+
+@app.post("/api/notifications/read")
+async def mark_notifications_read(request: Request, user=Depends(get_current_user), db=Depends(get_db)):
+    data = await request.json()
+    ids = data.get("ids") or data.get("all")
+    if ids == "all":
+        await db.execute("UPDATE notifications SET read=1 WHERE user_id=?", (user["id"],))
+    elif isinstance(ids, list) and ids:
+        placeholders = ",".join(["?"] * len(ids))
+        await db.execute(
+            f"UPDATE notifications SET read=1 WHERE user_id=? AND id IN ({placeholders})",
+            [user["id"]] + ids)
+    await db.commit()
+    return {"ok": True}
+
+
+# ── Notification channels config ─────────────────────────────────
+
+@app.get("/api/settings/notif-channels")
+async def get_notif_channels(user=Depends(get_current_user), db=Depends(get_db)):
+    cur = await db.execute(
+        "SELECT channel, config_json, enabled FROM notif_channels WHERE user_id=?",
+        (user["id"],))
+    rows = await cur.fetchall()
+    channels = {}
+    for r in rows:
+        try:
+            config = json.loads(r["config_json"] or "{}")
+        except Exception:
+            config = {}
+        channels[r["channel"]] = {
+            "config": _mask_config(r["channel"], config),
+            "enabled": bool(r["enabled"]),
+        }
+    return channels
+
+
+@app.put("/api/settings/notif-channels")
+async def put_notif_channels(request: Request, user=Depends(get_current_user), db=Depends(get_db)):
+    data = await request.json()
+    channel = (data.get("channel") or "").strip().lower()
+    if channel not in ("webhook", "telegram", "email"):
+        raise HTTPException(400, "Canal invalide (webhook, telegram, email)")
+    config = data.get("config") or {}
+    enabled = 1 if data.get("enabled", False) else 0
+    await db.execute(
+        "INSERT OR REPLACE INTO notif_channels (user_id, channel, config_json, enabled) VALUES (?, ?, ?, ?)",
+        (user["id"], channel, json.dumps(config), enabled))
+    await db.commit()
+    return {"ok": True}
+
+
+# ── Digest prefs ─────────────────────────────────────────────────
+
+@app.get("/api/settings/digest")
+async def get_digest_prefs(user=Depends(get_current_user), db=Depends(get_db)):
+    cur = await db.execute(
+        "SELECT frequency, channel FROM digest_prefs WHERE user_id=?", (user["id"],))
+    row = await cur.fetchone()
+    if row:
+        return {"frequency": row["frequency"], "channel": row["channel"]}
+    return {"frequency": "off", "channel": ""}
+
+
+@app.put("/api/settings/digest")
+async def put_digest_prefs(request: Request, user=Depends(get_current_user), db=Depends(get_db)):
+    data = await request.json()
+    frequency = (data.get("frequency") or "off").strip().lower()
+    if frequency not in ("off", "daily", "weekly"):
+        raise HTTPException(400, "Fréquence invalide (off, daily, weekly)")
+    channel = (data.get("channel") or "").strip().lower()
+    await db.execute(
+        "INSERT OR REPLACE INTO digest_prefs (user_id, frequency, channel) VALUES (?, ?, ?)",
+        (user["id"], frequency, channel))
+    await db.commit()
+    return {"ok": True}
+
+
+# ── Test channel ─────────────────────────────────────────────────
+
+@app.post("/api/alerts/test-channel")
+async def test_channel(request: Request, user=Depends(get_current_user), db=Depends(get_db)):
+    data = await request.json()
+    channel = (data.get("channel") or "").strip().lower()
+    if channel not in ("webhook", "telegram", "email"):
+        raise HTTPException(400, "Canal invalide (webhook, telegram, email)")
+
+    cur = await db.execute(
+        "SELECT channel, config_json FROM notif_channels WHERE user_id=? AND channel=? AND enabled=1",
+        (user["id"], channel))
+    row = await cur.fetchone()
+    if not row:
+        raise HTTPException(400, "Canal non configuré ou désactivé")
+
+    try:
+        config = json.loads(row["config_json"] or "{}")
+    except Exception:
+        config = {}
+
+    title = "🧪 Test de notification — Crypto Wallet Tracker"
+    body = "Ceci est un message de test. Si tu le reçois, ton canal est correctement configuré !"
+
+    from services.alerts_service import _send_webhook, _send_telegram, _send_email
+    ok = False
+    if channel == "webhook":
+        url = config.get("url", "")
+        if not url:
+            raise HTTPException(400, "URL webhook manquante")
+        ok = await _send_webhook(url, title, body)
+    elif channel == "telegram":
+        bot_token = config.get("bot_token", "")
+        chat_id = config.get("chat_id", "")
+        if not bot_token or not chat_id:
+            raise HTTPException(400, "bot_token ou chat_id manquant")
+        ok = await _send_telegram(bot_token, chat_id, title, body)
+    elif channel == "email":
+        ok = await _send_email(
+            config.get("smtp_host", ""),
+            int(config.get("smtp_port") or 587),
+            config.get("user", ""),
+            config.get("password", ""),
+            config.get("from", ""),
+            config.get("to", ""),
+            title, body
+        )
+
+    if not ok:
+        raise HTTPException(500, "Échec de l'envoi — vérifie ta configuration")
+    return {"ok": True, "msg": f"Message de test envoyé via {channel}"}
+
+
+# ── Unread count (for badge) ─────────────────────────────────────
+
+@app.get("/api/notifications/count")
+async def unread_count(user=Depends(get_current_user), db=Depends(get_db)):
+    cur = await db.execute(
+        "SELECT COUNT(*) as c FROM notifications WHERE user_id=? AND read=0",
+        (user["id"],))
+    row = await cur.fetchone()
+    return {"count": row["c"] if row else 0}
+
 
 @app.get("/")
 async def index(request: Request):

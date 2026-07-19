@@ -146,6 +146,7 @@ tr.tm-off td{opacity:.45}
   <a href="#" onclick="switchPage('defi')" data-page="defi">🏦 <span>DeFi</span></a>
   <a href="#" onclick="switchPage('nfts')" data-page="nfts">🖼️ <span>NFTs</span></a>
   <a href="#" onclick="switchPage('txns')" data-page="txns">📜 <span>Transactions</span></a>
+  <a href="#" onclick="switchPage('alerts')" data-page="alerts">🔔 <span>Alertes</span></a>
   <a href="#" onclick="switchPage('wallets')" data-page="wallets">💼 <span>Wallets</span></a>
   <a href="#" onclick="switchPage('settings')" data-page="settings" style="margin-top:auto">⚙️ <span>Paramètres</span></a>
 </div>
@@ -241,6 +242,7 @@ tr.tm-off td{opacity:.45}
       </h2><div id="txnContent" style="overflow-x:auto"></div></div>
     </div>
     <div id="pageWallets" class="hidden"></div>
+    <div id="pageAlerts" class="hidden"></div>
     <div id="pageSettings" class="hidden">
       <div class="card" style="margin-bottom:16px">
         <h2>🌐 Langue</h2>
@@ -258,7 +260,7 @@ tr.tm-off td{opacity:.45}
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>📦 Version</h2>
-        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">2026.07.5</strong></p>
+        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">2026.07.6</strong></p>
         <p id="verStatus" style="font-size:.85rem"></p>
         <button id="updateBtn" class="hidden" onclick="doUpdate()" style="margin-top:8px;background:#238636;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:.85rem">🔄 Mettre à jour</button>
         <p id="updateMsg" style="margin-top:8px;font-size:.8rem;color:#f0c040"></p>
@@ -430,6 +432,36 @@ var T = {
     anCatWallet: "Wallet",
     anInsufficient: "Historique insuffisant",
     anR24: "24h", anR7: "7j", anR30: "30j",
+    alerts: "Alertes",
+    alNone: "Aucune alerte configurée",
+    alType: "Type", alSymbol: "Symbole", alDirection: "Direction",
+    alThreshold: "Seuil", alCooldown: "Cooldown (min)",
+    alEnabled: "Activée", alActions: "Actions",
+    alCreate: "Créer une alerte",
+    alPrice: "Prix", alPortfolio: "Portefeuille", alMove: "Mouvement",
+    alAbove: "Au-dessus", alBelow: "En-dessous",
+    alPct: "Variation %", alDelete: "Supprimer",
+    alDeleteConfirm: "Supprimer cette alerte ?",
+    alPriceDesc: "Se déclenche quand le prix d'un token franchit un seuil.",
+    alPortfolioDesc: "Se déclenche quand la valeur totale du portefeuille franchit un seuil.",
+    alMoveDesc: "Se déclenche quand la valeur du portefeuille varie de plus de X% sur 24h.",
+    notifTitle: "Centre de notifications",
+    notifNone: "Aucune notification",
+    notifMarkAll: "Tout marquer lu",
+    notifUnread: "non lues",
+    chTitle: "Canaux de notification",
+    chWebhook: "Webhook", chTelegram: "Telegram", chEmail: "E-mail (optionnel)",
+    chUrl: "URL du webhook", chBotToken: "Bot Token",
+    chChatId: "Chat ID", chSmtpHost: "Hôte SMTP",
+    chSmtpPort: "Port SMTP", chUser: "Utilisateur",
+    chPassword: "Mot de passe", chFrom: "Expéditeur",
+    chTo: "Destinataire", chTest: "Envoyer un test",
+    chTestSuccess: "Test réussi !", chTestFail: "Échec du test",
+    chSave: "Enregistrer",
+    digestTitle: "Digest",
+    digestFreq: "Fréquence", digestOff: "Désactivé",
+    digestDaily: "Quotidien", digestWeekly: "Hebdomadaire",
+    digestChannel: "Canal",
   },
   en: {
     dashboard: "Dashboard", stats: "Statistics", tokens: "Token Details", nfts: "NFTs",
@@ -565,6 +597,36 @@ var T = {
     anCatWallet: "Wallet",
     anInsufficient: "Insufficient history",
     anR24: "24h", anR7: "7d", anR30: "30d",
+    alerts: "Alerts",
+    alNone: "No alerts configured",
+    alType: "Type", alSymbol: "Symbol", alDirection: "Direction",
+    alThreshold: "Threshold", alCooldown: "Cooldown (min)",
+    alEnabled: "Enabled", alActions: "Actions",
+    alCreate: "Create alert",
+    alPrice: "Price", alPortfolio: "Portfolio", alMove: "Movement",
+    alAbove: "Above", alBelow: "Below",
+    alPct: "Change %", alDelete: "Delete",
+    alDeleteConfirm: "Delete this alert?",
+    alPriceDesc: "Triggers when a token price crosses a threshold.",
+    alPortfolioDesc: "Triggers when total portfolio value crosses a threshold.",
+    alMoveDesc: "Triggers when portfolio value changes by more than X% in 24h.",
+    notifTitle: "Notification Center",
+    notifNone: "No notifications",
+    notifMarkAll: "Mark all read",
+    notifUnread: "unread",
+    chTitle: "Notification Channels",
+    chWebhook: "Webhook", chTelegram: "Telegram", chEmail: "Email (optional)",
+    chUrl: "Webhook URL", chBotToken: "Bot Token",
+    chChatId: "Chat ID", chSmtpHost: "SMTP Host",
+    chSmtpPort: "SMTP Port", chUser: "Username",
+    chPassword: "Password", chFrom: "From",
+    chTo: "To", chTest: "Send test",
+    chTestSuccess: "Test succeeded!", chTestFail: "Test failed",
+    chSave: "Save",
+    digestTitle: "Digest",
+    digestFreq: "Frequency", digestOff: "Off",
+    digestDaily: "Daily", digestWeekly: "Weekly",
+    digestChannel: "Channel",
   }
 };
 function t(key) { return (T[LANG] && T[LANG][key]) || key; }
@@ -572,7 +634,7 @@ function applyLang() {
   document.getElementById("setLang").value = LANG;
   // Update sidebar
   var links = document.querySelectorAll(".sidebar a");
-  var keys = ["dashboard","stats","analytics","tokens","defi","nfts","txns","wallets","settings"];
+  var keys = ["dashboard","stats","analytics","tokens","defi","nfts","txns","alerts","wallets","settings"];
   for (var i=0;i<Math.min(links.length,keys.length);i++) {
     var span = links[i].querySelector("span");
     if (span) span.textContent = t(keys[i]);
@@ -689,6 +751,7 @@ function switchPage(page) {
   document.getElementById("pageNFTs").classList.toggle("hidden", page!="nfts");
   document.getElementById("pageTxns").classList.toggle("hidden", page!="txns");
   document.getElementById("pageWallets").classList.toggle("hidden", page!="wallets");
+  document.getElementById("pageAlerts").classList.toggle("hidden", page!="alerts");
   document.getElementById("pageSettings").classList.toggle("hidden", page!="settings");
   if (page=="dashboard" && lastResult) { renderResult(lastResult); drawMiniChart(); }
   if (page=="stats") { populateFilters(); drawLineChart(); drawPnlChart(); }
@@ -698,6 +761,7 @@ function switchPage(page) {
   if (page=="defi") loadDefiPositions();
   if (page=="nfts") loadNFTs();
   if (page=="wallets") renderWalletPage();
+  if (page=="alerts") loadAlerts();
   if (page=="settings") renderSettingsPage();
 }
 
@@ -2108,6 +2172,210 @@ function updateDebugPanel(data, filteredVals){
   }
   if(filteredVals&&filteredVals.length!==undefined)document.getElementById("dbgSource").textContent=filteredVals.length+" valid pts";
   else document.getElementById("dbgSource").textContent="-";
+}
+
+// ── Alerts + Notifications + Digest (2026.07.6) ──────────
+
+var alertsData=[],notificationsData=[],alertChannels={},digestPrefs={frequency:"off",channel:""};
+
+async function loadAlerts(){
+  try{var r=await fetch("/api/alerts");alertsData=await r.json()}catch(e){alertsData=[]}
+  try{var r2=await fetch("/api/notifications");notificationsData=await r2.json()}catch(e){notificationsData=[]}
+  try{var r3=await fetch("/api/settings/notif-channels");alertChannels=await r3.json()}catch(e){alertChannels={}}
+  try{var r4=await fetch("/api/settings/digest");digestPrefs=await r4.json()}catch(e){digestPrefs={frequency:"off",channel:""}}
+  renderAlerts();
+  updateUnreadBadge();
+}
+
+function renderAlerts(){
+  var h='';
+
+  // ── Section 1: My Alerts ──
+  h+='<div class="card" style="margin-bottom:16px"><h2>🔔 '+esc(t("alerts"))+'</h2>';
+  h+='<div style="margin-bottom:12px">';
+  // Create form
+  h+='<div style="margin-bottom:12px;padding:12px;background:var(--card);border:1px solid var(--border);border-radius:8px">';
+  h+='<h3 style="margin:0 0 8px;font-size:.9rem">'+esc(t("alCreate"))+'</h3>';
+  h+='<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">';
+  h+='<select id="alNewType" onchange="onAlTypeChange()" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:.8rem">';
+  h+='<option value="price">'+esc(t("alPrice"))+'</option>';
+  h+='<option value="portfolio">'+esc(t("alPortfolio"))+'</option>';
+  h+='<option value="move">'+esc(t("alMove"))+'</option>';
+  h+='</select>';
+  h+='<span id="alNewParams">';
+  h+='<input id="alNewSymbol" placeholder="ETH" style="width:80px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 8px;border-radius:6px;font-size:.8rem">';
+  h+='<select id="alNewDir" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 8px;border-radius:6px;font-size:.8rem"><option value="above">'+esc(t("alAbove"))+'</option><option value="below">'+esc(t("alBelow"))+'</option></select>';
+  h+='<input id="alNewThresh" type="number" placeholder="$0.00" step="any" style="width:100px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 8px;border-radius:6px;font-size:.8rem">';
+  h+='</span>';
+  h+='<button class="btn btn-green" onclick="createAlert()" style="padding:6px 14px;font-size:.8rem">+ '+esc(t("alCreate"))+'</button>';
+  h+='</div>';
+  h+='<p id="alNewDesc" style="margin:6px 0 0;font-size:.72rem;color:#6e7681">'+esc(t("alPriceDesc"))+'</p>';
+  h+='</div></div>';
+
+  // Alert list
+  if(alertsData.length===0){
+    h+='<div class="loading">'+esc(t("alNone"))+'</div>';
+  } else {
+    h+='<table><thead><tr><th>'+esc(t("alType"))+'</th><th>'+esc(t("alEnabled"))+'</th><th>'+esc(t("alActions"))+'</th></tr></thead><tbody>';
+    for(var i=0;i<alertsData.length;i++){
+      var a=alertsData[i];
+      var typeLabel=a.type==="price"?t("alPrice"):a.type==="portfolio"?t("alPortfolio"):t("alMove");
+      var paramsDesc="";
+      if(a.type==="price") paramsDesc=(a.params.symbol||"?").toUpperCase()+" "+(a.params.direction==="below"?esc(t("alBelow")):esc(t("alAbove")))+" $"+String(a.params.threshold_usd||"");
+      else if(a.type==="portfolio") paramsDesc=(a.params.direction==="below"?esc(t("alBelow")):esc(t("alAbove")))+" $"+String(a.params.threshold_usd||"");
+      else paramsDesc="±"+String(a.params.pct||"")+"%";
+      h+='<tr><td><strong>'+esc(typeLabel)+'</strong><br><span style="font-size:.72rem;color:#6e7681">'+esc(paramsDesc)+'</span></td>';
+      h+='<td><input type="checkbox"'+(a.enabled?" checked":"")+' onchange="toggleAlert('+a.id+',this.checked)"></td>';
+      h+='<td><button class="btn" style="padding:4px 10px;font-size:.72rem;background:#f85149;color:#fff;border:none;border-radius:4px;cursor:pointer" onclick="deleteAlert('+a.id+')">'+esc(t("alDelete"))+'</button></td></tr>';
+    }
+    h+='</tbody></table>';
+  }
+  h+='</div>';
+
+  // ── Section 2: Notifications ──
+  h+='<div class="card" style="margin-bottom:16px"><h2>📬 '+esc(t("notifTitle"))+'</h2>';
+  if(notificationsData.length===0){
+    h+='<div class="loading">'+esc(t("notifNone"))+'</div>';
+  } else {
+    h+='<button class="btn" style="margin-bottom:8px;padding:4px 12px;font-size:.75rem;background:var(--accent);color:#fff;border:none;border-radius:4px;cursor:pointer" onclick="markNotificationsRead()">'+esc(t("notifMarkAll"))+'</button>';
+    h+='<div style="max-height:350px;overflow-y:auto">';
+    for(var k=0;k<notificationsData.length;k++){
+      var n=notificationsData[k];
+      var bg=n.read?"var(--card)":"rgba(31,111,235,0.08)";
+      h+='<div style="padding:8px 12px;margin-bottom:4px;background:'+bg+';border-radius:6px;border:1px solid var(--border);font-size:.8rem">';
+      h+='<strong>'+esc(n.title)+'</strong> <span style="color:#6e7681;font-size:.7rem">'+esc(n.created_at||"")+'</span>';
+      if(n.body) h+='<div style="margin-top:2px;color:#c9d1d9">'+esc(n.body)+'</div>';
+      h+='</div>';
+    }
+    h+='</div>';
+  }
+  h+='</div>';
+
+  // ── Section 3: Channels ──
+  h+='<div class="card" style="margin-bottom:16px"><h2>📡 '+esc(t("chTitle"))+'</h2>';
+  // Webhook
+  h+=_chCard("webhook",t("chWebhook"),[
+    {key:"url",label:t("chUrl"),type:"text",ph:"https://hooks.slack.com/..."}
+  ]);
+  // Telegram
+  h+=_chCard("telegram",t("chTelegram"),[
+    {key:"bot_token",label:t("chBotToken"),type:"password",ph:"123456:ABC-DEF1234"},
+    {key:"chat_id",label:t("chChatId"),type:"text",ph:"123456789"}
+  ]);
+  // Email
+  h+=_chCard("email",t("chEmail"),[
+    {key:"smtp_host",label:t("chSmtpHost"),type:"text",ph:"smtp.gmail.com"},
+    {key:"smtp_port",label:t("chSmtpPort"),type:"number",ph:"587"},
+    {key:"user",label:t("chUser"),type:"text",ph:"user@gmail.com"},
+    {key:"password",label:t("chPassword"),type:"password",ph:""},
+    {key:"from",label:t("chFrom"),type:"text",ph:"user@gmail.com"},
+    {key:"to",label:t("chTo"),type:"text",ph:"user@gmail.com"}
+  ]);
+  h+='</div>';
+
+  // ── Section 4: Digest ──
+  h+='<div class="card" style="margin-bottom:16px"><h2>📊 '+esc(t("digestTitle"))+'</h2>';
+  h+='<div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">';
+  h+='<div><label style="font-size:.75rem;color:#6e7681;display:block;margin-bottom:2px">'+esc(t("digestFreq"))+'</label><select id="digFreq" onchange="saveDigest()" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:.8rem">';
+  h+='<option value="off"'+(digestPrefs.frequency==="off"?" selected":"")+'>'+esc(t("digestOff"))+'</option>';
+  h+='<option value="daily"'+(digestPrefs.frequency==="daily"?" selected":"")+'>'+esc(t("digestDaily"))+'</option>';
+  h+='<option value="weekly"'+(digestPrefs.frequency==="weekly"?" selected":"")+'>'+esc(t("digestWeekly"))+'</option>';
+  h+='</select></div>';
+  h+='<div><label style="font-size:.75rem;color:#6e7681;display:block;margin-bottom:2px">'+esc(t("digestChannel"))+'</label><select id="digChannel" onchange="saveDigest()" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:.8rem"><option value="">-</option></select></div>';
+  h+='</div></div>';
+
+  document.getElementById("pageAlerts").innerHTML=h;
+  // Populate digest channel dropdown
+  var dc=document.getElementById("digChannel");
+  if(dc){
+    dc.innerHTML='<option value="">-</option>';
+    for(var ch in alertChannels){if(alertChannels[ch]&&alertChannels[ch].enabled){dc.innerHTML+='<option value="'+esc(ch)+'"'+(digestPrefs.channel===ch?" selected":"")+'>'+esc(t("ch"+ch.charAt(0).toUpperCase()+ch.slice(1))||ch)+'</option>'}}
+  }
+}
+
+function _chCard(channel,label,fields){
+  var cfg=alertChannels[channel]||{config:{},enabled:false};
+  var h='<div style="margin-bottom:8px;padding:12px;background:var(--card);border:1px solid var(--border);border-radius:8px">';
+  h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">';
+  h+='<strong style="font-size:.85rem">'+esc(label)+'</strong>';
+  h+='<label><input type="checkbox"'+(cfg.enabled?" checked":"")+' onchange="toggleChannel(\''+channel+'\',this.checked)" style="margin-right:4px">'+esc(t("alEnabled"))+'</label></div>';
+  h+='<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end">';
+  for(var f=0;f<fields.length;f++){
+    var fd=fields[f];
+    var val=cfg.config[fd.key]||"";
+    h+='<div><label style="font-size:.7rem;color:#6e7681;display:block;margin-bottom:1px">'+esc(fd.label)+'</label><input id="ch_'+channel+'_'+fd.key+'" type="'+fd.type+'" value="'+esc(val)+'" placeholder="'+esc(fd.ph||"")+'" style="width:160px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:4px;font-size:.75rem"></div>';
+  }
+  h+='<div style="display:flex;gap:6px"><button class="btn" onclick="saveChannel(\''+channel+'\')" style="padding:5px 10px;font-size:.75rem;background:var(--accent);color:#fff;border:none;border-radius:4px;cursor:pointer">'+esc(t("chSave"))+'</button>';
+  h+='<button class="btn" onclick="testChannel(\''+channel+'\')" style="padding:5px 10px;font-size:.75rem;background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:4px;cursor:pointer">'+esc(t("chTest"))+'</button></div>';
+  h+='</div>';
+  h+='<div id="chMsg_'+channel+'" style="margin-top:6px;font-size:.72rem"></div>';
+  h+='</div>';
+  return h;
+}
+
+function onAlTypeChange(){
+  var typ=document.getElementById("alNewType").value;
+  var params=document.getElementById("alNewParams");
+  var desc=document.getElementById("alNewDesc");
+  if(typ==="price"){params.innerHTML='<input id="alNewSymbol" placeholder="ETH" style="width:80px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 8px;border-radius:6px;font-size:.8rem"><select id="alNewDir" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 8px;border-radius:6px;font-size:.8rem"><option value="above">'+esc(t("alAbove"))+'</option><option value="below">'+esc(t("alBelow"))+'</option></select><input id="alNewThresh" type="number" placeholder="$0.00" step="any" style="width:100px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 8px;border-radius:6px;font-size:.8rem">';desc.textContent=t("alPriceDesc")}
+  else if(typ==="portfolio"){params.innerHTML='<select id="alNewDir" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 8px;border-radius:6px;font-size:.8rem"><option value="above">'+esc(t("alAbove"))+'</option><option value="below">'+esc(t("alBelow"))+'</option></select><input id="alNewThresh" type="number" placeholder="$0.00" step="any" style="width:120px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 8px;border-radius:6px;font-size:.8rem">';desc.textContent=t("alPortfolioDesc")}
+  else{params.innerHTML='<input id="alNewPct" type="number" placeholder="5" step="any" style="width:80px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 8px;border-radius:6px;font-size:.8rem"><span style="font-size:.8rem;color:var(--text)">%</span>';desc.textContent=t("alMoveDesc")}
+}
+
+async function createAlert(){
+  var typ=document.getElementById("alNewType").value;
+  var params={};
+  if(typ==="price"){params.symbol=String(document.getElementById("alNewSymbol")?document.getElementById("alNewSymbol").value:"").trim();params.direction=String(document.getElementById("alNewDir")?document.getElementById("alNewDir").value:"above");params.threshold_usd=parseFloat(String(document.getElementById("alNewThresh")?document.getElementById("alNewThresh").value:"0"))}
+  else if(typ==="portfolio"){params.direction=String(document.getElementById("alNewDir")?document.getElementById("alNewDir").value:"above");params.threshold_usd=parseFloat(String(document.getElementById("alNewThresh")?document.getElementById("alNewThresh").value:"0"))}
+  else{params.pct=parseFloat(String(document.getElementById("alNewPct")?document.getElementById("alNewPct").value:"5"))}
+  try{await fetch("/api/alerts",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({type:typ,params:params})})}catch(e){console.error(e)}
+  await loadAlerts();
+}
+
+async function toggleAlert(id,enabled){
+  try{await fetch("/api/alerts/"+id,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({enabled:enabled})})}catch(e){console.error(e)}
+}
+
+async function deleteAlert(id){
+  if(!confirm(t("alDeleteConfirm")))return;
+  try{await fetch("/api/alerts/"+id,{method:"DELETE"})}catch(e){console.error(e)}
+  await loadAlerts();
+}
+
+async function markNotificationsRead(){
+  try{await fetch("/api/notifications/read",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({all:"all"})})}catch(e){console.error(e)}
+  await loadAlerts();
+}
+
+async function saveChannel(channel){
+  var fields={webhook:["url"],telegram:["bot_token","chat_id"],email:["smtp_host","smtp_port","user","password","from","to"]}[channel]||[];
+  var config={};
+  for(var f=0;f<fields.length;f++){var el=document.getElementById("ch_"+channel+"_"+fields[f]);if(el)config[fields[f]]=el.value}
+  var enabled=alertChannels[channel]&&alertChannels[channel].enabled?1:0;
+  try{await fetch("/api/settings/notif-channels",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({channel:channel,config:config,enabled:!!enabled})});document.getElementById("chMsg_"+channel).textContent="✓ "+t("chSave");document.getElementById("chMsg_"+channel).style.color="#3fb950"}catch(e){document.getElementById("chMsg_"+channel).textContent=t("chTestFail");document.getElementById("chMsg_"+channel).style.color="#f85149"}
+  await loadAlerts();
+}
+
+async function toggleChannel(channel,checked){
+  if(alertChannels[channel])alertChannels[channel].enabled=checked;
+  saveChannel(channel);
+  if(checked){setTimeout(loadAlerts,800)}
+}
+
+async function testChannel(channel){
+  var el=document.getElementById("chMsg_"+channel);
+  el.textContent="⏳ "+t("chTest")+"...";el.style.color="var(--text)";
+  try{var r=await fetch("/api/alerts/test-channel",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({channel:channel})});var d=await r.json();if(r.ok){el.textContent="✓ "+t("chTestSuccess");el.style.color="#3fb950"}else{el.textContent="✗ "+(d.detail||t("chTestFail"));el.style.color="#f85149"}}catch(e){el.textContent="✗ "+t("chTestFail");el.style.color="#f85149"}
+}
+
+async function saveDigest(){
+  var freq=document.getElementById("digFreq").value;
+  var channel=document.getElementById("digChannel").value;
+  try{await fetch("/api/settings/digest",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({frequency:freq,channel:channel})})}catch(e){console.error(e)}
+}
+
+async function updateUnreadBadge(){
+  try{var r=await fetch("/api/notifications/count");var d=await r.json();return d.count||0}catch(e){return 0}
 }
 
 (async function(){var r=await fetch("/api/auth/me");if(r.ok)showDash()})();
