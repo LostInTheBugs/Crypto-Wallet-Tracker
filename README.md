@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — 2026.07.16
+# Crypto Wallet Tracker — 2026.07.17
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -146,8 +146,8 @@ Crypto-Wallet-Tracker/
 - [x] 2026.07.14 — Updater self-update fiabilise
 - [x] 2026.07.15 — Declencheur self-update fiabilise
 - [x] 2026.07.16 — Choix maj auto/manuelle
-- [ ] 2026.07.15 — Sauvegardes auto + sante + tests/CI
-- [ ] 2026.07.15 — Durcissement auth & comptes
+- [x] 2026.07.17 — Sauvegardes auto + sante + tests/CI
+- [ ] 2026.07.18 — Durcissement auth & comptes
 
 ### Phase 2 — Multi-chaines non-EVM & airdrops
 - [ ] Refactor abstraction multi-provider (prerequis)
@@ -157,6 +157,16 @@ Crypto-Wallet-Tracker/
 - [ ] Airdrops a claim
 
 ## 📋 Changelog
+
+### 2026.07.17 — Sauvegardes automatiques de la base, page santé/statut, tests + CI
+
+- **Sauvegardes automatiques** : tâche de fond asyncio sauvegarde `/data/wallets.db` vers `/data/backups/wallets-YYYYMMDD-HHMMSS.db` tous les jours (configurable, `BACKUP_INTERVAL_HOURS`). Sauvegarde cohérente via l'API `sqlite3.backup()` (snapshot WAL), coordonnée avec le verrou d'écriture global. Rétention des N derniers backups (défaut 7, `BACKUP_RETENTION`), les plus anciens sont supprimés. Résiliente : une erreur de backup ne casse pas l'app.
+- **Endpoints backup** : `POST /api/backups/run` déclenche une sauvegarde immédiate, `GET /api/backups` liste les backups (nom, taille, date). Authentification requise.
+- **Santé / Statut** : `GET /api/health` (public) renvoie `{status, version, db_ok, uptime_s, counts, last_backup}`. Tolérant : `db_ok=false` au lieu de 500. N'expose aucun secret.
+- **UI** : carte « 🫀 État / Santé » dans les Paramètres affichant version, état DB, uptime, dernière sauvegarde. Bouton « Sauvegarder maintenant » + liste des backups avec tailles.
+- **Tests étendus** : 13 nouveaux tests unitaires purs dans `tests/test_core.py` pour `token_tid`, `classify_token`, et le classifieur DeFi `classify_token_type` (20 tests au total). Exécutable sans réseau ni base réelle.
+- **CI GitHub Actions** : workflow `.github/workflows/ci.yml` sur push/PR : `python -m py_compile` sur `src/`, tests unitaires, `node --check` sur le JS inline de `public/index.html`.
+- **Roadmap** : lignes corrigées (2026.07.17 cochée, 2026.07.18 pour auth).
 
 ### 2026.07.16 — Mise à jour automatique ou manuelle (au choix, dans Paramètres)
 

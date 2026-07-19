@@ -69,6 +69,10 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("aiosqlite").setLevel(logging.WARNING)
 
 DB_PATH = os.environ.get("DB_PATH", "/data/wallets.db")
+BACKUP_DIR = os.path.join(os.path.dirname(DB_PATH) or "/data", "backups")
+BACKUP_RETENTION = int(os.environ.get("BACKUP_RETENTION", "7"))
+BACKUP_INTERVAL_HOURS = int(os.environ.get("BACKUP_INTERVAL_HOURS", "24"))
+APP_START_TIME = _time.time()
 def _load_session_secret() -> str:
     """Use SESSION_SECRET if a strong value is provided; otherwise generate a
     random secret and persist it in the data volume. Never fall back to an
@@ -329,6 +333,8 @@ async def lifespan(app: FastAPI):
         await db.commit()
         # Start alert evaluator background task
         asyncio.create_task(run_evaluator())
+        # Start backup scheduler background task
+        asyncio.create_task(_backup_scheduler())
     yield
 
 
@@ -3857,6 +3863,160 @@ async def unread_count(user=Depends(get_current_user), db=Depends(get_db)):
         (user["id"],))
     row = await cur.fetchone()
     return {"count": row["c"] if row else 0}
+
+
+# ── Backup service ──────────────────────────────────────────────
+
+_last_backup_time: str | None = None
+_last_backup_status: str = "ok"   # "ok" / "error"
+
+
+async def _do_backup() -> tuple[str, int]:
+    """Perform a coherent SQLite backup using sqlite3's .backup() API.
+
+    Coordinated with the write lock: acquires the lock, does the backup in
+    a thread (sqlite3 .backup() blocks), then releases. The backup is
+    guaranteed consistent — .backup() reads a snapshot of the DB even while
+    writes are happening in other connections (WAL mode).
+
+    Returns (backup_path, size_bytes), or raises on failure.
+    """
+    import sqlite3
+
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    filename = f"wallets-{ts}.db"
+    backup_path = os.path.join(BACKUP_DIR, filename)
+
+    _b_log = logging.getLogger("crypto.backup")
+    _b_log.info("Starting backup to %s", backup_path)
+
+    def _run_backup():
+        # Use URI mode to open the source read-only, leaving WAL intact
+        src = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+        try:
+            dst = sqlite3.connect(backup_path)
+            try:
+                src.backup(dst)
+            finally:
+                dst.close()
+        finally:
+            src.close()
+        return os.path.getsize(backup_path)
+
+    # Take the write lock so we don't race with a writer mid-transaction
+    async with write_locked():
+        size = await asyncio.to_thread(_run_backup)
+
+    _b_log.info("Backup complete: %s (%d bytes)", backup_path, size)
+    global _last_backup_time, _last_backup_status
+    _last_backup_time = datetime.datetime.now().isoformat()
+    _last_backup_status = "ok"
+    return backup_path, size
+
+
+async def _prune_backups():
+    """Remove oldest backups beyond BACKUP_RETENTION."""
+    try:
+        entries = sorted(os.listdir(BACKUP_DIR))
+        db_files = [f for f in entries if f.startswith("wallets-") and f.endswith(".db")]
+        while len(db_files) > BACKUP_RETENTION:
+            oldest = db_files.pop(0)
+            os.remove(os.path.join(BACKUP_DIR, oldest))
+            logging.getLogger("crypto.backup").info("Pruned old backup: %s", oldest)
+    except Exception:
+        pass
+
+
+async def _backup_scheduler():
+    """Background task: schedules periodic backups every BACKUP_INTERVAL_HOURS.
+
+    Resilient: a backup failure is logged but does not crash the app.
+    A missing/empty BACKUP_DIR is created on first run.
+    """
+    _b_log = logging.getLogger("crypto.backup")
+    _b_log.info("Backup scheduler started (interval=%sh, retention=%d)",
+                BACKUP_INTERVAL_HOURS, BACKUP_RETENTION)
+    while True:
+        try:
+            await asyncio.sleep(BACKUP_INTERVAL_HOURS * 3600)
+            await _do_backup()
+            await _prune_backups()
+        except Exception as e:
+            global _last_backup_status
+            _last_backup_status = "error"
+            _b_log.error("Scheduled backup failed: %s", e)
+
+
+@app.post("/api/backups/run")
+async def trigger_backup(user=Depends(get_current_user)):
+    """Trigger an immediate backup. Requires authentication."""
+    try:
+        path, size = await _do_backup()
+        await _prune_backups()
+        return {"ok": True, "path": os.path.basename(path), "size": size}
+    except Exception as e:
+        raise HTTPException(500, f"La sauvegarde a échoué : {e}")
+
+
+@app.get("/api/backups")
+async def list_backups(user=Depends(get_current_user)):
+    """List available backups (name, size, date). Requires authentication."""
+    try:
+        entries = []
+        for f in os.listdir(BACKUP_DIR):
+            if f.startswith("wallets-") and f.endswith(".db"):
+                fp = os.path.join(BACKUP_DIR, f)
+                st = os.stat(fp)
+                entries.append({
+                    "name": f,
+                    "size": st.st_size,
+                    "date": datetime.datetime.fromtimestamp(st.st_mtime).isoformat(),
+                })
+        entries.sort(key=lambda x: x["name"], reverse=True)
+        return {"backups": entries}
+    except FileNotFoundError:
+        return {"backups": []}
+
+
+@app.get("/api/health")
+async def health(db=Depends(get_db)):
+    """Health/status endpoint (public — no auth required).
+
+    Returns status, version, db health, uptime, and aggregate counts.
+    Never exposes secrets. Tolerant: db_ok=false instead of 500.
+    """
+    version = "2026.07.17"
+    uptime_s = round(_time.time() - APP_START_TIME)
+
+    db_ok = False
+    try:
+        cur = await db.execute("SELECT 1")
+        await cur.fetchone()
+        db_ok = True
+    except Exception:
+        pass
+
+    counts = {}
+    if db_ok:
+        try:
+            cur = await db.execute("SELECT COUNT(*) as c FROM users")
+            r = await cur.fetchone()
+            counts["users"] = r[0] if r else 0
+            cur = await db.execute("SELECT COUNT(*) as c FROM wallets")
+            r = await cur.fetchone()
+            counts["wallets"] = r[0] if r else 0
+        except Exception:
+            pass
+
+    return {
+        "status": "ok",
+        "version": version,
+        "db_ok": db_ok,
+        "uptime_s": uptime_s,
+        "counts": counts,
+        "last_backup": _last_backup_time,
+    }
 
 
 @app.get("/")

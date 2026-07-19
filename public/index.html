@@ -299,7 +299,7 @@ tr.tm-off td{opacity:.45}
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>📦 Version</h2>
-        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">2026.07.16</strong></p>
+        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">2026.07.17</strong></p>
         <p id="verStatus" style="font-size:.85rem"></p>
         <p id="verAutoMsg" style="font-size:.85rem;color:#6e7681;margin-top:6px"></p>
         <div style="margin-top:10px;font-size:.85rem">
@@ -327,6 +327,15 @@ tr.tm-off td{opacity:.45}
         <input id="newPass2" type="password" placeholder="Confirmer le mot de passe" style="margin-bottom:8px;max-width:300px">
         <button class="btn btn-blue" onclick="doChangePassword()">Changer le mot de passe</button>
         <div id="pwdMsg" style="margin-top:8px;font-size:.85rem"></div>
+      </div>
+      <div class="card" style="margin-bottom:16px">
+        <h2 id="healthTitle">🫀 État / Santé</h2>
+        <div id="healthContent" style="font-size:.85rem">
+          <p style="color:#6e7681">Chargement…</p>
+        </div>
+        <button id="healthBackupBtn" onclick="doHealthBackup()" style="margin-top:10px;background:var(--bg);border:1px solid var(--border);color:var(--title);padding:8px 16px;border-radius:6px;cursor:pointer;font-size:.85rem">🔄 Sauvegarder maintenant</button>
+        <div id="healthBackupMsg" style="margin-top:6px;font-size:.8rem"></div>
+        <div id="healthBackupsList" style="margin-top:10px"></div>
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>🚪 Session</h2>
@@ -529,6 +538,18 @@ var T = {
     nftTokens: "Tokens", nftTotal: "Total",
     nftIndicative: "Valeur indicative",
     nftIndicativeBadge: "indicatif", nftLowLiquidity: "Liquidité faible — valeur non fiable, exclue du total",
+    healthTitle: "État / Santé",
+    healthVersion: "Version", healthDbOk: "Base de données",
+    healthDbOkTrue: "✅ OK", healthDbOkFalse: "❌ Inaccessible",
+    healthUptime: "En ligne depuis", healthLastBackup: "Dernière sauvegarde",
+    healthLastBackupNone: "Jamais",
+    healthBackupNow: "🔄 Sauvegarder maintenant",
+    healthBackupRunning: "Sauvegarde en cours…",
+    healthBackupDone: "✅ Sauvegarde terminée",
+    healthBackupError: "❌ Échec de la sauvegarde",
+    healthBackupsTitle: "Sauvegardes",
+    healthBackupsNone: "Aucune sauvegarde",
+    healthBackupSize: "taille",
   },
   en: {
     dashboard: "Dashboard", stats: "Statistics", tokens: "Token Details", nfts: "NFTs",
@@ -716,6 +737,18 @@ var T = {
     nftTokens: "Tokens", nftTotal: "Total",
     nftIndicative: "Indicative value",
     nftIndicativeBadge: "indicative", nftLowLiquidity: "Low liquidity — unreliable, excluded from total",
+    healthTitle: "Health / Status",
+    healthVersion: "Version", healthDbOk: "Database",
+    healthDbOkTrue: "✅ OK", healthDbOkFalse: "❌ Unavailable",
+    healthUptime: "Uptime", healthLastBackup: "Last backup",
+    healthLastBackupNone: "Never",
+    healthBackupNow: "🔄 Backup now",
+    healthBackupRunning: "Backing up…",
+    healthBackupDone: "✅ Backup complete",
+    healthBackupError: "❌ Backup failed",
+    healthBackupsTitle: "Backups",
+    healthBackupsNone: "No backups",
+    healthBackupSize: "size",
   }
 };
 function t(key) { return (T[LANG] && T[LANG][key]) || key; }
@@ -1674,6 +1707,8 @@ function renderSettingsPage(){
   checkVersion();
   renderApiKeys();
   renderExportSection();
+  loadHealth();
+  loadBackups();
 }
 
 // ── Export / Sauvegarde (2026.07.4) ─────────────────────────────
@@ -2747,6 +2782,81 @@ async function saveDigest(){
 
 async function updateUnreadBadge(){
   try{var r=await fetch("/api/notifications/count");var d=await r.json();return d.count||0}catch(e){return 0}
+}
+
+// ── Health / Status ────────────────────────────────────────
+function _fmtUptime(sec){
+  var d=Math.floor(sec/86400),h=Math.floor((sec%86400)/3600),m=Math.floor((sec%3600)/60);
+  var parts=[];
+  if(d>0)parts.push(d+"j");
+  if(h>0)parts.push(h+"h");
+  if(m>0)parts.push(m+"min");
+  return parts.join(" ")||"<1min";
+}
+function _fmtSize(bytes){
+  if(bytes<1024)return bytes+" o";
+  if(bytes<1048576)return (bytes/1024).toFixed(1)+" Ko";
+  return (bytes/1048576).toFixed(1)+" Mo";
+}
+
+async function loadHealth(){
+  try{
+    var r=await fetch("/api/health");
+    if(!r.ok){document.getElementById("healthContent").innerHTML='<p style="color:#f85149">'+esc(t("verCheckError"))+'</p>';return}
+    var d=await r.json();
+    var h='';
+    h+='<p><b>'+esc(t("healthVersion"))+':</b> '+esc(d.version||"?")+'</p>';
+    h+='<p><b>'+esc(t("healthDbOk"))+':</b> '+(d.db_ok?esc(t("healthDbOkTrue")):esc(t("healthDbOkFalse")))+'</p>';
+    h+='<p><b>'+esc(t("healthUptime"))+':</b> '+_fmtUptime(d.uptime_s||0)+'</p>';
+    h+='<p><b>'+esc(t("healthLastBackup"))+':</b> '+(d.last_backup?esc(d.last_backup):esc(t("healthLastBackupNone")))+'</p>';
+    document.getElementById("healthContent").innerHTML=h;
+    document.getElementById("healthTitle").textContent='\ud83e\udec0 '+t("healthTitle");
+    document.getElementById("healthBackupBtn").textContent=t("healthBackupNow");
+  }catch(e){
+    console.error("loadHealth",e);
+    document.getElementById("healthContent").innerHTML='<p style="color:#f85149">'+esc(t("verCheckError"))+'</p>';
+  }
+}
+
+async function loadBackups(){
+  try{
+    var r=await fetch("/api/backups");
+    if(!r.ok){return}
+    var d=await r.json();
+    var list=d.backups||[];
+    var el=document.getElementById("healthBackupsList");
+    if(!list.length){el.innerHTML='<p style="font-size:.8rem;color:#6e7681">'+esc(t("healthBackupsNone"))+'</p>';return}
+    var h='<p style="font-weight:600;font-size:.82rem;margin-bottom:4px">'+esc(t("healthBackupsTitle"))+' ('+list.length+')</p>';
+    h+='<div style="max-height:150px;overflow-y:auto;font-size:.78rem">';
+    for(var i=0;i<list.length;i++){
+      var b=list[i];
+      h+='<div style="display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px solid var(--border)">';
+      h+='<span>'+esc(b.name||"")+'</span>';
+      h+='<span style="color:#6e7681">'+_fmtSize(b.size||0)+'</span>';
+      h+='</div>';
+    }
+    h+='</div>';
+    el.innerHTML=h;
+  }catch(e){console.error("loadBackups",e)}
+}
+
+async function doHealthBackup(){
+  var btn=document.getElementById("healthBackupBtn");
+  var msg=document.getElementById("healthBackupMsg");
+  btn.disabled=true;btn.textContent=t("healthBackupRunning");msg.textContent="";
+  try{
+    var r=await fetch("/api/backups/run",{method:"POST"});
+    if(r.ok){
+      msg.innerHTML='<span style="color:#40c463">'+esc(t("healthBackupDone"))+'</span>';
+      loadHealth();loadBackups();
+    }else{
+      var d=await r.json();
+      msg.innerHTML='<span style="color:#f85149">'+esc(t("healthBackupError"))+": "+esc(d.detail||"")+'</span>';
+    }
+  }catch(e){
+    msg.innerHTML='<span style="color:#f85149">'+esc(t("healthBackupError"))+'</span>';
+  }
+  btn.disabled=false;btn.textContent=t("healthBackupNow");
 }
 
 (async function(){var r=await fetch("/api/auth/me");if(r.ok)showDash()})();
