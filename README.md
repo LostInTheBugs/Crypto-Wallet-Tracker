@@ -140,10 +140,10 @@ Crypto-Wallet-Tracker/
 - [x] 2026.07.8 — Valorisation NFT (prix planchers)
 - [x] 2026.07.9 — Pricing multi-sources + test des cles
 - [x] 2026.07.10 — NFT : liens source + fiabilite des floors
-- [ ] 2026.07.10 — PWA, theme, recherche, watchlist
-- [ ] 2026.07.11 — Consolidation SQLite (ecritures serialisees)
-- [ ] 2026.07.12 — Sauvegardes auto + sante + tests/CI
-- [ ] 2026.07.13 — Durcissement auth & comptes
+- [ ] 2026.07.11 — PWA, theme, recherche, watchlist
+- [ ] 2026.07.12 — Consolidation SQLite (ecritures serialisees)
+- [ ] 2026.07.13 — Sauvegardes auto + sante + tests/CI
+- [ ] 2026.07.14 — Durcissement auth & comptes
 
 ### Phase 2 — Multi-chaines non-EVM & airdrops
 - [ ] Refactor abstraction multi-provider (prerequis)
