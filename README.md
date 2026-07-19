@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — 2026.07.3
+# Crypto Wallet Tracker — 2026.07.4
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -130,7 +130,7 @@ Crypto-Wallet-Tracker/
 
 ### Phase 1 — Fonctionnalites
 - [x] 2026.07.3 — Analytics (repartition & performance)
-- [ ] 2026.07.4 — Export CSV/PDF (holdings, tx, PnL fiscal)
+- [x] 2026.07.4 — Export CSV/PDF (holdings, tx, PnL fiscal)
 - [ ] 2026.07.5 — Transactions : approbations, interactions, gaz
 - [ ] 2026.07.6 — Moteur d'alertes + digest
 - [ ] 2026.07.7 — Alertes health-factor / liquidation
