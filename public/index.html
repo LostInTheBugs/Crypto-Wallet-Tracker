@@ -177,6 +177,7 @@ tr.tm-off td{opacity:.45}
 
     <div id="pageDashboard">
       <div class="grid" id="walletStats"></div>
+      <div id="nftWorthLine" style="display:none;background:rgba(88,166,255,.04);border:1px solid var(--border);border-radius:8px;padding:10px 16px;margin-bottom:8px;text-align:center;font-size:.85rem;color:var(--title)"></div>
       <div id="cacheAge" style="display:none;color:#6e7681;font-size:.72rem;margin:-2px 0 8px 2px"></div>
       <div class="grid" id="pnlCards" style="margin-bottom:8px"></div>
       <div class="row">
@@ -260,7 +261,7 @@ tr.tm-off td{opacity:.45}
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>📦 Version</h2>
-        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">2026.07.7</strong></p>
+        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">2026.07.8</strong></p>
         <p id="verStatus" style="font-size:.85rem"></p>
         <button id="updateBtn" class="hidden" onclick="doUpdate()" style="margin-top:8px;background:#238636;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:.85rem">🔄 Mettre à jour</button>
         <p id="updateMsg" style="margin-top:8px;font-size:.8rem;color:#f0c040"></p>
@@ -469,6 +470,9 @@ var T = {
     digestFreq: "Fréquence", digestOff: "Désactivé",
     digestDaily: "Quotidien", digestWeekly: "Hebdomadaire",
     digestChannel: "Canal",
+    nftValuation: "Valorisation NFT", nftFloor: "Prix plancher",
+    nftTotalValue: "Valeur totale NFT", nftNoKey: "Ajoute une clé OpenSea/Moralis pour les prix planchers",
+    nftTokens: "Tokens", nftTotal: "Total",
   },
   en: {
     dashboard: "Dashboard", stats: "Statistics", tokens: "Token Details", nfts: "NFTs",
@@ -641,6 +645,9 @@ var T = {
     digestFreq: "Frequency", digestOff: "Off",
     digestDaily: "Daily", digestWeekly: "Weekly",
     digestChannel: "Channel",
+    nftValuation: "NFT Valuation", nftFloor: "Floor price",
+    nftTotalValue: "Total NFT Value", nftNoKey: "Add an OpenSea/Moralis key for floor prices",
+    nftTokens: "Tokens", nftTotal: "Total",
   }
 };
 function t(key) { return (T[LANG] && T[LANG][key]) || key; }
@@ -1149,9 +1156,59 @@ async function loadNFTs(){
       return fetch("/api/nfts?address="+encodeURIComponent(a)).then(function(r){return r.json()}).catch(function(){return {nfts:[]}});
     }));
     var all=[];results.forEach(function(d){(d&&d.nfts||[]).forEach(function(n){all.push(n)})});
-    if(!all.length){el.innerHTML='<div class="card"><h2>🖼️ NFTs</h2><div class="loading" style="padding:24px">Aucun NFT trouvé sur ce wallet.</div></div>';return}
+    // Fetch valuation (floor prices)
+    var valResults=await Promise.all(addrs.map(function(a){
+      return fetch("/api/nfts/valuation?address="+encodeURIComponent(a)).then(function(r){return r.json()}).catch(function(){return {collections:[],nft_total_value_usd:0}});
+    }));
+    var valAgg={collections:[],nft_total_value_usd:0,floor_source:"none",message:null};
+    valResults.forEach(function(v){if(v&&v.collections)v.collections.forEach(function(c){valAgg.collections.push(c)});valAgg.nft_total_value_usd+=v.nft_total_value_usd||0;if(v&&v.floor_source&&v.floor_source!=="none")valAgg.floor_source=v.floor_source;if(v&&v.message)valAgg.message=v.message});
+
+    var totalVal=Math.round(valAgg.nft_total_value_usd*100)/100;
+    var sym=currSymbol();
     var html='<div class="card"><h2>🖼️ NFTs <span style="font-weight:400;font-size:.7rem;color:#6e7681">('+all.length+')</span></h2>';
-    html+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-top:12px">';
+
+    // Valuation summary
+    if(valAgg.floor_source!=="none"){
+      html+='<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;padding:10px;background:rgba(88,166,255,.06);border:1px solid var(--border);border-radius:8px">'+
+        '<div style="min-width:110px"><div style="font-size:.65rem;color:#6e7681">'+esc(t("nftTotalValue"))+'</div><div style="font-size:1.05rem;font-weight:700;color:var(--title)">'+fmtCurr(totalVal)+'</div></div>'+
+        '<div style="min-width:100px"><div style="font-size:.65rem;color:#6e7681">Source</div><div style="font-size:.8rem;color:#6e7681;text-transform:capitalize">'+esc(valAgg.floor_source)+'</div></div>'+
+        '<div style="min-width:90px"><div style="font-size:.65rem;color:#6e7681">Collections</div><div style="font-size:.8rem;color:var(--title)">'+valAgg.collections.filter(function(c){return c.value_usd>0||c.floor_eth!==null}).length+'</div></div>'+
+      '</div>';
+      // Per-collection table
+      var pricedCols=valAgg.collections.filter(function(c){return c.value_usd>0||c.floor_eth!==null||c.floor_usd!==null});
+      if(pricedCols.length>0){
+        pricedCols.sort(function(a,b){return (b.value_usd||0)-(a.value_usd||0)});
+        html+='<h3 style="font-size:.8rem;margin-bottom:8px">'+esc(t("nftValuation"))+'</h3>'+
+          '<div style="overflow-x:auto;margin-bottom:12px"><table style="font-size:.75rem;min-width:550px"><thead><tr>'+
+          '<th style="text-align:left;padding:6px 8px">Collection</th><th style="text-align:left;padding:6px 8px">Chaîne</th>'+
+          '<th style="text-align:right;padding:6px 8px">'+esc(t("nftFloor"))+'</th>'+
+          '<th style="text-align:right;padding:6px 8px">Items</th>'+
+          '<th style="text-align:right;padding:6px 8px">'+esc(t("nftTotalValue"))+'</th>'+
+          '<th style="text-align:center;padding:6px 8px">Source</th></tr></thead><tbody>';
+        for(var i=0;i<pricedCols.length;i++){
+          var pc=pricedCols[i];
+          var floorStr=pc.floor_usd?fmtCurr(pc.floor_usd):(pc.floor_eth!=null?(pc.floor_eth.toFixed(4)+' ETH'):'—');
+          html+='<tr>'+
+            '<td style="padding:4px 8px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(pc.name)+'">'+esc(pc.name)+'</td>'+
+            '<td style="padding:4px 8px;color:#6e7681;text-transform:capitalize">'+esc(pc.chain)+'</td>'+
+            '<td style="padding:4px 8px;text-align:right;font-weight:600">'+floorStr+'</td>'+
+            '<td style="padding:4px 8px;text-align:right">'+pc.count+'</td>'+
+            '<td style="padding:4px 8px;text-align:right;font-weight:600;color:var(--title)">'+(pc.value_usd?fmtCurr(pc.value_usd):'—')+'</td>'+
+            '<td style="padding:4px 8px;text-align:center;font-size:.65rem;color:#6e7681">'+esc(pc.source||'')+'</td>'+
+          '</tr>';
+        }
+        html+='</tbody></table></div>';
+    }}
+    else {
+      html+='<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;padding:10px;background:rgba(255,171,64,.08);border:1px solid rgba(255,171,64,.25);border-radius:8px">'+
+        '<span style="font-size:.8rem;color:#ffab40">'+esc(t("nftNoKey"))+'</span>'+
+        '<a href="#" onclick="switchPage(\"settings\");return false" style="font-size:.75rem;color:var(--accent);white-space:nowrap">'+esc(t("settings"))+' → API</a>'+
+      '</div>';
+    }
+
+    if(!all.length){el.innerHTML=html+'<div class="loading" style="padding:24px">Aucun NFT trouvé sur ce wallet.</div></div>';return}
+    html+='<h3 style="font-size:.8rem;margin:12px 0 8px">'+esc(t("nftTokens"))+'</h3>'+
+    '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-top:6px">';
     for(var i=0;i<all.length;i++){
       var n=all[i];
       var media=n.image?'<img src="'+esc(n.image)+'" loading="lazy" referrerpolicy="no-referrer" onerror="this.onerror=null;this.style.display=\'none\';this.parentElement.querySelector(\'.noimg\').style.display=\'flex\'" style="width:100%;height:150px;object-fit:cover;display:block;background:#0d1117">':'';
@@ -1610,10 +1667,39 @@ async function renderPnlCards(){
     document.getElementById("pnlCards").innerHTML=
       '<div class="stat-card"><div class="label">PNL Total</div><div class="value" style="color:'+colorPnl+'">'+(pnlVal>=0?"+":"")+sym+pnlVal.toLocaleString()+'</div></div>'+
       '<div class="stat-card"><div class="label">PNL 24h</div><div class="value" style="color:'+colorDay+'">'+(pnlDay>=0?"+":"")+sym+pnlDay.toLocaleString()+'</div></div>';
+    // Also refresh NFT worth line
+    loadNftWorth();
   }catch(e){console.error("renderPnlCards",e)}
 }
 
-// ── Token warning banner ──────────────────────────────────
+// ── Dashboard NFT valuation line ──────────────────────────
+async function loadNftWorth(){
+  try{
+    var el=document.getElementById("nftWorthLine");
+    if(!el)return;
+    var addrs=activeWallet=="ALL"?wallets.map(function(w){return w.address}):[activeWallet];
+    addrs=addrs.filter(function(a){return a&&a!="ALL"});
+    if(!addrs.length){el.style.display="none";return}
+    var results=await Promise.all(addrs.map(function(a){
+      return fetch("/api/nfts/valuation?address="+encodeURIComponent(a)).then(function(r){return r.json()}).catch(function(){return {nft_total_value_usd:null}});
+    }));
+    var totalNft=0,hasVal=false;
+    for(var i=0;i<results.length;i++){
+      var v=results[i];
+      if(typeof v.nft_total_value_usd==="number"&&v.nft_total_value_usd>=0){totalNft+=v.nft_total_value_usd;hasVal=true}
+    }
+    if(!hasVal){el.style.display="none";return}
+    var tokensVal=lastResult?lastResult.total_usd:0;
+    var grandTotal=Math.round((tokensVal+totalNft)*100)/100;
+    var sym=currSymbol();
+    el.innerHTML='<span style="color:#6e7681">'+t("nftTokens")+' : </span><b>'+fmtCurr(tokensVal)+'</b>'+
+      ' <span style="color:var(--accent);margin:0 6px">+</span>'+
+      '<span style="color:#6e7681">NFTs : </span><b>'+fmtCurr(totalNft)+'</b>'+
+      ' <span style="color:var(--accent);margin:0 6px">=</span>'+
+      '<span style="color:#6e7681">'+t("nftTotal")+' : </span><b style="font-size:1.05rem">'+fmtCurr(grandTotal)+'</b>';
+    el.style.display="block";
+  }catch(e){console.error("loadNftWorth",e)}
+}
 function showTokenWarning(tokens, reason){
   var el=document.getElementById("tokenWarning");
   var list=tokens.slice(0,10).map(function(t){return t.length>30?t.slice(0,28)+"…":t}).join(", ");

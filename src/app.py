@@ -1913,7 +1913,331 @@ async def get_nfts(address: str = Query(...), user=Depends(get_current_user)):
     return {"address": address, "count": len(nfts), "nfts": nfts[:600]}
 
 
-# ── Snapshots / History API ──────────────────────────────────────
+# ── NFT Valuation (floor prices) ─────────────────────────────────
+
+# Per-collection chain name mappings for external NFT APIs.
+# OpenSea: uses our chain names mostly as-is with a few exceptions.
+_OS_CHAIN = {
+    "ethereum": "ethereum", "polygon": "polygon", "arbitrum": "arbitrum",
+    "optimism": "optimism", "base": "base", "zora": "zora",
+    "soneium": "soneium", "unichain": "unichain", "linea": "linea",
+    "scroll": "scroll", "gnosis": "gnosis", "bob": "bob",
+}
+# Moralis: uses short chain names.
+_MORALIS_CHAIN = {
+    "ethereum": "eth", "polygon": "polygon", "arbitrum": "arbitrum",
+    "optimism": "optimism", "base": "base", "gnosis": "gnosis",
+    "linea": "linea", "scroll": "scroll", "bsc": "bsc",
+    "avalanche": "avalanche",
+}
+
+# Server-side NFT valuation cache: (user_id, address_lower) → {data, ts}
+_nft_valuation_cache: dict = {}
+_NFT_VALUATION_TTL = 3600  # 1 hour
+
+
+def _invalidate_nft_valuation_cache(user_id: int):
+    """Drop cached NFT valuations for a user (e.g. key added/changed)."""
+    for k in [k for k in list(_nft_valuation_cache)
+              if isinstance(k, tuple) and len(k) == 2 and k[0] == user_id]:
+        _nft_valuation_cache.pop(k, None)
+
+
+async def _get_user_opensea_key(user_id: int) -> str:
+    """Get OpenSea API key for user, fallback to env var."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT api_key FROM user_api_keys WHERE user_id=? AND provider='opensea'",
+            (user_id,))
+        row = await cur.fetchone()
+    if row:
+        return row["api_key"]
+    return os.environ.get("OPENSEA_API_KEY", "")
+
+
+async def _fetch_opensea_floor(client, api_key: str, chain: str,
+                                contract: str) -> dict | None:
+    """Fetch floor price from OpenSea API v2.
+
+    Two-step: contract → collection slug, then best listing.
+    Returns {floor_eth, floor_usd} or None on any error.
+    """
+    os_chain = _OS_CHAIN.get(chain)
+    if not os_chain:
+        return None
+    try:
+        # Step 1 — resolve contract to collection slug
+        r = await client.get(
+            f"https://api.opensea.io/api/v2/chain/{os_chain}/contract/{contract}",
+            headers={"X-API-KEY": api_key, "Accept": "application/json"},
+            timeout=12)
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        slug = (data.get("collection") or "").strip()
+        if not slug:
+            return None
+
+        # Step 2 — get best listing (floor)
+        r2 = await client.get(
+            f"https://api.opensea.io/api/v2/listings/collection/{slug}/all",
+            params={"limit": 1},
+            headers={"X-API-KEY": api_key, "Accept": "application/json"},
+            timeout=12)
+        if r2.status_code != 200:
+            return None
+        listings = (r2.json().get("listings") or [])
+        if not listings:
+            return None
+        price = (listings[0].get("price") or {}).get("current") or {}
+        raw = price.get("value", "0")
+        if raw is None:
+            return None
+        val = int(raw)
+        decimals = int(price.get("decimals", 18))
+        eth = val / (10 ** decimals)
+        usd_raw = price.get("usd_value")
+        usd = float(usd_raw) if usd_raw is not None else None
+        return {"floor_eth": eth, "floor_usd": usd}
+    except Exception:
+        return None
+
+
+async def _fetch_moralis_floor(client, api_key: str, chain: str,
+                                contract: str) -> dict | None:
+    """Fetch floor price from Moralis NFT API.
+
+    GET /nft/{address}/floor-price?chain={chain}
+    Returns {floor_eth} (Moralis doesn't return USD for floor).
+    """
+    m_chain = _MORALIS_CHAIN.get(chain)
+    if not m_chain:
+        return None
+    try:
+        r = await client.get(
+            f"https://deep-index.moralis.io/api/v2.2/nft/{contract}/floor-price",
+            params={"chain": m_chain},
+            headers={"X-API-Key": api_key, "Accept": "application/json"},
+            timeout=12)
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        fp = data.get("floor_price")
+        if fp is None:
+            return None
+        return {"floor_eth": float(fp), "floor_usd": None}
+    except Exception:
+        return None
+
+
+async def _fetch_reservoir_floor(client, contract: str) -> dict | None:
+    """Fetch floor price from Reservoir (free tier, public demo key).
+
+    Returns {floor_eth, floor_usd} or None.
+    """
+    try:
+        r = await client.get(
+            "https://api.reservoir.tools/collections/v5",
+            params={"id": contract, "limit": 1},
+            headers={"x-api-key": "demo-api-key", "Accept": "application/json"},
+            timeout=12)
+        if r.status_code != 200:
+            return None
+        collections = (r.json().get("collections") or [])
+        if not collections:
+            return None
+        fa = (collections[0].get("floorAsk") or {}).get("price") or {}
+        amt = fa.get("amount") or {}
+        eth = float(amt.get("native", 0) or 0)
+        usd = float(amt.get("usd", 0) or 0)
+        if eth <= 0 and usd <= 0:
+            return None
+        return {"floor_eth": eth, "floor_usd": usd}
+    except Exception:
+        return None
+
+
+async def _get_eth_price_for_nft() -> float:
+    """Return current ETH/USD price for NFT valuation (from portfolio cache)."""
+    # Try to find any ETH price from the portfolio cache
+    for addr, entry in _portfolio_cache.items():
+        data = entry.get("data") or {}
+        for t in (data.get("tokens") or []):
+            sym = (t.get("symbol") or "").lower()
+            if sym in ("eth", "weth"):
+                p = t.get("usd_price")
+                if isinstance(p, (int, float)) and p > 0:
+                    return float(p)
+    # Fallback: use DefiLlama
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(
+                "https://coins.llama.fi/prices/current/coingecko:ethereum")
+            if r.status_code == 200:
+                data = r.json()
+                coins = data.get("coins", {})
+                for k, v in coins.items():
+                    p = v.get("price")
+                    if isinstance(p, (int, float)) and p > 0:
+                        return float(p)
+    except Exception:
+        pass
+    return 2000.0  # rough fallback — better than nothing
+
+
+def _eth_to_usd_for_nft(floor_eth, eth_price) -> float | None:
+    """Convert ETH floor to USD, using the explicit usd field if available."""
+    if not isinstance(floor_eth, (int, float)) or floor_eth <= 0:
+        return None
+    return round(floor_eth * eth_price, 2)
+
+
+@app.get("/api/nfts/valuation")
+async def nft_valuation(address: str = Query(...),
+                         force: bool = Query(False),
+                         user=Depends(get_current_user)):
+    """Return per-collection floor prices and total NFT value.
+
+    Floor sources, in order: OpenSea > Moralis > Reservoir (free).
+    Never returns a 5xx: any failure degrades gracefully.
+    """
+    if not address.startswith("0x"):
+        raise HTTPException(400, "Adresse invalide")
+
+    cache_key = (user["id"], address.lower())
+    now = _time.time()
+    if not force:
+        entry = _nft_valuation_cache.get(cache_key)
+        if entry and (now - entry["ts"]) < _NFT_VALUATION_TTL:
+            return {**entry["data"], "cached": True}
+
+    # 1. Fetch raw NFTs (same logic as /api/nfts but without the 600 cap for grouping)
+    async with httpx.AsyncClient(follow_redirects=True) as client:
+        results = await asyncio.gather(
+            *[_fetch_nfts_chain(client, c, h, address) for c, h in CHAINS.items()],
+            return_exceptions=True)
+    nfts = []
+    for r in results:
+        if isinstance(r, list):
+            nfts.extend(r)
+
+    # 2. Group by (contract, chain), count items
+    from collections import defaultdict as _dd
+    groups = _dd(lambda: {"count": 0, "name": "", "chain": ""})
+    for n in nfts:
+        c = (n.get("contract") or "").strip().lower()
+        if not c:
+            continue
+        ch = n.get("chain", "")
+        key = (c, ch)
+        groups[key]["count"] += 1
+        groups[key]["name"] = groups[key]["name"] or n.get("collection", "?")
+        groups[key]["chain"] = ch
+
+    if not groups:
+        resp = {"address": address, "floor_source": "none",
+                "collections": [], "nft_total_value_usd": 0,
+                "nft_total_value_eth": 0, "message": "Aucun NFT trouvé"}
+        _nft_valuation_cache[cache_key] = {"data": resp, "ts": now}
+        return resp
+
+    # 3. Determine available API keys
+    opensea_key = await _get_user_opensea_key(user["id"])
+    moralis_key = await _get_user_moralis_key(user["id"])
+
+    eth_price = await _get_eth_price_for_nft()
+
+    collections = []
+    total_usd = 0.0
+    total_eth = 0.0
+    floor_source = "none"
+    os_used = False
+    moralis_used = False
+
+    async with httpx.AsyncClient(follow_redirects=True, timeout=15) as client:
+        for (contract, chain), info in sorted(groups.items()):
+            floor_eth = None
+            floor_usd = None
+            src = "none"
+
+            # Tier 1: OpenSea
+            if opensea_key and floor_eth is None:
+                res = await _fetch_opensea_floor(
+                    client, opensea_key, chain, contract)
+                if res:
+                    floor_eth = res.get("floor_eth")
+                    floor_usd = res.get("floor_usd")
+                    if floor_usd is None and floor_eth:
+                        floor_usd = _eth_to_usd_for_nft(floor_eth, eth_price)
+                    src = "opensea"
+                    os_used = True
+
+            # Tier 2: Moralis
+            if moralis_key and floor_eth is None:
+                res = await _fetch_moralis_floor(
+                    client, moralis_key, chain, contract)
+                if res:
+                    floor_eth = res.get("floor_eth")
+                    floor_usd = _eth_to_usd_for_nft(floor_eth, eth_price) if floor_eth else None
+                    src = "moralis"
+                    moralis_used = True
+
+            # Tier 3: Reservoir (free, best-effort)
+            if floor_eth is None:
+                res = await _fetch_reservoir_floor(client, contract)
+                if res:
+                    floor_eth = res.get("floor_eth")
+                    floor_usd = res.get("floor_usd")
+                    if floor_usd is None and floor_eth:
+                        floor_usd = _eth_to_usd_for_nft(floor_eth, eth_price)
+                    src = "reservoir"
+
+            count = info["count"]
+            value_usd = round((floor_usd or 0) * count, 2)
+            total_usd += value_usd
+            if floor_eth:
+                total_eth += floor_eth * count
+
+            collections.append({
+                "name": info["name"],
+                "contract": contract,
+                "chain": chain,
+                "count": count,
+                "floor_eth": round(floor_eth, 6) if floor_eth else None,
+                "floor_usd": floor_usd,
+                "value_usd": value_usd if value_usd > 0 else 0.0,
+                "source": src,
+            })
+
+    # Determine overall floor_source
+    if os_used:
+        floor_source = "opensea"
+    elif moralis_used:
+        floor_source = "moralis"
+    else:
+        # Check if any collection got a price from reservoir
+        any_priced = any(c["source"] == "reservoir" for c in collections)
+        floor_source = "reservoir" if any_priced else "none"
+
+    msg = None
+    if floor_source == "none":
+        msg = ("Aucune clé API configurée (OpenSea / Moralis) "
+               "et aucune source gratuite disponible. "
+               "Ajoute une clé dans Réglages > Clés API externes.")
+
+    resp = {
+        "address": address,
+        "floor_source": floor_source,
+        "collections": collections,
+        "nft_total_value_usd": round(total_usd, 2),
+        "nft_total_value_eth": round(total_eth, 6),
+    }
+    if msg:
+        resp["message"] = msg
+
+    _nft_valuation_cache[cache_key] = {"data": resp, "ts": now}
+    return resp
 
 @app.get("/api/snapshots")
 async def get_snapshots(token: str = Query(None), wallet: str = Query(None), chain: str = Query(None),
@@ -2867,6 +3191,8 @@ async def set_api_key(provider: str, request: Request, user=Depends(get_current_
     await db.commit()
     if provider == "moralis":
         _invalidate_defi_cache(user["id"])
+    if provider in ("opensea", "moralis"):
+        _invalidate_nft_valuation_cache(user["id"])
     return {"ok": True, "provider": provider, "configured": True, "msg": "Clé enregistrée"}
 
 
@@ -2876,6 +3202,8 @@ async def delete_api_key(provider: str, user=Depends(get_current_user), db=Depen
     await db.commit()
     if provider == "moralis":
         _invalidate_defi_cache(user["id"])
+    if provider in ("opensea", "moralis"):
+        _invalidate_nft_valuation_cache(user["id"])
     return {"ok": True, "provider": provider, "configured": False}
 
 

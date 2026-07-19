@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — 2026.07.7
+# Crypto Wallet Tracker — 2026.07.8
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -105,6 +105,7 @@ Crypto-Wallet-Tracker/
 | Frais de gaz | Blockscout `/transactions` | ✅ |
 | Prix actuels | Blockscout (intégré dans `/token-balances`) | ✅ |
 | Conversion EUR | Frankfurter (BCE) | ✅ |
+| Prix plancher NFT | OpenSea / Moralis / Reservoir | ✅ / ❌ (clé) |
 
 ---
 
@@ -136,7 +137,7 @@ Crypto-Wallet-Tracker/
 - [x] 2026.07.5 — Transactions : approbations, interactions, gaz
 - [x] 2026.07.6 — Moteur d'alertes + digest
 - [x] 2026.07.7 — Alertes health-factor / liquidation
-- [ ] 2026.07.8 — Valorisation NFT (prix planchers)
+- [x] 2026.07.8 — Valorisation NFT (prix planchers)
 - [ ] 2026.07.9 — Pricing multi-sources + test des cles
 - [ ] 2026.07.10 — PWA, theme, recherche, watchlist
 - [ ] 2026.07.11 — Consolidation SQLite (ecritures serialisees)
@@ -151,6 +152,15 @@ Crypto-Wallet-Tracker/
 - [ ] Airdrops a claim
 
 ## 📋 Changelog
+
+### 2026.07.8 — Valorisation NFT (prix planchers) + net worth Tokens+NFTs
+
+- **Valorisation des NFT** : nouvel endpoint `GET /api/nfts/valuation?address=` qui retourne les prix planchers (floor prices) par collection détenue, avec un total `nft_total_value_usd`. Sources, dans l'ordre : OpenSea (clé API), Moralis (clé API), Reservoir (gratuit, best-effort). Sans aucune clé, `floor_source: "none"` + message invitant à configurer une clé. **Jamais de 500** — toute erreur API est isolée et dégrade gracieusement.
+- **Cache serveur 1h** par (user, address) — une seule requête par collection, pas par item individuel. Conversion ETH→USD via prix ETH (cache portfolio ou DefiLlama).
+- **Dashboard — net worth décomposé** : nouvelle ligne « Tokens : X + NFTs : Y = Total : Z » entre les cartes stats et les cartes PNL. **La valeur NFT n'est PAS injectée** dans le total des tokens, ni dans le PNL par token, ni dans daily_history — c'est une ligne d'affichage additionnelle qui ne pollue pas l'historique.
+- **Page NFTs enrichie** : carte de synthèse (valeur totale, source, nombre de collections valorisées), tableau des floors par collection (nom, floor ETH/USD, items, valeur totale, source), et badge d'avertissement « Ajoute une clé OpenSea/Moralis » avec lien vers Réglages quand aucune valorisation n'est disponible.
+- **Clés API** : le helper `_get_user_moralis_key` existant + nouveau `_get_user_opensea_key`. Les caches de valorisation sont invalidés à l'ajout/suppression d'une clé OpenSea ou Moralis.
+- **i18n** FR/EN complet, `esc()` partout, pas de `\n` littéral en JS, défensif total.
 
 ### 2026.07.7 — Alertes health-factor / risque de liquidation
 
