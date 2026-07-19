@@ -174,7 +174,6 @@ tr.tm-off td{opacity:.45}
   <a href="#" onclick="switchPage('txns')" data-page="txns">📜 <span>Transactions</span></a>
   <a href="#" onclick="switchPage('alerts')" data-page="alerts">🔔 <span>Alertes</span></a>
   <a href="#" onclick="switchPage('wallets')" data-page="wallets">💼 <span>Wallets</span></a>
-  <a href="#" onclick="toggleTheme()" id="themeBtn" style="padding:10px 20px;color:var(--text);text-decoration:none;font-size:.85rem;cursor:pointer">🌙 <span>Sombre</span></a>
   <a href="#" onclick="switchPage('settings')" data-page="settings" style="margin-top:auto">⚙️ <span>Paramètres</span></a>
 </div>
 
@@ -196,9 +195,7 @@ tr.tm-off td{opacity:.45}
       <h1 id="pageTitle">📊 Dashboard <span id="walletBadge"></span></h1>
       <div class="topbar-right">
         <input id="globalSearch" type="text" placeholder="Rechercher... (symbole, nom, hash)" style="max-width:260px;font-size:.78rem" oninput="applyGlobalSearch()">
-        <span class="user" id="currentUser"></span>
         <select id="quickWallet" onchange="changeWallet()" style="max-width:180px;font-size:.75rem"></select>
-        <button onclick="logout()" style="margin-left:4px" id="btnLogout">Déconnexion</button>
       </div>
     </div>
     <div class="wallets-bar" id="walletTabs"></div>
@@ -295,6 +292,11 @@ tr.tm-off td{opacity:.45}
           <option value="usd">$ USD</option>
           <option value="eur">€ EUR</option>
         </select>
+      </div>
+      <div class="card" style="margin-bottom:16px">
+        <h2>🎨 Apparence</h2>
+        <p style="font-size:.8rem;color:#6e7681;margin-bottom:10px" id="themeDesc">Basculez entre le thème clair et sombre.</p>
+        <button id="themeBtn" onclick="toggleTheme()" style="background:var(--bg);border:1px solid var(--border);color:var(--title);padding:8px 16px;border-radius:6px;cursor:pointer;font-size:.85rem">🌙 <span>Sombre</span></button>
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>📦 Version</h2>
