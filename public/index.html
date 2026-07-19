@@ -11,9 +11,7 @@
 :root{--bg:#0a0e14;--card:#12161c;--border:#1e2530;--text:#b0b8c4;--title:#e6edf3;--accent:#4dabf7;--green:#40c463;--red:#f85149}
 /* Light theme */
 html.light{--bg:#f0f2f5;--card:#ffffff;--border:#d0d7de;--text:#57606a;--title:#1f2328;--accent:#0969da;--green:#1a7f37;--red:#cf222e}
-html.light .sidebar a:hover,html.light .sidebar a.active,html.light .wallet-tab.active{color:var(--accent);background:#ddf4ff;border-left-color:var(--accent)}
-html.light .wallet-tab{background:var(--card)}
-html.light .wallet-tab.all{background:#dafbe1;border-color:#4ade80;font-weight:700}
+html.light .sidebar a:hover,html.light .sidebar a.active{color:var(--accent);background:#ddf4ff;border-left-color:var(--accent)}
 html.light tr:hover td{background:#f6f8fa}
 html.light input{background:var(--card);border-color:var(--border);color:var(--title)}
 html.light select{background:var(--card);border-color:var(--border);color:var(--accent)}
@@ -36,15 +34,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 .sidebar a{display:block;padding:10px 20px;color:var(--text);text-decoration:none;font-size:.85rem;transition:all .1s}
 .sidebar a:hover,.sidebar a.active{color:var(--accent);background:#1a2838;border-left:3px solid var(--accent);padding-left:17px}
 .main{flex:1;padding:24px;overflow-x:auto}
-.topbar{display:flex;justify-content:space-between;align-items:center;padding-bottom:16px;margin-bottom:20px;border-bottom:1px solid var(--border)}
-.topbar h1{font-size:1.2rem;color:var(--title);font-weight:600}
-.topbar h1 span{font-size:.7rem;background:#1a2332;color:var(--accent);padding:2px 8px;border-radius:10px;font-weight:400;margin-left:8px}
-.topbar-right{display:flex;align-items:center;gap:12px}
-.topbar select{padding:5px 10px;background:var(--bg);border:1px solid var(--border);color:var(--accent);border-radius:5px;font-size:.8rem;cursor:pointer}
-.topbar .user{color:var(--accent);font-size:.8rem}
-.topbar button{background:var(--card);border:1px solid var(--border);color:var(--text);padding:5px 12px;border-radius:5px;cursor:pointer;font-size:.8rem}
-.topbar button:hover{background:#1a2332}
-html.light .topbar button:hover{background:#eef0f4}
+
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:20px}
 .stat-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px 18px}
 .stat-card .label{font-size:.7rem;color:#6e7681;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
@@ -61,12 +51,7 @@ input:focus{border-color:var(--accent)}
 .btn-blue{background:var(--accent);color:#fff}.btn-blue:hover{opacity:.9}
 .btn-red{background:var(--red);color:#fff}.btn-red:hover{opacity:.9}
 .btn-green{background:var(--green);color:#fff}.btn-green:hover{opacity:.9}
-.wallets-bar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}
-.wallet-tab{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:7px 12px;cursor:pointer;font-size:.8rem;display:flex;align-items:center;gap:6px}
-.wallet-tab:hover,.wallet-tab.active{border-color:var(--accent);background:#1a2838}
-.wallet-tab.active{font-weight:700}
-.wallet-tab .del{color:var(--red);cursor:pointer;margin-left:4px}
-.wallet-tab.all{background:#1a3320;border-color:#2d5a3d;font-weight:700}
+
 table{width:100%;border-collapse:collapse}
 th{padding:8px 12px;text-align:left;font-size:.7rem;color:#6e7681;text-transform:uppercase;border-bottom:1px solid var(--border);font-weight:500}
 td{padding:10px 12px;border-bottom:1px solid var(--border);font-size:.82rem}
@@ -94,15 +79,11 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
   .main{padding:12px;width:100%}
   .row{grid-template-columns:1fr}
   .grid{grid-template-columns:repeat(2,1fr)}
-  .topbar h1{font-size:1rem}
-  .topbar-right{gap:4px;flex-wrap:wrap}
   .chart-wrap{height:180px}
   table{font-size:.7rem}
   th,td{padding:5px 6px}
   .add-form{flex-direction:column}
   .add-form input+input{max-width:100%}
-  .wallets-bar{gap:4px}
-  .wallet-tab{padding:4px 6px;font-size:.7rem}
 }
 .modal-overlay{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;z-index:1000}
 .modal-box{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:30px 40px;text-align:center;min-width:360px}
@@ -191,13 +172,6 @@ tr.tm-off td{opacity:.45}
   </div>
 
   <div id="viewDash" class="hidden">
-    <div class="topbar">
-      <div class="topbar-right">
-        <input id="globalSearch" type="text" placeholder="Rechercher... (symbole, nom, hash)" style="max-width:260px;font-size:.78rem" oninput="applyGlobalSearch()">
-        <select id="quickWallet" onchange="changeWallet()" style="max-width:180px;font-size:.75rem"></select>
-      </div>
-    </div>
-    <div class="wallets-bar" id="walletTabs"></div>
 
     <div id="importModal" class="modal-overlay hidden">
       <div class="modal-box">
@@ -299,7 +273,7 @@ tr.tm-off td{opacity:.45}
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>📦 Version</h2>
-        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">2026.07.18</strong></p>
+        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">2026.07.19</strong></p>
         <p id="verStatus" style="font-size:.85rem"></p>
         <p id="verAutoMsg" style="font-size:.85rem;color:#6e7681;margin-top:6px"></p>
         <div style="margin-top:10px;font-size:.85rem">
@@ -834,15 +808,6 @@ try{
   _updateBtn();
 })();
 
-// ── Global search ─────────────────────────────────────────────
-function applyGlobalSearch(){
-  var q = (document.getElementById("globalSearch").value || "").toLowerCase().trim();
-  // Filter token table rows
-  if (currentPage === "tokens" && lastResult) renderTokenTable(lastResult, q);
-  // Filter transaction rows
-  if (currentPage === "txns" && txnData) renderTxnTable(q);
-}
-
 // ── Service Worker registration ───────────────────────────────
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/sw.js').catch(function(e) { console.warn('sw:', e.message); });
@@ -952,27 +917,9 @@ async function showDash(){
   await loadWallets();
 }
 
-async function loadWallets(){var r=await fetch("/api/wallets");wallets=await r.json();renderWalletTabs();populateQuickWallet();loadView()}
+async function loadWallets(){var r=await fetch("/api/wallets");wallets=await r.json();loadView()}
 
-function populateQuickWallet(){
-  var sel=document.getElementById("quickWallet");
-  if(!sel)return;
-  sel.innerHTML='<option value="ALL">🏠 Tous</option>';
-  for(var i=0;i<wallets.length;i++){var w=wallets[i];sel.innerHTML+='<option value="'+w.address+'">'+(w.watch_only?"👁 ":"")+(w.label||w.address.slice(0,10)+"...")+'</option>'}
-  sel.value=activeWallet;
-}
-
-function changeWallet(){var v=document.getElementById("quickWallet").value;if(v)selectWallet(v)}
-
-function renderWalletTabs(){
-  var el=document.getElementById("walletTabs");
-  if(!el)return;
-  var html='<div class="wallet-tab all'+(activeWallet=="ALL"?" active":"")+'" onclick="selectWallet(\'ALL\')">🏠 Tous</div>';
-  for(var i=0;i<wallets.length;i++){var w=wallets[i];html+='<div class="wallet-tab'+(w.address==activeWallet?" active":"")+'" onclick="selectWallet(\''+w.address+'\')">'+(w.watch_only?"👁 ":"")+(w.label||w.address.slice(0,10)+"...")+'<span class="del" onclick="event.stopPropagation();delWallet('+w.id+')">&times;</span></div>'}
-  el.innerHTML=html;
-}
-
-function selectWallet(addr){activeWallet=addr;renderWalletTabs();loadView()}
+function selectWallet(addr){activeWallet="ALL";loadView()}
 
 async function delWallet(id){if(!confirm("Supprimer ?"))return;await fetch("/api/wallets/"+id,{method:"DELETE"});if(wallets.find(function(w){return w.id==id&&w.address==activeWallet}))activeWallet="ALL";await loadWallets();if(currentPage=="wallets")renderWalletPage()}
 

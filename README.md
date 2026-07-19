@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — 2026.07.18
+# Crypto Wallet Tracker — 2026.07.19
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -148,7 +148,8 @@ Crypto-Wallet-Tracker/
 - [x] 2026.07.16 — Choix maj auto/manuelle
 - [x] 2026.07.17 — Sauvegardes auto + sante + tests/CI
 - [x] 2026.07.18 — Updater self-update en HTTPS (fetch fiable, plus de cle SSH)
-- [ ] 2026.07.19 — Durcissement auth & comptes
+|- [x] 2026.07.19 — Barre du haut retiree
+|- [ ] 2026.07.20 — Durcissement auth & comptes
 
 ### Phase 2 — Multi-chaines non-EVM & airdrops
 - [ ] Refactor abstraction multi-provider (prerequis)
@@ -158,6 +159,14 @@ Crypto-Wallet-Tracker/
 - [ ] Airdrops a claim
 
 ## 📋 Changelog
+
+### 2026.07.19 — Barre du haut retiree (recherche + selecteurs wallet) — vue agregee
+
+- **Topbar supprimee** : la barre du haut contenant le champ de recherche (`#globalSearch`) et le selecteur rapide de wallet (`#quickWallet`) est retiree. Le bandeau d'onglets wallets (`#walletTabs`) est egalement supprime.
+- **Vue agregee permanente** : `activeWallet` est force a `"ALL"` en permanence — l'app affiche toujours l'agregat de tous les wallets.
+- **JS neutralise** : les fonctions orphelines (`applyGlobalSearch`, `populateQuickWallet`, `changeWallet`, `renderWalletTabs`) sont supprimees. Aucune erreur JS au chargement (`Cannot read properties of null`).
+- **CSS nettoye** : les regles `.topbar`, `.wallets-bar`, `.wallet-tab` retirees (economie ~20 lignes CSS).
+- **Smoke test** : `tests/smoke-topbar-removal.js` — verifie que les 4 fonctions sont absentes et que les fonctions coeur (`selectWallet`, `switchPage`, `esc`, `t`) fonctionnent sans erreur.
 
 ### 2026.07.18 — Updater self-update en HTTPS (depot public, plus de probleme de cle)
 
