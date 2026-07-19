@@ -2254,17 +2254,25 @@ async def nft_valuation(address: str = Query(...),
                 res = await _fetch_opensea_floor(
                     client, opensea_key, chain, contract)
                 if res:
-                    floor_eth = res.get("floor_eth")
-                    floor_usd = res.get("floor_usd")
-                    if floor_usd is None and floor_eth:
-                        floor_usd = _eth_to_usd_for_nft(floor_eth, eth_price)
-                    slug = res.get("slug")
-                    listings_count = res.get("listings_count")
-                    best_offer_eth = res.get("best_offer_eth")
-                    volume_24h = res.get("volume_24h")
-                    num_owners = res.get("num_owners")
-                    src = "opensea"
-                    os_used = True
+                    os_floor = res.get("floor_eth")
+                    if os_floor:
+                        floor_eth = os_floor
+                        floor_usd = res.get("floor_usd")
+                        if floor_usd is None and floor_eth:
+                            floor_usd = _eth_to_usd_for_nft(floor_eth, eth_price)
+                        slug = res.get("slug")
+                        listings_count = res.get("listings_count")
+                        best_offer_eth = res.get("best_offer_eth")
+                        volume_24h = res.get("volume_24h")
+                        num_owners = res.get("num_owners")
+                        src = "opensea"
+                        os_used = True
+                    else:
+                        # OpenSea resolved the collection (slug, stats) but no floor.
+                        # Save slug for market_url, but DON'T trust its liquidity
+                        # signals — they often show 0 listings/volume even when the
+                        # collection has activity on other marketplaces.
+                        slug = res.get("slug")
 
             # Tier 2: Moralis
             if moralis_key and floor_eth is None:
@@ -2296,15 +2304,19 @@ async def nft_valuation(address: str = Query(...),
             has_volume = isinstance(volume_24h, (int, float)) and volume_24h > 0
             has_listings = isinstance(listings_count, (int, float)) and listings_count > 0
             has_best_offer = isinstance(best_offer_eth, (int, float)) and best_offer_eth > 0
+            has_owners = isinstance(num_owners, (int, float)) and num_owners > 100
             has_floor = isinstance(floor_eth, (int, float)) and floor_eth > 0
 
-            if has_floor and (has_volume or has_listings or has_best_offer):
+            if has_floor and (has_volume or has_listings or has_best_offer or has_owners):
                 if has_volume:
                     floor_reliable = True
                     floor_confidence = "high"
                 elif has_best_offer:
                     floor_reliable = True
                     floor_confidence = "high"
+                elif has_owners:
+                    floor_reliable = True
+                    floor_confidence = "low" if not has_listings else "high"
                 else:
                     floor_reliable = True
                     floor_confidence = "low"
