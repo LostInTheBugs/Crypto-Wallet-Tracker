@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — 2026.07.19
+# Crypto Wallet Tracker — 2026.07.20
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -123,6 +123,9 @@ Crypto-Wallet-Tracker/
 
 - Mots de passe hashés **bcrypt**
 - Sessions en cookies httpOnly
+- **Double authentification (2FA TOTP)** optionnelle — activation dans Paramètres
+- **Anti-brute-force** — rate-limiting des tentatives de login
+- **Changement de mot de passe** dans Paramètres
 - **Aucune clé privée** — uniquement des adresses publiques
 - Clés API utilisateur : stockées chiffrées, jamais renvoyées en clair (masquées `sk-...abc`)
 - Données 100 % locales (SQLite)
@@ -148,8 +151,8 @@ Crypto-Wallet-Tracker/
 - [x] 2026.07.16 — Choix maj auto/manuelle
 - [x] 2026.07.17 — Sauvegardes auto + sante + tests/CI
 - [x] 2026.07.18 — Updater self-update en HTTPS (fetch fiable, plus de cle SSH)
-|- [x] 2026.07.19 — Barre du haut retiree
-|- [ ] 2026.07.20 — Durcissement auth & comptes
+- [x] 2026.07.19 — Barre du haut retiree
+- [x] 2026.07.20 — Durcissement auth & comptes
 
 ### Phase 2 — Multi-chaines non-EVM & airdrops
 - [ ] Refactor abstraction multi-provider (prerequis)
@@ -160,7 +163,12 @@ Crypto-Wallet-Tracker/
 
 ## 📋 Changelog
 
-### 2026.07.19 — Barre du haut retiree (recherche + selecteurs wallet) — vue agregee
+### 2026.07.20 — Durcissement auth : 2FA TOTP optionnelle, anti-brute-force, changement de mot de passe, isolation multi-utilisateurs
+
+- **2FA TOTP optionnelle** : authentification à deux facteurs (TOTP) via app mobile (Google Authenticator, Authy...). Désactivée par défaut — rétro-compatibilité totale : un utilisateur sans 2FA se connecte comme avant. Activation en 3 étapes dans ⚙️ Paramètres → carte « Sécurité » : scan du QR code (ou saisie manuelle du secret), vérification du code, activation. Désactivation par code TOTP ou mot de passe. QR code généré côté serveur (`pyotp` + `qrcode`) — fonctionne hors ligne. Login : si 2FA activée, le backend renvoie `twofa_required:true` → le frontend affiche un champ code TOTP → vérification en seconde étape via `/api/auth/login/2fa`. Secrets stockés en base, jamais renvoyés après activation.
+- **Anti-brute-force** : limiteur de tentatives de login échouées en mémoire (par username+IP). Après 5 échecs consécutifs dans une fenêtre de 5 min, backoff de 60 s (doublant à chaque palier de 5 échecs supplémentaires). Message clair « Trop de tentatives, réessayez dans X s ». Compteur réinitialisé au succès. Aucune persistance — l'application locale n'a pas besoin de Redis.
+- **Changement de mot de passe** : endpoint `PUT /api/auth/password` révisé — vérifie `old_password` (bcrypt), impose longueur minimale (4 caractères), stocke le nouveau hash bcrypt. UI dans ⚙️ Paramètres → carte « Mot de passe » avec confirmation.
+- **Isolation multi-utilisateurs auditee** : vérification exhaustive de chaque endpoint de données (wallets, transactions, snapshots, PNL, alerts, notifications, API keys, token prefs, backups, analytics, exports, DeFi, NFTs) — tous filtrent par `user_id`. Correction : `PUT /api/wallets/{id}` vérifie désormais `cur.rowcount` et renvoie 404 si le wallet n'appartient pas à l'utilisateur. Tests d'isolation : `tests/test_isolation.py` — 10 assertions (création de 2 utilisateurs, vérification étanche entre leurs wallets, alerts, API keys, 2FA, transactions).
 
 - **Topbar supprimee** : la barre du haut contenant le champ de recherche (`#globalSearch`) et le selecteur rapide de wallet (`#quickWallet`) est retiree. Le bandeau d'onglets wallets (`#walletTabs`) est egalement supprime.
 - **Vue agregee permanente** : `activeWallet` est force a `"ALL"` en permanence — l'app affiche toujours l'agregat de tous les wallets.

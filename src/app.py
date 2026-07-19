@@ -9,6 +9,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from contextlib import asynccontextmanager
 import httpx, asyncio, jwt, bcrypt, aiosqlite, os, datetime, calendar, time as _time, bisect, math, subprocess, re, json
 from pathlib import Path
+import pyotp, qrcode, io, base64
 
 # Service imports
 import sys, os
@@ -307,6 +308,11 @@ async def lifespan(app: FastAPI):
         except: pass
         try: await db.execute("ALTER TABLE wallets ADD COLUMN group_label TEXT DEFAULT ''")
         except: pass
+        # 2026.07.20 -- TOTP 2FA (optional, opt-in) (idempotent)
+        try: await db.execute("ALTER TABLE users ADD COLUMN totp_secret TEXT DEFAULT NULL")
+        except: pass
+        try: await db.execute("ALTER TABLE users ADD COLUMN totp_enabled INTEGER DEFAULT 0")
+        except: pass
         # v2.12.5 -- sweep idempotent des lignes orphelines au demarrage : purge
         # toute donnée dont le wallet n'existe plus dans wallets (comparaison
         # insensible à la casse — le worker de reconstruction a pu écrire des
@@ -389,23 +395,6 @@ async def register(request: Request, db=Depends(get_db)):
     return {"ok": True, "msg": "Compte créé"}
 
 
-@app.post("/api/auth/login")
-async def login(request: Request, db=Depends(get_db)):
-    data = await request.json()
-    username = (data.get("username") or "").strip().lower()
-    password = data.get("password", "")
-    cur = await db.execute("SELECT id, password_hash FROM users WHERE username=?", (username,))
-    user = await cur.fetchone()
-    if not user or not bcrypt.checkpw(password.encode(), user["password_hash"].encode()):
-        raise HTTPException(401, "Identifiants invalides")
-    token = jwt.encode(
-        {"sub": user["id"], "exp": datetime.datetime.utcnow() + datetime.timedelta(days=TOKEN_EXPIRY)},
-        SESSION_SECRET, algorithm="HS256")
-    resp = JSONResponse({"ok": True, "username": username})
-    resp.set_cookie("token", token, max_age=TOKEN_EXPIRY * 86400, httponly=True, samesite="lax")
-    return resp
-
-
 @app.get("/api/auth/me")
 async def me(user=Depends(get_current_user)):
     return {"username": user["username"]}
@@ -415,6 +404,198 @@ async def me(user=Depends(get_current_user)):
 async def logout():
     resp = JSONResponse({"ok": True})
     resp.delete_cookie("token")
+    return resp
+
+
+# ── Brute-force rate limiter (login) ──────────────────────────
+
+_LOGIN_FAILURES: dict[str, list[float]] = {}  # key="username|ip" → list of timestamps
+_LOGIN_LOCKOUT_THRESHOLD = 5      # consecutive failures before lockout
+_LOGIN_LOCKOUT_WINDOW = 300        # seconds (5 min)
+_LOGIN_BACKOFF_BASE = 60           # seconds base backoff after lockout
+
+
+def _check_login_rate_limit(username: str, ip: str) -> str | None:
+    """Return error message if rate-limited, else None."""
+    key = f"{username}|{ip}"
+    now = _time.time()
+    # Purge old entries outside the window
+    window_cutoff = now - _LOGIN_LOCKOUT_WINDOW
+    timestamps = [t for t in _LOGIN_FAILURES.get(key, []) if t > window_cutoff]
+    _LOGIN_FAILURES[key] = timestamps
+    if len(timestamps) < _LOGIN_LOCKOUT_THRESHOLD:
+        return None
+    # Compute lockout duration: 60s base, doubling every threshold failures
+    lockout = _LOGIN_BACKOFF_BASE * (2 ** ((len(timestamps) - _LOGIN_LOCKOUT_THRESHOLD) // _LOGIN_LOCKOUT_THRESHOLD))
+    elapsed = now - timestamps[-1]
+    if elapsed < lockout:
+        remaining = int(lockout - elapsed)
+        return f"Trop de tentatives, réessayez dans {remaining} s"
+    return None
+
+
+def _reset_login_rate_limit(username: str, ip: str):
+    """Clear rate limit on successful login."""
+    key = f"{username}|{ip}"
+    _LOGIN_FAILURES.pop(key, None)
+
+
+# ── TOTP 2FA (optional, opt-in) ───────────────────────────────
+
+@app.get("/api/auth/2fa/status")
+async def get_2fa_status(user=Depends(get_current_user), db=Depends(get_db)):
+    """Return whether 2FA is enabled for the current user."""
+    cur = await db.execute("SELECT totp_enabled FROM users WHERE id=?", (user["id"],))
+    row = await cur.fetchone()
+    enabled = bool(row["totp_enabled"]) if row else False
+    return {"enabled": enabled}
+
+
+@app.post("/api/auth/2fa/setup")
+async def setup_2fa(user=Depends(get_current_user), db=Depends(get_db)):
+    """Generate a TOTP secret (not yet active) and return an otpauth URI + QR PNG (base64)."""
+    secret = pyotp.random_base32()
+    cur = await db.execute("SELECT username FROM users WHERE id=?", (user["id"],))
+    row = await cur.fetchone()
+    account = row["username"] if row else "user"
+    uri = pyotp.totp.TOTP(secret).provisioning_uri(name=account, issuer_name="CryptoWalletTracker")
+    # Generate QR code as base64 PNG
+    buf = io.BytesIO()
+    img = qrcode.make(uri)
+    img.save(buf, format="PNG")
+    qr_b64 = base64.b64encode(buf.getvalue()).decode()
+    # Store secret TEMPORARILY (not enabled yet)
+    await db.execute("UPDATE users SET totp_secret=? WHERE id=?", (secret, user["id"]))
+    await db.commit()
+    return {"secret": secret, "otpauth_uri": uri, "qr_png_base64": qr_b64}
+
+
+@app.post("/api/auth/2fa/enable")
+async def enable_2fa(request: Request, user=Depends(get_current_user), db=Depends(get_db)):
+    """Verify a TOTP code against the pending secret, then activate 2FA."""
+    data = await request.json()
+    code = (data.get("code") or "").strip()
+    cur = await db.execute("SELECT totp_secret FROM users WHERE id=?", (user["id"],))
+    row = await cur.fetchone()
+    secret = row["totp_secret"] if row else None
+    if not secret:
+        raise HTTPException(400, "Aucun secret en attente — lance setup d'abord")
+    totp = pyotp.TOTP(secret)
+    if not totp.verify(code):
+        raise HTTPException(401, "Code TOTP invalide")
+    # Activate: enable + keep secret
+    await db.execute("UPDATE users SET totp_enabled=1 WHERE id=?", (user["id"],))
+    await db.commit()
+    return {"ok": True, "msg": "2FA activée"}
+
+
+@app.post("/api/auth/2fa/disable")
+async def disable_2fa(request: Request, user=Depends(get_current_user), db=Depends(get_db)):
+    """Disable 2FA: requires either a valid TOTP code or the account password."""
+    data = await request.json()
+    code = (data.get("code") or "").strip()
+    password = data.get("password", "")
+
+    cur = await db.execute("SELECT totp_secret, totp_enabled, password_hash FROM users WHERE id=?", (user["id"],))
+    row = await cur.fetchone()
+    if not row or not row["totp_enabled"]:
+        raise HTTPException(400, "2FA n'est pas activée")
+
+    # Accept either a valid TOTP code or the account password
+    if code:
+        totp = pyotp.TOTP(row["totp_secret"])
+        if not totp.verify(code):
+            raise HTTPException(401, "Code TOTP invalide")
+    elif password:
+        if not bcrypt.checkpw(password.encode(), row["password_hash"].encode()):
+            raise HTTPException(401, "Mot de passe incorrect")
+    else:
+        raise HTTPException(400, "Code TOTP ou mot de passe requis")
+
+    # Clear secret and disable
+    await db.execute("UPDATE users SET totp_enabled=0, totp_secret=NULL WHERE id=?", (user["id"],))
+    await db.commit()
+    return {"ok": True, "msg": "2FA désactivée"}
+
+
+# ── Login (with optional 2FA step) ──────────────────────────────
+
+@app.post("/api/auth/login")
+async def login(request: Request, db=Depends(get_db)):
+    data = await request.json()
+    username = (data.get("username") or "").strip().lower()
+    password = data.get("password", "")
+    ip = request.client.host if request.client else "unknown"
+
+    # Rate-limit check
+    rate_err = _check_login_rate_limit(username, ip)
+    if rate_err:
+        raise HTTPException(429, rate_err)
+
+    cur = await db.execute("SELECT id, password_hash, totp_enabled FROM users WHERE username=?", (username,))
+    user = await cur.fetchone()
+    if not user or not bcrypt.checkpw(password.encode(), user["password_hash"].encode()):
+        _LOGIN_FAILURES.setdefault(f"{username}|{ip}", []).append(_time.time())
+        raise HTTPException(401, "Identifiants invalides")
+
+    # If 2FA is enabled, require a second step
+    if user["totp_enabled"]:
+        # Check if a TOTP code was provided in the same request
+        totp_code = (data.get("totp") or "").strip()
+        if totp_code:
+            cur2 = await db.execute("SELECT totp_secret FROM users WHERE id=?", (user["id"],))
+            row2 = await cur2.fetchone()
+            if row2 and row2["totp_secret"]:
+                t = pyotp.TOTP(row2["totp_secret"])
+                if not t.verify(totp_code):
+                    _LOGIN_FAILURES.setdefault(f"{username}|{ip}", []).append(_time.time())
+                    raise HTTPException(401, "Code TOTP invalide")
+                # TOTP OK — proceed to issue token
+            else:
+                raise HTTPException(500, "Configuration 2FA corrompue")
+        else:
+            # 2FA required but no code provided → ask for it
+            return JSONResponse({"twofa_required": True}, status_code=200)
+
+    # Success — reset rate limits and issue JWT
+    _reset_login_rate_limit(username, ip)
+    token = jwt.encode(
+        {"sub": user["id"], "exp": datetime.datetime.utcnow() + datetime.timedelta(days=TOKEN_EXPIRY)},
+        SESSION_SECRET, algorithm="HS256")
+    resp = JSONResponse({"ok": True, "username": username})
+    resp.set_cookie("token", token, max_age=TOKEN_EXPIRY * 86400, httponly=True, samesite="lax")
+    return resp
+
+
+@app.post("/api/auth/login/2fa")
+async def login_2fa(request: Request, db=Depends(get_db)):
+    """Second-step: verify TOTP code and issue JWT cookie."""
+    data = await request.json()
+    username = (data.get("username") or "").strip().lower()
+    code = (data.get("code") or "").strip()
+    ip = request.client.host if request.client else "unknown"
+
+    rate_err = _check_login_rate_limit(username, ip)
+    if rate_err:
+        raise HTTPException(429, rate_err)
+
+    cur = await db.execute("SELECT id, totp_secret, totp_enabled FROM users WHERE username=?", (username,))
+    user = await cur.fetchone()
+    if not user or not user["totp_enabled"] or not user["totp_secret"]:
+        _LOGIN_FAILURES.setdefault(f"{username}|{ip}", []).append(_time.time())
+        raise HTTPException(400, "2FA non configurée pour ce compte")
+
+    totp = pyotp.TOTP(user["totp_secret"])
+    if not totp.verify(code):
+        _LOGIN_FAILURES.setdefault(f"{username}|{ip}", []).append(_time.time())
+        raise HTTPException(401, "Code TOTP invalide")
+
+    _reset_login_rate_limit(username, ip)
+    token = jwt.encode(
+        {"sub": user["id"], "exp": datetime.datetime.utcnow() + datetime.timedelta(days=TOKEN_EXPIRY)},
+        SESSION_SECRET, algorithm="HS256")
+    resp = JSONResponse({"ok": True, "username": username})
+    resp.set_cookie("token", token, max_age=TOKEN_EXPIRY * 86400, httponly=True, samesite="lax")
     return resp
 
 
@@ -498,7 +679,9 @@ async def edit_wallet(wallet_id: int, request: Request, user=Depends(get_current
         params.append((data["group_label"] or "").strip()[:50])
     params.extend([wallet_id, user["id"]])
     async with write_locked():
-        await db.execute(f"UPDATE wallets SET {', '.join(updates)} WHERE id=? AND user_id=?", params)
+        cur = await db.execute(f"UPDATE wallets SET {', '.join(updates)} WHERE id=? AND user_id=?", params)
+        if cur.rowcount == 0:
+            raise HTTPException(404, "Wallet introuvable")
         await db.commit()
     return {"ok": True}
 

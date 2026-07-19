@@ -167,6 +167,14 @@ tr.tm-off td{opacity:.45}
       <input id="authPass" type="password" placeholder="Mot de passe" style="margin-bottom:8px">
       <button class="btn btn-green" onclick="doAuth()" style="width:100%;margin-bottom:8px" id="authBtn">Se connecter</button>
       <div id="authError" class="error"></div>
+      <div id="tfaLoginPane" style="display:none;margin-bottom:8px">
+        <p style="font-size:.8rem;color:#f0c040;margin-bottom:6px">🔐 Double authentification requise — entre le code de ton app</p>
+        <div style="display:flex;gap:8px">
+          <input id="tfaLoginCode" type="text" placeholder="Code TOTP" maxlength="6" style="font-family:monospace;font-size:1rem;text-align:center;max-width:120px">
+          <button class="btn btn-green" onclick="doAuthTfa()" style="flex:1">Vérifier</button>
+        </div>
+        <div id="tfaLoginError" class="error" style="margin-top:6px"></div>
+      </div>
       <div style="text-align:center;font-size:.8rem"><a href="#" onclick="toggleAuth()" style="color:var(--accent)">Créer un compte</a></div>
     </div>
   </div>
@@ -273,7 +281,7 @@ tr.tm-off td{opacity:.45}
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>📦 Version</h2>
-        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">2026.07.19</strong></p>
+        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">2026.07.20</strong></p>
         <p id="verStatus" style="font-size:.85rem"></p>
         <p id="verAutoMsg" style="font-size:.85rem;color:#6e7681;margin-top:6px"></p>
         <div style="margin-top:10px;font-size:.85rem">
@@ -301,6 +309,37 @@ tr.tm-off td{opacity:.45}
         <input id="newPass2" type="password" placeholder="Confirmer le mot de passe" style="margin-bottom:8px;max-width:300px">
         <button class="btn btn-blue" onclick="doChangePassword()">Changer le mot de passe</button>
         <div id="pwdMsg" style="margin-top:8px;font-size:.85rem"></div>
+      </div>
+      <div class="card" style="margin-bottom:16px">
+        <h2>🔐 Sécurité</h2>
+        <p style="font-size:.8rem;color:#6e7681;margin-bottom:10px" id="secDesc">Double authentification (optionnelle).</p>
+        <div id="tfaSection">
+          <p id="tfaStatus" style="font-size:.85rem;margin-bottom:8px">⏳</p>
+          <button id="tfaEnableBtn" class="btn btn-blue" onclick="setupTfa()" style="display:none">Activer la 2FA</button>
+          <button id="tfaDisableBtn" class="btn btn-red" onclick="showTfaDisable()" style="display:none">Désactiver la 2FA</button>
+        </div>
+        <!-- 2FA setup modal (invisible inline, toggled by JS) -->
+        <div id="tfaSetupPane" style="display:none;margin-top:12px;padding:12px;background:var(--bg);border:1px solid var(--border);border-radius:8px">
+          <p style="font-size:.78rem;color:var(--text);margin-bottom:8px">Scanne ce QR code avec ton app d'authentification :</p>
+          <img id="tfaQr" style="display:block;width:200px;height:200px;margin:0 auto 8px;border-radius:8px;background:#fff" alt="QR">
+          <p style="font-size:.72rem;color:#6e7681;text-align:center;margin-bottom:8px">Secret manuel : <code id="tfaSecret" style="font-size:.7rem;word-break:break-all;background:rgba(0,0,0,0.3);padding:2px 6px;border-radius:3px"></code></p>
+          <div style="display:flex;gap:8px;align-items:center">
+            <input id="tfaCode" type="text" placeholder="Code à 6 chiffres" maxlength="6" style="max-width:140px;font-family:monospace;font-size:1rem;text-align:center">
+            <button class="btn btn-green" onclick="enableTfa()">Activer</button>
+            <button class="btn" onclick="cancelTfa()" style="background:transparent;border:1px solid var(--border);color:var(--text)">Annuler</button>
+          </div>
+          <div id="tfaSetupMsg" style="margin-top:8px;font-size:.8rem"></div>
+        </div>
+        <!-- Disable 2FA pane -->
+        <div id="tfaDisablePane" style="display:none;margin-top:12px;padding:12px;background:var(--bg);border:1px solid var(--border);border-radius:8px">
+          <p style="font-size:.78rem;color:var(--text);margin-bottom:8px">Entre un code TOTP valide ou ton mot de passe pour désactiver :</p>
+          <div style="display:flex;gap:8px;align-items:center">
+            <input id="tfaDisCode" type="text" placeholder="Code ou mot de passe" maxlength="64" style="max-width:200px">
+            <button class="btn btn-red" onclick="disableTfa()">Désactiver</button>
+            <button class="btn" onclick="cancelTfaDisable()" style="background:transparent;border:1px solid var(--border);color:var(--text)">Annuler</button>
+          </div>
+          <div id="tfaDisableMsg" style="margin-top:8px;font-size:.8rem"></div>
+        </div>
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2 id="healthTitle">🫀 État / Santé</h2>
@@ -902,13 +941,119 @@ function fmtCurr(usd){var v=toCurr(usd);return currSymbol()+v.toLocaleString(und
 
 function toggleAuth(){authMode=authMode=="login"?"register":"login";document.getElementById("authTitle").textContent=authMode=="login"?"Connexion":"Créer un compte";document.getElementById("authBtn").textContent=authMode=="login"?"Se connecter":"Créer le compte"}
 
+var _tfaUsername = "";
+
 async function doAuth(){
   var u=document.getElementById("authUser").value.trim(), p=document.getElementById("authPass").value;
   var path=authMode=="login"?"/api/auth/login":"/api/auth/register";
-  try{var r=await fetch(path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:u,password:p})});var d=await r.json();if(!r.ok){document.getElementById("authError").textContent=d.detail||d.msg||"Erreur";return}if(authMode=="register"){toggleAuth();document.getElementById("authError").textContent="Compte créé ! Connecte-toi.";return}showDash()}catch(e){console.error("doAuth",e);document.getElementById("authError").textContent="Erreur réseau"}
+  try{var r=await fetch(path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:u,password:p})});var d=await r.json();if(!r.ok){document.getElementById("authError").textContent=d.detail||d.msg||"Erreur";document.getElementById("tfaLoginPane").style.display="none";return}
+  if(authMode=="register"){toggleAuth();document.getElementById("authError").textContent="Compte créé ! Connecte-toi.";return}
+  // Check if 2FA is required
+  if(d.twofa_required){_tfaUsername=u;document.getElementById("tfaLoginPane").style.display="block";document.getElementById("authError").textContent="";document.getElementById("tfaLoginCode").focus();return}
+  showDash()}catch(e){console.error("doAuth",e);document.getElementById("authError").textContent="Erreur réseau"}
 }
 
-async function logout(){await fetch("/api/auth/logout",{method:"POST"});try{Object.keys(localStorage).forEach(function(k){if(k.indexOf("pfCache:")==0)localStorage.removeItem(k)})}catch(e){}document.getElementById("viewLogin").classList.remove("hidden");document.getElementById("viewDash").classList.add("hidden");document.getElementById("sidebar").classList.add("hidden");document.getElementById("userInfo").textContent="";document.getElementById("btnLogout").classList.add("hidden");activeWallet="ALL"}
+async function doAuthTfa(){
+  var code=document.getElementById("tfaLoginCode").value.trim();
+  if(code.length!==6){document.getElementById("tfaLoginError").textContent="Code à 6 chiffres requis";return}
+  try{
+    var r=await fetch("/api/auth/login/2fa",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:_tfaUsername,code:code})});
+    var d=await r.json();
+    if(!r.ok){document.getElementById("tfaLoginError").textContent=d.detail||"Code invalide";return}
+    document.getElementById("tfaLoginPane").style.display="none";
+    document.getElementById("tfaLoginError").textContent="";
+    _tfaUsername="";
+    showDash()
+  }catch(e){console.error("doAuthTfa",e);document.getElementById("tfaLoginError").textContent="Erreur réseau"}
+}
+
+// ── 2FA setup / enable / disable ─────────────────────────────
+
+var _tfaSecret = "";
+
+async function loadTfaStatus(){
+  try{
+    var r=await fetch("/api/auth/2fa/status");
+    var d=await r.json();
+    var status=document.getElementById("tfaStatus");
+    var enableBtn=document.getElementById("tfaEnableBtn");
+    var disableBtn=document.getElementById("tfaDisableBtn");
+    if(d.enabled){
+      status.innerHTML='<span style="color:#40c463">✅ 2FA activée</span>';
+      enableBtn.style.display="none";
+      disableBtn.style.display="inline-block";
+    }else{
+      status.innerHTML='<span style="color:#6e7681">❌ 2FA non activée</span>';
+      enableBtn.style.display="inline-block";
+      disableBtn.style.display="none";
+    }
+  }catch(e){console.error("loadTfaStatus",e)}
+}
+
+async function setupTfa(){
+  try{
+    var r=await fetch("/api/auth/2fa/setup",{method:"POST"});
+    var d=await r.json();
+    _tfaSecret=d.secret;
+    document.getElementById("tfaQr").src="data:image/png;base64,"+d.qr_png_base64;
+    document.getElementById("tfaSecret").textContent=d.secret;
+    document.getElementById("tfaSetupPane").style.display="block";
+    document.getElementById("tfaDisablePane").style.display="none";
+    document.getElementById("tfaSetupMsg").textContent="";
+    document.getElementById("tfaCode").value="";
+    document.getElementById("tfaCode").focus();
+  }catch(e){console.error("setupTfa",e)}
+}
+
+function cancelTfa(){
+  document.getElementById("tfaSetupPane").style.display="none";
+  document.getElementById("tfaSetupMsg").textContent="";
+  _tfaSecret="";
+}
+
+async function enableTfa(){
+  var code=document.getElementById("tfaCode").value.trim();
+  if(code.length!==6){document.getElementById("tfaSetupMsg").innerHTML='<span style="color:#f85149">Code à 6 chiffres requis</span>';return}
+  try{
+    var r=await fetch("/api/auth/2fa/enable",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({code:code})});
+    var d=await r.json();
+    if(!r.ok){document.getElementById("tfaSetupMsg").innerHTML='<span style="color:#f85149">'+esc(d.detail||"Code invalide")+'</span>';return}
+    document.getElementById("tfaSetupPane").style.display="none";
+    document.getElementById("tfaSetupMsg").textContent="";
+    _tfaSecret="";
+    loadTfaStatus();
+  }catch(e){console.error("enableTfa",e)}
+}
+
+function showTfaDisable(){
+  document.getElementById("tfaDisablePane").style.display="block";
+  document.getElementById("tfaSetupPane").style.display="none";
+  document.getElementById("tfaDisableMsg").textContent="";
+  document.getElementById("tfaDisCode").value="";
+  document.getElementById("tfaDisCode").focus();
+}
+
+function cancelTfaDisable(){
+  document.getElementById("tfaDisablePane").style.display="none";
+  document.getElementById("tfaDisableMsg").textContent="";
+}
+
+async function disableTfa(){
+  var val=document.getElementById("tfaDisCode").value.trim();
+  if(!val){document.getElementById("tfaDisableMsg").innerHTML='<span style="color:#f85149">Code ou mot de passe requis</span>';return}
+  // If it looks like a 6-digit code, treat as TOTP; otherwise treat as password
+  var body=/^\d{6}$/.test(val)?{code:val}:{password:val};
+  try{
+    var r=await fetch("/api/auth/2fa/disable",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    var d=await r.json();
+    if(!r.ok){document.getElementById("tfaDisableMsg").innerHTML='<span style="color:#f85149">'+esc(d.detail||"Erreur")+'</span>';return}
+    document.getElementById("tfaDisablePane").style.display="none";
+    document.getElementById("tfaDisableMsg").textContent="";
+    loadTfaStatus();
+  }catch(e){console.error("disableTfa",e)}
+}
+
+async function logout(){await fetch("/api/auth/logout",{method:"POST"});try{Object.keys(localStorage).forEach(function(k){if(k.indexOf("pfCache:")==0)localStorage.removeItem(k)})}catch(e){}document.getElementById("viewLogin").classList.remove("hidden");document.getElementById("viewDash").classList.add("hidden");document.getElementById("sidebar").classList.add("hidden");document.getElementById("userInfo").textContent="";document.getElementById("btnLogout").classList.add("hidden");document.getElementById("tfaLoginPane").style.display="none";document.getElementById("tfaLoginError").textContent="";_tfaUsername="";activeWallet="ALL"}
 
 async function showDash(){
   document.getElementById("viewLogin").classList.add("hidden");document.getElementById("viewDash").classList.remove("hidden");document.getElementById("sidebar").classList.remove("hidden");document.getElementById("btnLogout").classList.remove("hidden");
@@ -1656,6 +1801,7 @@ function renderSettingsPage(){
   renderExportSection();
   loadHealth();
   loadBackups();
+  loadTfaStatus();
 }
 
 // ── Export / Sauvegarde (2026.07.4) ─────────────────────────────
