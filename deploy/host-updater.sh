@@ -35,11 +35,11 @@ log "Request: $(cat "$REQUEST_FILE")"
 
 # ── Write "running" status ──────────────────────────────────
 cat > "$STATUS_FILE" <<EOF
-{"state":"running","message":"Git pull + docker rebuild in progress…","updated_at":"$(date -u +'%Y-%m-%dT%H:%M:%SZ')","version":"","request":$(cat "$REQUEST_FILE")}
+{"state":"running","message":"git fetch + reset --hard origin/main + docker rebuild in progress…","updated_at":"$(date -u +'%Y-%m-%dT%H:%M:%SZ')","version":"","request":$(cat "$REQUEST_FILE")}
 EOF
 
-# ── git pull ────────────────────────────────────────────────
-log "Step 1/2: git pull origin main …"
+# ── git fetch + hard reset ──────────────────────────────────
+log "Step 1/2: git fetch + reset --hard origin/main …"
 cd "$APP_DIR"
 
 # Best-effort deploy key setup (VM may not have GitHub SSH key)
@@ -73,14 +73,28 @@ if [ -n "$DEPLOY_KEY" ]; then
     GIT_SSH_CMD="ssh -i ${DEPLOY_KEY} -o StrictHostKeyChecking=no"
 fi
 
-if ! sudo -n env GIT_SSH_COMMAND="$GIT_SSH_CMD" git -C "$APP_DIR" pull origin main 2>&1 | tee -a "$LOG_FILE"; then
-    log "ERROR: git pull failed"
+# Force-sync: fetch + reset --hard (resistant to local drift, no merge conflicts)
+if ! sudo -n env GIT_SSH_COMMAND="$GIT_SSH_CMD" git -C "$APP_DIR" fetch origin main --quiet 2>&1 | tee -a "$LOG_FILE"; then
+    log "ERROR: git fetch failed"
     cat > "$STATUS_FILE" <<EOF
-{"state":"failed","message":"git pull origin main failed — check /var/log/crypto-updater.log","updated_at":"$(date -u +'%Y-%m-%dT%H:%M:%SZ')","version":""}
+{"state":"failed","message":"git fetch origin main failed — check /var/log/crypto-updater.log","updated_at":"$(date -u +'%Y-%m-%dT%H:%M:%SZ')","version":""}
 EOF
     rm -f "$REQUEST_FILE"
     exit 1
 fi
+
+if ! sudo -n git -C "$APP_DIR" reset --hard origin/main 2>&1 | tee -a "$LOG_FILE"; then
+    log "ERROR: git reset --hard failed"
+    cat > "$STATUS_FILE" <<EOF
+{"state":"failed","message":"git reset --hard origin/main failed — check /var/log/crypto-updater.log","updated_at":"$(date -u +'%Y-%m-%dT%H:%M:%SZ')","version":""}
+EOF
+    rm -f "$REQUEST_FILE"
+    exit 1
+fi
+
+# Remove untracked cruft (but NEVER touch /data or Docker volumes)
+sudo -n git -C "$APP_DIR" clean -fd 2>&1 | tee -a "$LOG_FILE" || true
+log "Force-sync complete: working tree now at origin/main"
 
 # ── Fetch tags (for version detection) ──────────────────────
 sudo -n env GIT_SSH_COMMAND="$GIT_SSH_CMD" git -C "$APP_DIR" fetch --tags origin 2>/dev/null || true

@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — 2026.07.13
+# Crypto Wallet Tracker — 2026.07.14
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
 
@@ -143,7 +143,8 @@ Crypto-Wallet-Tracker/
 - [x] 2026.07.11 — PWA, theme, recherche, watchlist
 - [x] 2026.07.12 — Consolidation SQLite (ecritures serialisees)
 - [x] 2026.07.13 — Self-update via updater cote hote (bouton Mettre a jour fonctionnel)
-- [ ] 2026.07.14 — Sauvegardes auto + sante + tests/CI
+- [x] 2026.07.14 — Updater self-update fiabilise
+- [ ] 2026.07.15 — Sauvegardes auto + sante + tests/CI
 - [ ] 2026.07.15 — Durcissement auth & comptes
 
 ### Phase 2 — Multi-chaines non-EVM & airdrops
@@ -154,6 +155,11 @@ Crypto-Wallet-Tracker/
 - [ ] Airdrops a claim
 
 ## 📋 Changelog
+
+### 2026.07.14 — Updater fiabilisé (git reset --hard, plus de blocage sur divergence locale)
+
+- **Updater robuste** : remplacement de `git pull origin main` par `git fetch origin main --quiet && git reset --hard origin/main && git clean -fd`. L'updater amène désormais toujours /opt/crypto-wallet-tracker exactement à origin/main, quelle que soit la divergence locale — plus jamais de « Your local changes would be overwritten by merge — Aborting ».
+- **Vérification** : 2 cycles complets de mise à jour idempotents vérifiés sur la VM de production.
 
 ### 2026.07.13 — Self-update via updater côté hôte (bouton Mettre à jour fonctionnel)
 
