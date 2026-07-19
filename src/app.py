@@ -3801,4 +3801,25 @@ async def index(request: Request):
     )
 
 
+@app.get("/manifest.json")
+async def _pwa_manifest():
+    return FileResponse("public/manifest.json", media_type="application/manifest+json")
+
+
+@app.get("/sw.js")
+async def _pwa_sw():
+    return FileResponse("public/sw.js", media_type="application/javascript",
+                        headers={"Service-Worker-Allowed": "/", "Cache-Control": "no-cache"})
+
+
+@app.get("/icon-192.png")
+async def _pwa_icon192():
+    return FileResponse("public/icon-192.png", media_type="image/png")
+
+
+@app.get("/icon-512.png")
+async def _pwa_icon512():
+    return FileResponse("public/icon-512.png", media_type="image/png")
+
+
 app.mount("/static", StaticFiles(directory="public"), name="static")
