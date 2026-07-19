@@ -94,6 +94,10 @@ fi
 
 # Remove untracked cruft (but NEVER touch /data or Docker volumes)
 sudo -n git -C "$APP_DIR" clean -fd 2>&1 | tee -a "$LOG_FILE" || true
+
+# Ensure deploy scripts remain executable after reset
+sudo -n chmod +x "$APP_DIR"/deploy/host-updater.sh 2>/dev/null || true
+
 log "Force-sync complete: working tree now at origin/main"
 
 # ── Fetch tags (for version detection) ──────────────────────
