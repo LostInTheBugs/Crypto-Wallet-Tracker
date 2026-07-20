@@ -110,11 +110,11 @@ def test_registry():
     check(p.chain_type == "evm",
           "chain_type is 'evm'")
 
-    # provider_for with non-EVM addresses → None
-    check(provider_for("bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq") is None,
-          "provider_for(BTC bech32) → None")
-    check(provider_for("7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV") is None,
-          "provider_for(Solana) → None")
+    # provider_for with non-EVM addresses → now has providers
+    check(provider_for("bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq") is not None,
+          "provider_for(BTC bech32) → BitcoinProvider")
+    check(provider_for("7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV") is not None,
+          "provider_for(Solana) → SolanaProvider")
     check(provider_for("cosmos1m3h30w0quvmj55jdguy8y7guyx5j5xkv9rxgtz") is None,
           "provider_for(Cosmos) → None")
     check(provider_for("garbage_not_an_address") is None,
@@ -193,9 +193,10 @@ def test_extensibility():
     btc = MockBitcoinProvider()
     register_provider(btc)
 
-    # Now provider_for should find it for Bitcoin addresses
-    check(provider_for("bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq") is btc,
-          "provider_for(BTC) → BitcoinProvider")
+    # Now provider_for should find a Bitcoin provider (real or mock)
+    found = provider_for("bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq")
+    check(found is not None and found.chain_type == "bitcoin",
+          "provider_for(BTC) → BitcoinProvider (chain_type=bitcoin)")
 
     # EVM still works
     p2 = provider_for("0x0000000000ABCDEF000000000000000000000000")

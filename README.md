@@ -1,6 +1,6 @@
-# Crypto Wallet Tracker — 2026.07.22
+# Crypto Wallet Tracker — 2026.07.23
 
-**Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM + Bitcoin, 100 % gratuit (API Blockscout + mempool.space).
+**Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM + Bitcoin + Solana, 100 % gratuit (API Blockscout + mempool.space + Solana RPC public).
 
 Dashboard agrégé, graphiques d'évolution, historique des prix via DefiLlama, PNL par token, transactions paginées, comptes utilisateurs. Le tout en Docker, une seule commande.
 
@@ -156,12 +156,29 @@ Crypto-Wallet-Tracker/
 
 ### Phase 2 — Multi-chaines non-EVM & airdrops
 - [x] 2026.07.21 — Abstraction multi-provider (fondation non-EVM)
-- [ ] Bitcoin (BTC)
-- [ ] Solana
+- [x] 2026.07.22 — Bitcoin (BTC)
+- [x] 2026.07.23 — Solana (SOL + tokens SPL via RPC public)
 - [ ] Cosmos / ATOM
 - [ ] Airdrops a claim
 
 ## 📋 Changelog
+
+### 2026.07.23 — Support Solana (SOL + tokens SPL via RPC public)
+
+- **SolanaProvider** : nouveau provider multi-chaîne pour les adresses Solana (clés publiques base58 32 octets). Détection conservative — rejette EVM (`0x...`), BTC bech32 (`bc1...`), Cosmos-like. Décodage base58 minimal intégré (stdlib seulement, pas de dépendance externe). Module `src/services/providers/solana.py`.
+- **RPC public gratuit** : balance native SOL (`getBalance` en lamports) + comptes SPL (`getTokenAccountsByOwner` via le program ID Token). Timeout 20s, défensif — jamais de 500, best-effort.
+- **Prix SOL/USD** : DefiLlama (coins.llama.fi) — gratuit, sans clé. Prix SPL : batch DefiLlama `solana:{mint}` par paquets de 50 — best-effort, sans prix → `price_unknown`.
+- **Portfolio standard** : même forme que EVM/BTC — token SOL + tokens SPL (symboles connus pour ~40 tokens majeurs, sinon mint tronqué). `chains`, `total_usd`, `defi_breakdown`, `active_count`. Transactions : placeholder (retourne vide, pas de crash).
+- **Explorer** : liens Solscan (`solscan.io/account/` et `/tx/`).
+- **Routage automatique** : `provider_for()` reconnaît les adresses Solana → `/api/portfolio` et `/api/wallets` (ajout) fonctionnent sans code spécifique. Vue agrégée ALL somme EVM + BTC + Solana.
+- **NFT / DeFi** : renvoie vide proprement pour Solana (pas de crash).
+- **Tests** : `tests/test_solana_provider.py` (66 assertions) — base58, detect, provider_for, metadata, portfolio shape, lamports, SPL lookup, registry, transactions placeholder. Tests EVM/BTC mis à jour (provider_for reconnaît désormais toutes les chaînes).
+
+### 2026.07.22 — Support Bitcoin (BTC via mempool.space)
+
+- **BitcoinProvider** : nouveau provider pour adresses Bitcoin (bech32 `bc1...`, legacy `1...`, P2SH `3...`). Solde via mempool.space (gratuit, sans clé), prix BTC/USD via DefiLlama, transactions basiques. Module `src/services/providers/bitcoin.py`.
+- **Portfolio standard** : même forme que EVM — token BTC unique, `chains`, `total_usd`, `errors`. Transactions events format standard (send/receive with USD values).
+- **Routage** : wallets acceptent et routent les adresses BTC automatiquement via `provider_for()`.
 
 ### 2026.07.21 — Abstraction multi-provider (ChainProvider) — fondation pour Bitcoin/Solana/Cosmos, zero changement EVM
 
