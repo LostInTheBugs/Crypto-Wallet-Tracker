@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — 2026.07.24
+# Crypto Wallet Tracker — 2026.07.25
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM + Bitcoin + Solana + Cosmos, 100 % gratuit (API Blockscout + mempool.space + Solana RPC public + LCD Cosmos).
 
@@ -28,7 +28,8 @@ Dashboard agrégé, graphiques d'évolution, historique des prix via DefiLlama, 
 - 📦 **Vérification de version** — compare avec le dernier tag GitHub
 - ⚡ **Cache prix** — table `price_history`, 2ᵉ rebuild ~0 appel réseau
 - 🔔 **Alertes** — prix, valeur portefeuille, mouvements (> X% en 24h), **health factor / risque de liquidation** avec notifications in-app + canaux externes (webhook, Telegram, e-mail)
-- 📬 **Digest** — résumé quotidien ou hebdo du portefeuille
+- 🪂 **Airdrops a claim** — detection best-effort multi-chaines via un registre de checkers extensible. Rewards de staking Cosmos remontes automatiquement, alertes integrees. API `/api/airdrops` + page dediee
+- 📬 **Digest** — resume quotidien ou hebdo du portefeuille
 - 🐳 **Docker** — une commande pour déployer
 
 ---
@@ -60,7 +61,11 @@ Crypto-Wallet-Tracker/
 │   └── services/            # Modules métier
 │       ├── price_service.py   # SYMBOL_TO_CG, DefiLlama/CoinGecko, cache prix
 │       ├── pnl_service.py     # Timeline unifié, reconstruction soldes, PNL
-│       └── portfolio_service.py  # 22 chaînes, natif, fallback prix, spam, staked
+│       ├── portfolio_service.py  # 22 chaînes, natif, fallback prix, spam, staked
+│       ├── airdrops/              # Détection airdrops best-effort (checkers extensibles)
+│       │   └── checkers/staking_rewards.py
+│       ├── providers/             # Abstraction multi-chaine (EVM, BTC, Solana, Cosmos)
+│       │   ├── base.py, evm.py, bitcoin.py, solana.py, cosmos.py
 │       (+ defi_service.py — normaliseur positions DeFi Moralis, module pur)
 ├── public/index.html        # Frontend SPA + Chart.js (~800 lignes)
 ├── Dockerfile
@@ -159,9 +164,20 @@ Crypto-Wallet-Tracker/
 - [x] 2026.07.22 — Bitcoin (BTC)
 - [x] 2026.07.23 — Solana (SOL + tokens SPL via RPC public)
 - [x] 2026.07.24 — Support Cosmos/ATOM (staking natif)
-- [ ] Airdrops a claim
+- [x] 2026.07.25 — Airdrops a claim (detection best-effort + alertes)
+
+**Phase 2 terminee !** 🎉
 
 ## 📋 Changelog
+
+### 2026.07.25 — Airdrops a claim : detection best-effort (staking rewards claimables, registre de checkers extensible) + page dediee + alertes
+
+- **Registre de checkers** : architecture extensible `src/services/airdrops/` — interface `AirdropChecker` (name, chain_types, async check()) + registre `get_claimable_airdrops(address, chain_type)`. Routage par chain_type : un checker cosmos n'est JAMAIS appele pour une adresse EVM. Defensif : un checker qui echoue/timeout n'impacte jamais les autres (timeout 15s par checker, isolation totale).
+- **Checker staking rewards Cosmos** : le plus fiable — reutilise les appels LCD existants de CosmosProvider (`_get_rewards`) pour detecter les rewards de staking en attente. Chaque reward devient un AirdropClaim (status "claimable", lien Mintscan, montant + valeur USD). Prix DefiLlama (gratuit).
+- **API `/api/airdrops`** : endpoint GET qui agrege tous les airdrops claimables pour tous les wallets de l'utilisateur (toutes chaines). Reponse groupee par `wallet_address → chain → claims`, avec `total_claimable_usd` et `total_claims`. Generation de notification in-app automatique.
+- **Page Airdrops 🪂** : nouvelle page dediee dans le menu lateral (entre NFTs et Transactions). Tableau par wallet/chaine avec source, token, montant, valeur, lien Claim. Etat vide clair ("Aucun airdrop a claim detecte"). i18n FR/EN.
+- **Alertes integrees** : quand un airdrop est detecte, une notification est automatiquement creee via `send_alert_notification()` (systeme existant). Non-intrusif, visible dans la page Alertes 🔔.
+- **Tests** : `tests/test_airdrops.py` — 32 assertions : registre routant par chain_type, parsing rewards statique, isolation defensive (checker qui crash/hang), introspection registre, non-regression provider_for(x) pour EVM/BTC/Solana/Cosmos.
 
 ### 2026.07.24 — Support Cosmos/ATOM (solde + staking delegue + rewards via LCD public)
 

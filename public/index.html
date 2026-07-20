@@ -152,6 +152,7 @@ tr.tm-off td{opacity:.45}
   <a href="#" onclick="switchPage('tokens')" data-page="tokens">📋 <span>Détail tokens</span></a>
   <a href="#" onclick="switchPage('defi')" data-page="defi">🏦 <span>DeFi</span></a>
   <a href="#" onclick="switchPage('nfts')" data-page="nfts">🖼️ <span>NFTs</span></a>
+  <a href="#" onclick="switchPage('airdrops')" data-page="airdrops">🪂 <span>Airdrops</span></a>
   <a href="#" onclick="switchPage('txns')" data-page="txns">📜 <span>Transactions</span></a>
   <a href="#" onclick="switchPage('alerts')" data-page="alerts">🔔 <span>Alertes</span></a>
   <a href="#" onclick="switchPage('wallets')" data-page="wallets">💼 <span>Wallets</span></a>
@@ -248,6 +249,7 @@ tr.tm-off td{opacity:.45}
     <div id="pageAnalytics" class="hidden"></div>
     <div id="pageDefiPos" class="hidden"></div>
     <div id="pageNFTs" class="hidden"></div>
+    <div id="pageAirdrops" class="hidden"></div>
     <div id="pageTxns" class="hidden">
       <div class="card"><h2>📜 Transactions
         <span style="display:inline-flex;gap:6px;margin-left:12px;align-items:center">
@@ -281,7 +283,7 @@ tr.tm-off td{opacity:.45}
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>📦 Version</h2>
-        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">2026.07.24</strong></p>
+        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">2026.07.25</strong></p>
         <p id="verStatus" style="font-size:.85rem"></p>
         <p id="verAutoMsg" style="font-size:.85rem;color:#6e7681;margin-top:6px"></p>
         <div style="margin-top:10px;font-size:.85rem">
@@ -563,6 +565,15 @@ var T = {
     healthBackupsTitle: "Sauvegardes",
     healthBackupsNone: "Aucune sauvegarde",
     healthBackupSize: "taille",
+    airdrops: "Airdrops",
+    adNoClaims: "Aucun airdrop a claim detecte",
+    adClaimable: "A claimer",
+    adClaimBtn: "Claim",
+    adSource: "Source",
+    adChain: "Chaine",
+    adAmount: "Montant",
+    adValue: "Valeur",
+    adClaimableTotal: "A claimer au total",
   },
   en: {
     dashboard: "Dashboard", stats: "Statistics", tokens: "Token Details", nfts: "NFTs",
@@ -762,6 +773,15 @@ var T = {
     healthBackupsTitle: "Backups",
     healthBackupsNone: "No backups",
     healthBackupSize: "size",
+    airdrops: "Airdrops",
+    adNoClaims: "No claimable airdrops detected",
+    adClaimable: "Claimable",
+    adClaimBtn: "Claim",
+    adSource: "Source",
+    adChain: "Chain",
+    adAmount: "Amount",
+    adValue: "Value",
+    adClaimableTotal: "Total claimable",
   }
 };
 function t(key) { return (T[LANG] && T[LANG][key]) || key; }
@@ -769,7 +789,7 @@ function applyLang() {
   document.getElementById("setLang").value = LANG;
   // Update sidebar (only data-page links, skip themeBtn)
   var links = document.querySelectorAll(".sidebar a[data-page]");
-  var keys = ["dashboard","stats","analytics","tokens","defi","nfts","txns","alerts","wallets","settings"];
+  var keys = ["dashboard","stats","analytics","tokens","defi","nfts","airdrops","txns","alerts","wallets","settings"];
   for (var i=0;i<Math.min(links.length,keys.length);i++) {
     var span = links[i].querySelector("span");
     if (span) span.textContent = t(keys[i]);
@@ -908,6 +928,7 @@ function switchPage(page) {
   document.getElementById("pageTokens").classList.toggle("hidden", page!="tokens");
   document.getElementById("pageDefiPos").classList.toggle("hidden", page!="defi");
   document.getElementById("pageNFTs").classList.toggle("hidden", page!="nfts");
+  document.getElementById("pageAirdrops").classList.toggle("hidden", page!="airdrops");
   document.getElementById("pageTxns").classList.toggle("hidden", page!="txns");
   document.getElementById("pageWallets").classList.toggle("hidden", page!="wallets");
   document.getElementById("pageAlerts").classList.toggle("hidden", page!="alerts");
@@ -919,6 +940,7 @@ function switchPage(page) {
   if (page=="tokens" && lastResult) renderTokenTable(lastResult);
   if (page=="defi") loadDefiPositions();
   if (page=="nfts") loadNFTs();
+  if (page=="airdrops") loadAirdrops();
   if (page=="wallets") renderWalletPage();
   if (page=="alerts") loadAlerts();
   if (page=="settings") renderSettingsPage();
@@ -2954,6 +2976,74 @@ async function doHealthBackup(){
     msg.innerHTML='<span style="color:#f85149">'+esc(t("healthBackupError"))+'</span>';
   }
   btn.disabled=false;btn.textContent=t("healthBackupNow");
+}
+
+// ── Airdrops (2026.07.25) ─────────────────────────────────────
+
+async function loadAirdrops(){
+  var el=document.getElementById("pageAirdrops");
+  el.innerHTML='<div class="loading">'+esc(t("loading"))+'</div>';
+  try{
+    var r=await fetch("/api/airdrops");
+    var d=await r.json();
+    renderAirdrops(d);
+  }catch(e){
+    el.innerHTML='<div class="loading" style="color:#f85149">Erreur chargement</div>';
+    console.error("loadAirdrops",e);
+  }
+}
+
+function renderAirdrops(data){
+  var el=document.getElementById("pageAirdrops");
+  if(!data||!Array.isArray(data.claims)||data.claims.length===0){
+    el.innerHTML='<div class="card"><h2>🪂 '+esc(t("airdrops"))+'</h2><div class="loading">'+esc(t("adNoClaims"))+'</div></div>';
+    return;
+  }
+
+  var h='';
+  h+='<div class="card" style="margin-bottom:16px">';
+  h+='<h2>🪂 '+esc(t("airdrops"))+'</h2>';
+
+  // Summary card
+  h+='<div style="display:flex;gap:16px;margin-bottom:16px;flex-wrap:wrap">';
+  h+='<div class="stat-card"><strong>'+data.total_claims+'</strong><br><small>'+esc(t("adClaimable"))+'</small></div>';
+  h+='<div class="stat-card"><strong>$'+fmtNum(data.total_claimable_usd||0)+'</strong><br><small>'+esc(t("adClaimableTotal"))+'</small></div>';
+  h+='</div>';
+
+  // Wallet-grouped sections
+  var wallets=Object.keys(data.wallets);
+  for(var wi=0;wi<wallets.length;wi++){
+    var addr=wallets[wi];
+    var wd=data.wallets[addr];
+    h+='<div style="margin-bottom:12px;padding:12px;background:var(--card);border:1px solid var(--border);border-radius:8px">';
+    h+='<h3 style="margin:0 0 8px;font-size:.85rem;color:var(--accent)">'+esc(wd.label)+' <span style="font-size:.7rem;color:#6e7681;font-weight:normal">('+esc(addr.slice(0,10))+'...) <span style="text-transform:uppercase">'+esc(wd.chain_type)+'</span></span></h3>';
+
+    var chains=Object.keys(wd.claims_by_chain);
+    for(var ci=0;ci<chains.length;ci++){
+      var chain=chains[ci];
+      var claims=wd.claims_by_chain[chain];
+      h+='<div style="margin-bottom:6px"><span style="font-size:.7rem;color:#6e7681;text-transform:uppercase">'+esc(chain)+'</span></div>';
+      h+='<table style="width:100%;font-size:.8rem"><thead><tr>';
+      h+='<th>'+esc(t("adSource"))+'</th><th>'+esc(t("adChain"))+'</th><th>'+esc(t("tmToken"))+'</th><th>'+esc(t("adAmount"))+'</th><th>'+esc(t("adValue"))+'</th><th></th>';
+      h+='</tr></thead><tbody>';
+      for(var ci2=0;ci2<claims.length;ci2++){
+        var c=claims[ci2];
+        h+='<tr>';
+        h+='<td><span style="font-size:.65rem;color:#6e7681">'+esc(c.source||"")+'</span><br><span style="font-size:.72rem">'+esc(c.status||"")+'</span></td>';
+        h+='<td>'+esc(c.chain||"")+'</td>';
+        h+='<td><strong>'+esc(c.token_symbol||"?")+'</strong></td>';
+        h+='<td>'+fmtNum(c.amount||0)+'</td>';
+        h+='<td>$'+(c.usd_value>0?fmtNum(c.usd_value):'?')+'</td>';
+        h+='<td><a href="'+esc(c.claim_url||"#")+'" target="_blank" rel="noopener" class="btn btn-green" style="padding:4px 12px;font-size:.7rem;text-decoration:none">🔗 '+esc(t("adClaimBtn"))+'</a></td>';
+        h+='</tr>';
+      }
+      h+='</tbody></table>';
+    }
+    h+='</div>';
+  }
+
+  h+='</div>';
+  el.innerHTML=h;
 }
 
 (async function(){var r=await fetch("/api/auth/me");if(r.ok)showDash()})();

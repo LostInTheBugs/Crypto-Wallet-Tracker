@@ -52,6 +52,7 @@ from services.export_service import (
 from services.alerts_service import (
     run_evaluator, evaluate_alerts_for_user, send_alert_notification,
 )
+from services.airdrops import get_claimable_airdrops, get_checkers
 from services.db import write_locked
 from services.providers import provider_for, PROVIDERS
 from services.providers.evm import wire_evm
@@ -3956,6 +3957,96 @@ def _mask_config(channel: str, config: dict) -> dict:
         if "url" in masked:
             masked["url"] = masked["url"][:60] + "..." if len(masked.get("url", "")) > 63 else masked.get("url", "")
     return masked
+
+
+# ── Airdrops (2026.07.25) ────────────────────────────────────────
+
+
+@app.get("/api/airdrops")
+async def list_airdrops(user=Depends(get_current_user), db=Depends(get_db)):
+    """Aggregate claimable airdrops across all user wallets (all chain types).
+
+    Returns a dict grouped by wallet_address → chain → claims, plus a
+    flat list and totals.  Defensive: one broken checker never blocks
+    the entire response.
+    """
+    import logging
+    _log = logging.getLogger("crypto.airdrops")
+
+    cur = await db.execute(
+        "SELECT address, label FROM wallets WHERE user_id=? ORDER BY created_at",
+        (user["id"],))
+    wallets_rows = await cur.fetchall()
+
+    result = {
+        "wallets": {},       # address → {label, claims_by_chain: {chain: [claims]}}
+        "claims": [],        # flat list of all claims
+        "total_claimable_usd": 0.0,
+        "total_claims": 0,
+    }
+
+    for w in wallets_rows:
+        address = w["address"]
+        label = w["label"] or address[:10]
+
+        prov = provider_for(address)
+        if prov is None:
+            continue
+
+        chain_type = prov.chain_type
+        try:
+            claims = await get_claimable_airdrops(address, chain_type)
+        except Exception as e:
+            _log.debug("get_claimable_airdrops failed for %s: %s", address[:20], e)
+            claims = []
+
+        if not claims:
+            continue
+
+        # Group by chain
+        by_chain: dict[str, list] = {}
+        for c in claims:
+            ch = c.get("chain") or chain_type
+            if ch not in by_chain:
+                by_chain[ch] = []
+            by_chain[ch].append(c)
+
+        for c in claims:
+            result["claims"].append({
+                **c,
+                "wallet_address": address,
+                "wallet_label": label,
+            })
+            result["total_claimable_usd"] += c.get("usd_value", 0) or 0
+
+        result["wallets"][address] = {
+            "label": label,
+            "chain_type": chain_type,
+            "claims_by_chain": by_chain,
+        }
+
+    result["total_claimable_usd"] = round(result["total_claimable_usd"], 2)
+    result["total_claims"] = len(result["claims"])
+
+    # Generate notifications for new claimable airdrops
+    if result["total_claims"] > 0:
+        try:
+            title = f"💸 {result['total_claims']} airdrop(s) a claim"
+            body_lines = []
+            for c in result["claims"][:5]:
+                body_lines.append(
+                    f"{c['token_symbol']}: {c['amount']} (~${c.get('usd_value', 0):,.2f}) "
+                    f"sur {c.get('chain', '?')}"
+                )
+            if len(result["claims"]) > 5:
+                body_lines.append(f"... et {len(result['claims']) - 5} autres")
+            await send_alert_notification(
+                user["id"], 0, title, "\n".join(body_lines)
+            )
+        except Exception as e:
+            _log.debug("Failed to send airdrop notification: %s", e)
+
+    return result
 
 
 # ── Alerts CRUD ──────────────────────────────────────────────────
