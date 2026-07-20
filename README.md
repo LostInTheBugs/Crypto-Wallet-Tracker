@@ -1,6 +1,6 @@
-# Crypto Wallet Tracker — 2026.07.23
+# Crypto Wallet Tracker — 2026.07.24
 
-**Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM + Bitcoin + Solana, 100 % gratuit (API Blockscout + mempool.space + Solana RPC public).
+**Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM + Bitcoin + Solana + Cosmos, 100 % gratuit (API Blockscout + mempool.space + Solana RPC public + LCD Cosmos).
 
 Dashboard agrégé, graphiques d'évolution, historique des prix via DefiLlama, PNL par token, transactions paginées, comptes utilisateurs. Le tout en Docker, une seule commande.
 
@@ -158,10 +158,20 @@ Crypto-Wallet-Tracker/
 - [x] 2026.07.21 — Abstraction multi-provider (fondation non-EVM)
 - [x] 2026.07.22 — Bitcoin (BTC)
 - [x] 2026.07.23 — Solana (SOL + tokens SPL via RPC public)
-- [ ] Cosmos / ATOM
+- [x] 2026.07.24 — Support Cosmos/ATOM (staking natif)
 - [ ] Airdrops a claim
 
 ## 📋 Changelog
+
+### 2026.07.24 — Support Cosmos/ATOM (solde + staking delegue + rewards via LCD public)
+
+- **CosmosProvider** : nouveau provider multi-chaîne pour les adresses bech32 Cosmos (cosmos1…, osmo1…, celestia1…, juno1…, stars1…, akash1…, inj1…, kujira1…, stride1…). Détection conservative — rejette EVM (`0x...`), BTC bech32 (`bc1...`), Solana. Module `src/services/providers/cosmos.py` (+ fichier test `tests/test_cosmos_provider.py`, 77 assertions).
+- **LCD public gratuit** : endpoints Cosmos REST (Polkachu) — solde disponible (`/cosmos/bank/v1beta1/balances`), délégations staking (`/cosmos/staking/v1beta1/delegations`), récompenses en attente (`/cosmos/distribution/v1beta1/delegators/{addr}/rewards`). 3 appels en parallèle, timeout 20s, défensif — chaque appel indépendant, jamais de 500.
+- **Prix ATOM/OSMO** : DefiLlama (coins.llama.fi) — gratuit, sans clé. Conversion uatom/uosmo → ATOM/OSMO (÷1e6). Denoms inconnus → `price_unknown`, jamais de prix inventé.
+- **Portfolio standard** : token natif disponible + token staké (category `"staked"`) + token récompenses (category `"rewards"`). `staked_usd` agrégé, `chains`, `total_usd`, `defi_breakdown`. Transactions : placeholder (retourne vide, pas de crash).
+- **Explorer** : liens Mintscan (`mintscan.io/{chain}/address/` et `/tx/`), mappé selon le HRP de l'adresse.
+- **Routage automatique** : `provider_for()` reconnaît les adresses Cosmos → `/api/portfolio` et `/api/wallets` (ajout) fonctionnent sans code spécifique. Vue agrégée ALL somme EVM + BTC + Solana + Cosmos. Mise à jour du test `test_providers.py` (provider_for Cosmos → CosmosProvider au lieu de None).
+- **Staking natif** : le staking Cosmos (délégué + récompenses) apparaît dans la vue portfolio avec `category: "staked"` et `category: "rewards"` — prêt pour l'affichage DeFi/positions. NFT : vide propre.
 
 ### 2026.07.23 — Support Solana (SOL + tokens SPL via RPC public)
 
