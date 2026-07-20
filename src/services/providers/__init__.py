@@ -11,6 +11,7 @@ from services.providers.base import (
     provider_for,
 )
 from services.providers.evm import EvmProvider, evm_provider
+from services.providers.bitcoin import BitcoinProvider, bitcoin_provider  # noqa: F401 — auto-registers
 
 __all__ = [
     "ChainProvider",
@@ -19,4 +20,6 @@ __all__ = [
     "provider_for",
     "EvmProvider",
     "evm_provider",
+    "BitcoinProvider",
+    "bitcoin_provider",
 ]

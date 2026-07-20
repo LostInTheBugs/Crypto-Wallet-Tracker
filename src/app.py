@@ -315,6 +315,9 @@ async def lifespan(app: FastAPI):
         except: pass
         try: await db.execute("ALTER TABLE users ADD COLUMN totp_enabled INTEGER DEFAULT 0")
         except: pass
+        # 2026.07.22 -- chain_type on wallets (idempotent)
+        try: await db.execute("ALTER TABLE wallets ADD COLUMN chain_type TEXT DEFAULT 'evm'")
+        except: pass
         # v2.12.5 -- sweep idempotent des lignes orphelines au demarrage : purge
         # toute donnée dont le wallet n'existe plus dans wallets (comparaison
         # insensible à la casse — le worker de reconstruction a pu écrire des
@@ -690,13 +693,18 @@ async def add_wallet(request: Request, user=Depends(get_current_user), db=Depend
     label = (data.get("label") or "").strip()[:50]
     watch_only = 1 if data.get("watch_only") else 0
     group_label = (data.get("group_label") or "").strip()[:50]
-    if not address.startswith("0x") or len(address) != 42:
-        raise HTTPException(400, "Adresse EVM invalide")
+    prov = provider_for(address)
+    if prov is None:
+        raise HTTPException(400, "Adresse invalide ou non reconnue")
+    chain_type = prov.chain_type
     async with write_locked():
-        await db.execute("INSERT INTO wallets (user_id, address, label, watch_only, group_label) VALUES (?, ?, ?, ?, ?)",
-                         (user["id"], address, label, watch_only, group_label))
+        await db.execute(
+            "INSERT INTO wallets (user_id, address, label, watch_only, group_label, chain_type) VALUES (?, ?, ?, ?, ?, ?)",
+            (user["id"], address, label, watch_only, group_label, chain_type))
         await db.commit()
-    asyncio.create_task(_fetch_then_rebuild(user["id"], address))
+    # Only trigger _fetch_then_rebuild for EVM wallets (Bitcoin doesn't use it)
+    if chain_type == "evm":
+        asyncio.create_task(_fetch_then_rebuild(user["id"], address))
     return {"ok": True}
 
 
@@ -1070,19 +1078,39 @@ async def get_transactions(wallet: str = Query(None), chain: str = Query(None), 
                            direction: str = Query(None), event_type: str = Query(None, alias="type"),
                            limit: int = Query(100), offset: int = Query(0),
                            user=Depends(get_current_user), db=Depends(get_db)):
-    # Phase 2 (2026.07.21) — if a non-EVM address is provided as wallet filter,
-    # return a clean unsupported response instead of querying the DB.
+    # Phase 2 (2026.07.22) — if a non-EVM address is provided as wallet filter,
+    # delegate to the matching provider instead of querying the DB.
     if wallet and not (wallet.startswith("0x") and len(wallet) == 42):
         w_prov = provider_for(wallet)
         if w_prov is not None:
-            return {
-                "supported": False,
-                "chain_type": w_prov.chain_type,
-                "message": "Chaine non prise en charge (a venir)",
-                "total": 0,
-                "items": [],
-                "counts": {},
-            }
+            try:
+                result = await w_prov.get_transactions(
+                    address=wallet,
+                    wallet=wallet,
+                    chain=chain,
+                    token=token,
+                    direction=direction,
+                    event_type=event_type,
+                    limit=limit,
+                    offset=offset,
+                )
+                # Enrich with explorer URLs
+                for ev in result.get("items", []):
+                    tx_hash = ev.get("tx_hash", "")
+                    if tx_hash:
+                        ev["_explorer_tx_url"] = w_prov.explorer_tx_url(tx_hash)
+                    ev["_explorer_url"] = w_prov.explorer_url(ev.get("wallet_address", wallet))
+                return result
+            except Exception as e:
+                logging.getLogger("crypto.transactions").warning(
+                    "Provider %s transactions failed for %s: %s",
+                    type(w_prov).__name__, wallet[:20], e,
+                )
+                return {
+                    "total": 0,
+                    "items": [],
+                    "counts": {},
+                }
     # v2.12.4 — événements regroupés par (wallet, chain, tx_hash) : swap/send/receive.
     # Le REGROUPEMENT se fait AVANT la pagination (sinon les deux jambes d'un swap
     # peuvent tomber sur deux pages différentes). Filtres wallet/chain en SQL ;
@@ -1307,6 +1335,11 @@ async def fetch_gas_fees(user=Depends(get_current_user)):
 @app.get("/api/transactions/gas-total")
 async def gas_total(user=Depends(get_current_user), db=Depends(get_db),
                     wallet: str = Query(None)):
+    # Phase 2 (2026.07.22) — BTC wallets have no stored transactions; return 0.
+    if wallet:
+        wp = provider_for(wallet)
+        if wp and wp.chain_type != "evm":
+            return {"total_gas_usd": 0}
     # v2.12.5 — anti-orphelins : ne sommer que le gaz des wallets encore présents.
     exists_w = "lower(wallet_address) IN (SELECT lower(address) FROM wallets WHERE user_id=?)"
     if wallet:
@@ -2004,8 +2037,22 @@ async def portfolio(address: str = Query(...), force: bool = Query(False), user=
             "message": "Chaine non prise en charge (a venir)",
         }
 
-    if not address.startswith("0x"):
-        raise HTTPException(400, "Adresse invalide")
+    # Phase 2 (2026.07.22) — delegate non-EVM addresses to their provider
+    if p.chain_type != "evm":
+        _log.info(f"[TRACE] /api/portfolio DELEGATE chain_type={p.chain_type} address={address[:20]}...")
+        try:
+            result = await p.get_portfolio(address)
+            # Inject user token prefs (Bitcoin has no prefs, but keep the contract)
+            return await _apply_user_token_prefs(user["id"], result, address)
+        except Exception as e:
+            _log.warning(f"Provider {type(p).__name__} failed for {address[:20]}: {e}")
+            return {
+                "supported": False,
+                "chain_type": p.chain_type,
+                "message": f"Erreur provider {p.chain_type}: {e}",
+            }
+
+    # EVM path below (unchanged from Phase 1)
 
     now = _time.time()
     if now - _last_tx_refresh.get(user["id"], 0) > 86400:
@@ -2243,6 +2290,9 @@ async def _fetch_nfts_chain(client, chain: str, host: str, address: str, max_pag
 @app.get("/api/nfts")
 async def get_nfts(address: str = Query(...), user=Depends(get_current_user)):
     if not address.startswith("0x"):
+        # Non-EVM chains have no NFTs — return empty gracefully
+        if provider_for(address):
+            return JSONResponse({"nfts": [], "total_count": 0, "collections": [], "chains": [], "summary": []})
         raise HTTPException(400, "Adresse invalide")
     async with httpx.AsyncClient(follow_redirects=True) as client:
         results = await asyncio.gather(
@@ -2519,6 +2569,9 @@ async def nft_valuation(address: str = Query(...),
     Never returns a 5xx: any failure degrades gracefully.
     """
     if not address.startswith("0x"):
+        # Non-EVM chains have no NFTs — return empty gracefully
+        if provider_for(address):
+            return JSONResponse({"tokens": [], "nfts": [], "total_floor_eth_cap": 0})
         raise HTTPException(400, "Adresse invalide")
 
     cache_key = (user["id"], address.lower())
@@ -3339,12 +3392,10 @@ async def analytics(address: str = Query(...), range: str = Query("7d"),
       apports/retraits) ; spam et poussière ignorés.
     • Défensif: données manquantes → null / listes vides, jamais de 500.
     """
+
     _log = logging.getLogger("crypto.analytics")
     rng = range if range in ANALYTICS_RANGES else "7d"
     rng_days = ANALYTICS_RANGES[rng]
-
-    if address != "ALL" and not address.startswith("0x"):
-        raise HTTPException(400, "Adresse invalide")
 
     cache_key = (user["id"], address.lower(), rng)
     now = _time.time()
@@ -3359,6 +3410,11 @@ async def analytics(address: str = Query(...), range: str = Query("7d"),
         "performers": {"best": [], "worst": []},
         "cached": False,
     }
+
+    # Phase 2 (2026.07.22) — non-EVM chains: return empty analytics gracefully
+    if address != "ALL" and not address.startswith("0x"):
+        if provider_for(address):
+            return empty
 
     try:
         # ── 1. Adresses concernées ────────────────────────────────
@@ -3484,6 +3540,9 @@ EXPORT_TX_TYPE_LABELS = {"swap": "Swap", "send": "Envoyé", "receive": "Reçu"}
 
 def _export_check_address(address: str):
     if address != "ALL" and not address.startswith("0x"):
+        # Non-EVM chains: allow but the export will be empty
+        if provider_for(address):
+            return  # silently accept — export will produce empty content
         raise HTTPException(400, "Adresse invalide")
 
 

@@ -281,7 +281,7 @@ tr.tm-off td{opacity:.45}
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>📦 Version</h2>
-        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">2026.07.21</strong></p>
+        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">2026.07.22</strong></p>
         <p id="verStatus" style="font-size:.85rem"></p>
         <p id="verAutoMsg" style="font-size:.85rem;color:#6e7681;margin-top:6px"></p>
         <div style="margin-top:10px;font-size:.85rem">
@@ -1072,7 +1072,7 @@ function renderWalletPage(){
   // Sort by group then label
   var sorted=wallets.slice().sort(function(a,b){var ga=(a.group_label||"").toLowerCase(),gb=(b.group_label||"").toLowerCase();if(ga!==gb)return ga.localeCompare(gb);return (a.label||"").localeCompare(b.label||"")});
   var html = '<div class="card" style="margin-bottom:16px"><h2>+ Ajouter un wallet</h2><div class="add-form">'+
-    '<input id="walletAddr" type="text" placeholder="Adresse EVM (0x...)">'+
+    '<input id="walletAddr" type="text" placeholder="Adresse EVM/BTC (0x..., bc1..., 1..., 3...)">'+
     '<input id="walletLabel" type="text" placeholder="Label">'+
     '<button class="btn btn-blue" onclick="addWallet()">Ajouter</button></div></div>'+
     '<div class="card"><h2>Mes wallets <span style="font-weight:400;font-size:.7rem;color:#6e7681">('+wallets.length+')</span></h2>';
@@ -1176,8 +1176,9 @@ async function saveLabel(id){
   if(r.ok){await loadWallets();if(currentPage=="wallets")renderWalletPage()}
 }
 
-async function addWallet(){var addr=document.getElementById("walletAddr").value.trim(),label=document.getElementById("walletLabel").value.trim();if(!addr.startsWith("0x")||addr.length!=42)return alert("Adresse invalide");var r=await fetch("/api/wallets",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({address:addr,label:label})});if(!r.ok){var e=await r.json();alert(e.detail);return}
-  // Show progress modal
+async function addWallet(){var addr=document.getElementById("walletAddr").value.trim(),label=document.getElementById("walletLabel").value.trim();if(!addr)return alert(t("invalidAddr"));var r=await fetch("/api/wallets",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({address:addr,label:label})});if(!r.ok){var e=await r.json();alert(e.detail);return}
+  // For EVM addresses, show import progress modal; for BTC, reload immediately
+  if(addr.startsWith("0x")){
   document.getElementById("importModal").classList.remove("hidden");
   document.getElementById("importBar").style.width="0%";
   document.getElementById("importTitle").textContent="Importation en cours...";
@@ -1199,7 +1200,10 @@ async function addWallet(){var addr=document.getElementById("walletAddr").value.
         if(p.degraded&&p.degraded.length)showTokenWarning(p.degraded,"sans prix historique");}
     }catch(e){console.error("addWallet/poll",e);clearInterval(poll);document.getElementById("importModal").classList.add("hidden")}
   },800);
-  await loadWallets();if(currentPage=="wallets")renderWalletPage()}
+  } else {
+    // BTC / non-EVM — no import progress, reload immediately
+    await loadWallets(); if(currentPage=="wallets") renderWalletPage();
+  }}
 
 async function loadView(force){activeWallet=="ALL"?await loadAllWallets(force):await loadOneWallet(activeWallet,force)}
 
@@ -1282,7 +1286,7 @@ function renderResult(d){
   if(currentPage=="dashboard"){
     if(pieChart)pieChart.destroy();
     var ctx=document.getElementById("pieChart").getContext("2d");
-    var labels=[],data=[],bg=[],cc={"ethereum":"#627eea","optimism":"#ff0420","base":"#0052ff","arbitrum":"#28a0f0","polygon":"#8247e5","gnosis":"#04795b","zksync":"#1573fe","celo":"#35d07f","scroll":"#ebc28e","soneium":"#7b3fe4","ink":"#8b5cf6","mode":"#a78bfa","unichain":"#f472b6","lisk":"#2dd4bf","linea":"#34d399","etherlink":"#fbbf24","metis":"#f87171","manta":"#38bdf8","bob":"#fb923c","zora":"#a3e635","worldchain":"#e879f9"};
+    var labels=[],data=[],bg=[],cc={"ethereum":"#627eea","optimism":"#ff0420","base":"#0052ff","arbitrum":"#28a0f0","polygon":"#8247e5","gnosis":"#04795b","zksync":"#1573fe","celo":"#35d07f","scroll":"#ebc28e","soneium":"#7b3fe4","ink":"#8b5cf6","mode":"#a78bfa","unichain":"#f472b6","lisk":"#2dd4bf","linea":"#34d399","etherlink":"#fbbf24","metis":"#f87171","manta":"#38bdf8","bob":"#fb923c","zora":"#a3e635","worldchain":"#e879f9","bitcoin":"#f7931a"};
     for(var c in d.chains){if(d.chains.hasOwnProperty(c)&&d.chains[c]>0.01){labels.push(c.charAt(0).toUpperCase()+c.slice(1));data.push(Math.round(toCurr(d.chains[c])*100)/100);bg.push(cc[c]||"#30363d")}}
     if(data.length>0)pieChart=new Chart(ctx,{type:"doughnut",data:{labels:labels,datasets:[{data:data,backgroundColor:bg,borderColor:"#0a0e14",borderWidth:2}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:"right",labels:{color:"#c9d1d9",padding:12,font:{size:11},generateLabels:function(chart){var d=chart.data;return d.labels.map(function(l,i){var v=d.datasets[0].data[i];var total=d.datasets[0].data.reduce(function(a,b){return a+b},0);var pct=Math.round(v/total*100);return{text:l+"  "+pct+"%",fillStyle:d.datasets[0].backgroundColor[i],strokeStyle:d.datasets[0].backgroundColor[i],fontColor:"#c9d1d9",index:i}})}}}}}});
     drawMiniChart();
@@ -2518,7 +2522,7 @@ async function tmDelManual(idx){
 }
 
 // ── Analytics (2026.07.3) ─────────────────────────────────
-var AN_CHAIN_COLORS={"ethereum":"#627eea","optimism":"#ff0420","base":"#0052ff","arbitrum":"#28a0f0","polygon":"#8247e5","gnosis":"#04795b","zksync":"#1573fe","celo":"#35d07f","scroll":"#ebc28e","soneium":"#7b3fe4","ink":"#8b5cf6","mode":"#a78bfa","unichain":"#f472b6","lisk":"#2dd4bf","linea":"#34d399","etherlink":"#fbbf24","metis":"#f87171","manta":"#38bdf8","bob":"#fb923c","zora":"#a3e635","worldchain":"#e879f9"};
+var AN_CHAIN_COLORS={"ethereum":"#627eea","optimism":"#ff0420","base":"#0052ff","arbitrum":"#28a0f0","polygon":"#8247e5","gnosis":"#04795b","zksync":"#1573fe","celo":"#35d07f","scroll":"#ebc28e","soneium":"#7b3fe4","ink":"#8b5cf6","mode":"#a78bfa","unichain":"#f472b6","lisk":"#2dd4bf","linea":"#34d399","etherlink":"#fbbf24","metis":"#f87171","manta":"#38bdf8","bob":"#fb923c","zora":"#a3e635","worldchain":"#e879f9","bitcoin":"#f7931a"};
 var AN_PALETTE=["#4dabf7","#40c463","#f0c040","#f85149","#a371f7","#f78166","#2dd4bf","#e879f9","#fbbf24","#34d399","#f472b6","#8b5cf6","#6e7681"];
 var AN_CAT_COLORS={"wallet":"#4dabf7","lending":"#40c463","staked":"#a371f7","lp":"#f0c040","vault":"#f78166","synthetic":"#e879f9"};
 

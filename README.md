@@ -1,6 +1,6 @@
-# Crypto Wallet Tracker — 2026.07.21
+# Crypto Wallet Tracker — 2026.07.22
 
-**Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM, 100 % gratuit (API Blockscout).
+**Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM + Bitcoin, 100 % gratuit (API Blockscout + mempool.space).
 
 Dashboard agrégé, graphiques d'évolution, historique des prix via DefiLlama, PNL par token, transactions paginées, comptes utilisateurs. Le tout en Docker, une seule commande.
 
