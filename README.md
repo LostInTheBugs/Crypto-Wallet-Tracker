@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — 2026.07.25
+# Crypto Wallet Tracker — 2026.07.26
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM + Bitcoin + Solana + Cosmos, 100 % gratuit (API Blockscout + mempool.space + Solana RPC public + LCD Cosmos).
 
@@ -168,7 +168,26 @@ Crypto-Wallet-Tracker/
 
 **Phase 2 terminee !** 🎉
 
+### Phase 3 — Transactions completes, fiscal/PnL, DeFi cross-chain, nouvelles chaines
+- [x] 2026.07.26 — Transactions Solana (historique complet)
+- [ ] 2026.07.27 — Transactions Cosmos (historique complet)
+- [ ] 2026.07.28 — Fiscal/PnL avance (cout d'acquisition, realise/latent)
+- [ ] 2026.07.29 — Rapports fiscaux exportables (CSV/PDF)
+- [ ] 2026.07.30 — DeFi cross-chain (LP, lending, health-factor unifie)
+- [ ] 2026.07.31 — Nouvelles chaines (L2 EVM puis non-EVM)
+
 ## 📋 Changelog
+
+### 2026.07.26 — Transactions Solana : historique complet (RPC getSignaturesForAddress + getTransaction, send/receive/swap, liens Solscan)
+
+- **Historique des transactions Solana** : le placeholder vide est remplacé par un vrai historique via le RPC public `api.mainnet-beta.solana.com`. Utilise `getSignaturesForAddress` (25 signatures récentes) puis `getTransaction` (jsonParsed, maxSupportedTransactionVersion:0) pour ~22 transactions par appel.
+- **Détection send/receive/swap** : le sens est déduit des `preBalances`/`postBalances` (SOL) et `preTokenBalances`/`postTokenBalances` (SPL). Une transaction avec à la fois des entrées et sorties de tokens différents est classée « swap ». Les types « send », « receive » et « swap » sont détectés.
+- **Prix USD best-effort** : prix SOL via DefiLlama (`_get_sol_price_usd`), prix SPL par batch (`_get_spl_prices`). Si un prix est indisponible, `usd_value` vaut 0 sans planter.
+- **Défensif** : timeout, erreurs RPC, 429 → la transaction défaillante est sautée, les autres continuent. Jamais de 500. Un wallet sans transactions renvoie une liste vide proprement.
+- **Liens Solscan** : chaque événement a `tx_hash` + lien `https://solscan.io/tx/{signature}` (via `explorer_tx_url` déjà existant).
+- **Format standard** : les événements respectent le même format que les transactions EVM/BTC — `type`, `direction`, `sent`/`received`, `sent_symbol`/`recv_symbol`, `gas_fee_usd`, `usd_value`, `block_time`. Compatible avec `group_transaction_events()` dans `tx_events.py` et l'affichage frontend existant.
+- **Tests** : `tests/test_solana_tx.py` — 74 assertions (parsing SOL send/receive, SPL send/receive, swap USDC→USDT, swap SOL→USDC, défensif, non-regression). `tests/test_solana_provider.py` mis à jour (le test placeholder vérifie désormais la forme des vrais événements). Test live sur adresse Solana réelle : 8 transactions remontées avec succès.
+- **Roadmap Phase 3** ajoutée au README.
 
 ### 2026.07.25 — Airdrops a claim : detection best-effort (staking rewards claimables, registre de checkers extensible) + page dediee + alertes
 

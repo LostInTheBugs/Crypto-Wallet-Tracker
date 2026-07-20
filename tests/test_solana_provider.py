@@ -295,13 +295,12 @@ def test_registry_count():
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 9. Transactions placeholder
+# 9. Transactions (real RPC — may return data or empty if offline)
 # ═══════════════════════════════════════════════════════════════════
 
 
-def test_transactions_placeholder():
-    section("9. Transactions placeholder")
-
+def test_transactions():
+    section("9. Transactions — live RPC (best-effort)")
     import asyncio
 
     sp = SolanaProvider()
@@ -312,9 +311,23 @@ def test_transactions_placeholder():
         )
 
     result = asyncio.run(go())
-    check(result["total"] == 0, "tx total is 0")
-    check(result["items"] == [], "tx items is empty list")
+    check(isinstance(result["total"], int), "tx total is int")
+    check(result["total"] >= 0, f"tx total >= 0 (got {result['total']})")
+    check(isinstance(result["items"], list), "tx items is list")
     check(isinstance(result["counts"], dict), "tx counts is dict")
+    check("send" in result["counts"], "counts has 'send'")
+    check("receive" in result["counts"], "counts has 'receive'")
+    check("swap" in result["counts"], "counts has 'swap'")
+    # If RPC returned data, check event shape
+    if result["items"]:
+        ev = result["items"][0]
+        check("type" in ev, "event has 'type'")
+        check("tx_hash" in ev, "event has 'tx_hash'")
+        check("block_time" in ev, "event has 'block_time'")
+        check(ev["chain"] == "solana", "event chain == 'solana'")
+        check("usd_value" in ev, "event has 'usd_value'")
+        check("sent" in ev, "event has 'sent'")
+        check("received" in ev, "event has 'received'")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -330,7 +343,7 @@ if __name__ == "__main__":
     test_lamports_parsing()
     test_spl_token_info()
     test_registry_count()
-    test_transactions_placeholder()
+    test_transactions()
 
     print(f"\n{'=' * 60}")
     total = PASS + FAIL

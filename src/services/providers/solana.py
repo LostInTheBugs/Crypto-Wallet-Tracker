@@ -285,6 +285,279 @@ def _get_token_info(mint: str) -> tuple[str, str, bool]:
     return (mint[:8] + "...", "Unknown SPL Token", False)
 
 
+
+# ═══════════════════════════════════════════════════════════════════════
+# Transaction fetching helpers
+# ═══════════════════════════════════════════════════════════════════════
+
+
+async def _get_signatures(address: str, limit: int = 25) -> list[dict]:
+    """Return list of {signature, blockTime} for address, newest first."""
+    data = await _solana_rpc(
+        "getSignaturesForAddress",
+        [address, {"limit": limit}],
+    )
+    if data is None:
+        return []
+    try:
+        return data.get("result", [])
+    except Exception:
+        return []
+
+
+async def _get_parsed_tx(signature: str) -> dict | None:
+    """Fetch a single parsed transaction. Returns None on failure."""
+    data = await _solana_rpc(
+        "getTransaction",
+        [
+            signature,
+            {"maxSupportedTransactionVersion": 0, "encoding": "jsonParsed"},
+        ],
+    )
+    if data is None:
+        return None
+    result = data.get("result")
+    if not result or not isinstance(result, dict):
+        return None
+    return result
+
+
+def _parse_solana_tx(
+    address: str,
+    tx: dict,
+    sol_price: float | None,
+    spl_prices: dict[str, float],
+) -> dict[str, Any] | None:
+    """Parse a jsonParsed Solana tx into a standard event dict.
+
+    Returns None if the transaction has no meaningful transfers for this address.
+    """
+    from datetime import datetime, timezone
+
+    meta = tx.get("meta", {})
+    if not meta:
+        return None
+
+    block_time_ts = tx.get("blockTime")
+    block_time = ""
+    if block_time_ts:
+        block_time = datetime.fromtimestamp(
+            block_time_ts, tz=timezone.utc
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    signature = tx.get("transaction", {}).get("signatures", [""])[0] if tx.get("transaction") else ""
+
+    # Find our index in accountKeys
+    message = tx.get("transaction", {}).get("message", {})
+    account_keys: list = message.get("accountKeys", [])
+    our_idx: int | None = None
+    is_fee_payer = False
+    for i, ak in enumerate(account_keys):
+        pubkey = ak.get("pubkey") if isinstance(ak, dict) else str(ak)
+        if pubkey == address:
+            our_idx = i
+            if i == 0:
+                is_fee_payer = True
+            break
+
+    if our_idx is None:
+        return None  # Not our transaction
+
+    pre_balances: list[int] = meta.get("preBalances", [])
+    post_balances: list[int] = meta.get("postBalances", [])
+    pre_tb: list[dict] = meta.get("preTokenBalances", [])
+    post_tb: list[dict] = meta.get("postTokenBalances", [])
+
+    # ── SOL change ──────────────────────────────────────────────
+    sol_change_lamports = 0
+    if our_idx < len(pre_balances) and our_idx < len(post_balances):
+        sol_change_lamports = post_balances[our_idx] - pre_balances[our_idx]
+
+    # Account for fee if we are fee-payer
+    fee_lamports = meta.get("fee", 0)
+    if is_fee_payer:
+        sol_change_lamports += fee_lamports  # fee was already subtracted in post
+
+    sol_change = sol_change_lamports / 1_000_000_000.0
+
+    # ── SPL token changes ───────────────────────────────────────
+    # Build lookup: {mint: (pre_uiAmount, post_uiAmount, decimals)}
+    def _tb_lookup(tb_list: list[dict]) -> dict[str, tuple[float, int]]:
+        out: dict[str, tuple[float, int]] = {}
+        for entry in tb_list:
+            if entry.get("accountIndex") != our_idx:
+                continue
+            mint = entry.get("mint", "")
+            amt = entry.get("uiTokenAmount", {})
+            if mint:
+                out[mint] = (
+                    float(amt.get("uiAmount") or 0),
+                    amt.get("decimals", 0),
+                )
+        return out
+
+    pre_spl = _tb_lookup(pre_tb)
+    post_spl = _tb_lookup(post_tb)
+
+    # Merge all mints
+    all_mints = set(pre_spl.keys()) | set(post_spl.keys())
+
+    # Collect sent and received SPL token changes
+    sent_tokens: list[dict] = []    # outflows
+    recv_tokens: list[dict] = []    # inflows
+
+    for mint in all_mints:
+        pre_amt, _ = pre_spl.get(mint, (0.0, 0))
+        post_amt, _ = post_spl.get(mint, (0.0, 0))
+        delta = post_amt - pre_amt
+        if abs(delta) < 0.00000001:
+            continue
+        sym, name, _ = _get_token_info(mint)
+        price = spl_prices.get(mint, 0.0)
+        usd_val = round(abs(delta) * price, 2)
+        token_data = {
+            "symbol": sym,
+            "name": name,
+            "amount": round(abs(delta), 8),
+            "usd_price": price,
+            "usd_value": usd_val,
+            "contract": mint,
+        }
+        if delta < 0:
+            sent_tokens.append(token_data)
+        else:
+            recv_tokens.append(token_data)
+
+    # ── SOL transfer as a token leg ──────────────────────────────
+    sol_sent_amount = 0.0
+    sol_recv_amount = 0.0
+    if abs(sol_change) >= 0.00000001:
+        sol_usd = round(abs(sol_change) * (sol_price or 0), 2)
+        sol_leg = {
+            "symbol": "SOL",
+            "name": "Solana",
+            "amount": round(abs(sol_change), 9),
+            "usd_price": sol_price or 0,
+            "usd_value": sol_usd,
+            "contract": "",
+        }
+        if sol_change < 0:
+            sent_tokens.append(sol_leg)
+            sol_sent_amount = round(abs(sol_change), 9)
+        else:
+            recv_tokens.append(sol_leg)
+            sol_recv_amount = round(abs(sol_change), 9)
+
+    # ── Determine event type ────────────────────────────────────
+    has_out = len(sent_tokens) > 0
+    has_in = len(recv_tokens) > 0
+
+    if not has_out and not has_in:
+        return None  # No transfer detected for this address
+
+    ev_type: str
+    ev_direction: str
+    if has_out and has_in:
+        ev_type = "swap"
+        ev_direction = "swap"
+    elif has_out:
+        ev_type = "send"
+        ev_direction = "out"
+    else:
+        ev_type = "receive"
+        ev_direction = "in"
+
+    # ── Main legs (largest by usd_value) ─────────────────────────
+    def _best_leg(legs: list[dict]) -> dict | None:
+        best = None
+        for leg in legs:
+            if best is None or (leg["usd_value"], leg["amount"]) > (best["usd_value"], best["amount"]):
+                best = leg
+        return best
+
+    main_sent = _best_leg(sent_tokens)
+    main_recv = _best_leg(recv_tokens)
+
+    sent_symbol = main_sent["symbol"] if main_sent else None
+    sent_amount = main_sent["amount"] if main_sent else 0.0
+    recv_symbol = main_recv["symbol"] if main_recv else None
+    recv_amount = main_recv["amount"] if main_recv else 0.0
+
+    # ── usd_value for the event ──────────────────────────────────
+    if ev_type == "swap":
+        # Max of sum(out) vs sum(in) — don't double-count
+        out_usd = sum(t["usd_value"] for t in sent_tokens)
+        in_usd = sum(t["usd_value"] for t in recv_tokens)
+        ev_usd = round(max(out_usd, in_usd), 2)
+    elif ev_type == "send":
+        ev_usd = round(sum(t["usd_value"] for t in sent_tokens), 2)
+    else:
+        ev_usd = round(sum(t["usd_value"] for t in recv_tokens), 2)
+
+    # ── Token symbol summary ─────────────────────────────────────
+    if ev_type == "swap":
+        ss = (main_sent["symbol"] if main_sent else "?")
+        rs = (main_recv["symbol"] if main_recv else "?")
+        token_symbol = f"{ss} → {rs}"
+        usd_price = None
+    else:
+        main = main_sent or main_recv
+        token_symbol = main["symbol"] if main else "?"
+        usd_price = main["usd_price"] if main else 0.0
+
+    # ── Gas fee ─────────────────────────────────────────────────
+    gas_fee_sol = fee_lamports / 1_000_000_000.0
+    gas_fee_usd = round(gas_fee_sol * (sol_price or 0), 4) if is_fee_payer else 0.0
+
+    # ── Sent/Received dicts (matching Bitcoin provider shape) ────
+    sent_dict: dict = (
+        {
+            "symbol": main_sent["symbol"],
+            "name": main_sent["name"],
+            "amount": main_sent["amount"],
+            "usd_price": main_sent["usd_price"],
+            "usd_value": main_sent["usd_value"],
+            "contract": main_sent["contract"],
+        }
+        if main_sent
+        else {"symbol": "SOL", "name": "Solana", "amount": 0.0, "usd_price": sol_price or 0, "usd_value": 0.0, "contract": ""}
+    )
+    recv_dict: dict = (
+        {
+            "symbol": main_recv["symbol"],
+            "name": main_recv["name"],
+            "amount": main_recv["amount"],
+            "usd_price": main_recv["usd_price"],
+            "usd_value": main_recv["usd_value"],
+            "contract": main_recv["contract"],
+        }
+        if main_recv
+        else {"symbol": "SOL", "name": "Solana", "amount": 0.0, "usd_price": sol_price or 0, "usd_value": 0.0, "contract": ""}
+    )
+
+    return {
+        "type": ev_type,
+        "direction": ev_direction,
+        "tx_hash": signature,
+        "block_time": block_time,
+        "token_symbol": token_symbol,
+        "token_name": "Solana",
+        "chain": "solana",
+        "usd_value": ev_usd,
+        "usd_price": usd_price,
+        "sent": sent_dict,
+        "sent_symbol": sent_symbol,
+        "sent_amount": sent_amount,
+        "received": recv_dict,
+        "recv_symbol": recv_symbol,
+        "recv_amount": recv_amount,
+        "legs": len(sent_tokens) + len(recv_tokens),
+        "gas_fee_usd": gas_fee_usd,
+        "wallet_address": address,
+        "log_index": 0,
+    }
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # SolanaProvider
 # ═══════════════════════════════════════════════════════════════════════
@@ -403,12 +676,84 @@ class SolanaProvider(ChainProvider):
         limit: int = 100,
         offset: int = 0,
     ) -> dict:
-        """Placeholder: Solana transaction fetching not implemented yet.
+        """Return paginated Solana transaction events via public RPC.
 
-        Returns empty result gracefully — the frontend shows
-        'No transactions' rather than crashing.
+        Fetches recent signatures via getSignaturesForAddress, then
+        parses each via getTransaction (jsonParsed).  Derives
+        send/receive/swap from pre/postBalances and pre/postTokenBalances.
+        Best-effort: one failed tx parse never blocks the others.
         """
-        return {"total": 0, "items": [], "counts": {"send": 0, "receive": 0, "swap": 0}}
+        # 1. Get recent signatures
+        signatures = await _get_signatures(address, limit=25)
+        if not signatures:
+            return {"total": 0, "items": [], "counts": {"send": 0, "receive": 0, "swap": 0}}
+
+        # 2. Get SOL price once (used as fallback for all events)
+        sol_price = await _get_sol_price_usd()
+
+        # 3. Fetch parsed transactions (sequential to avoid rate-limit, with small delay)
+        import asyncio
+
+        tx_datas: list[dict] = []
+        all_mints: set[str] = set()
+        for sig_info in signatures[:22]:  # cap at ~22 parsed txs
+            sig = sig_info["signature"]
+            tx = await _get_parsed_tx(sig)
+            if tx is not None:
+                # Collect all mints from pre/post token balances
+                for tb in tx.get("meta", {}).get("preTokenBalances", []):
+                    m = tb.get("mint", "")
+                    if m:
+                        all_mints.add(m)
+                for tb in tx.get("meta", {}).get("postTokenBalances", []):
+                    m = tb.get("mint", "")
+                    if m:
+                        all_mints.add(m)
+                tx_datas.append(tx)
+            await asyncio.sleep(0.05)  # gentle rate-limit
+
+        # 4. Fetch SPL prices for all mints seen in transactions
+        spl_prices: dict[str, float] = {}
+        if all_mints:
+            spl_prices = await _get_spl_prices(list(all_mints))
+
+        # 5. Parse each transaction into events
+        from datetime import datetime, timezone
+
+        events: list[dict[str, Any]] = []
+        for tx in tx_datas:
+            try:
+                ev = _parse_solana_tx(address, tx, sol_price, spl_prices)
+                if ev is not None:
+                    events.append(ev)
+            except Exception:
+                logger.debug("Failed to parse Solana tx for %s", address[:12])
+                continue
+
+        # 6. Sort by block_time DESC (newest first)
+        events.sort(key=lambda e: e.get("block_time", ""), reverse=True)
+
+        # 7. Apply filters
+        if direction:
+            events = [e for e in events if e["direction"] == direction]
+        if event_type:
+            events = [e for e in events if e["type"] == event_type]
+        if token:
+            tlow = token.lower()
+            events = [e for e in events
+                      if e.get("token_symbol", "").lower() == tlow
+                      or tlow in (e.get("sent_symbol", "").lower(), e.get("recv_symbol", "").lower())]
+        if chain and chain.lower() != "solana":
+            events = []
+
+        # 8. Counts
+        counts: dict[str, int] = {"send": 0, "receive": 0, "swap": 0}
+        for ev in events:
+            counts[ev["type"]] = counts.get(ev["type"], 0) + 1
+
+        total = len(events)
+        page = events[offset : offset + limit]
+        return {"total": total, "items": page, "counts": counts}
 
     # ── Explorer URLs ────────────────────────────────────────────
 
