@@ -2165,6 +2165,14 @@ async def portfolio(address: str = Query(...), force: bool = Query(False), user=
     # Phase 2 (2026.07.22) — delegate non-EVM addresses to their provider
     if p.chain_type != "evm":
         _log.info(f"[TRACE] /api/portfolio DELEGATE chain_type={p.chain_type} address={address[:20]}...")
+        # Trigger lazy daily transaction refresh (same mechanism as EVM branch).
+        # Non-EVM wallets are fast (keyless RPC, few seconds) so doing this
+        # BEFORE the portfolio return is fine — the background task will
+        # process non-EVM wallets first (see sort in _daily_tx_refresh).
+        now = _time.time()
+        if now - _last_tx_refresh.get(user["id"], 0) > 86400:
+            _last_tx_refresh[user["id"]] = now
+            asyncio.create_task(_daily_tx_refresh(user["id"]))
         try:
             result = await p.get_portfolio(address)
             # Inject user token prefs (Bitcoin has no prefs, but keep the contract)
@@ -2340,16 +2348,45 @@ async def portfolio(address: str = Query(...), force: bool = Query(False), user=
 
 
 async def _daily_tx_refresh(user_id: int):
+    _refresh_log = logging.getLogger("crypto.tx")
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT address FROM wallets WHERE user_id=?", (user_id,))
-        wallets_list = await cur.fetchall()
+        wallets_list = list(await cur.fetchall())
+
+    # Sort: non-EVM wallets first (fast keyless RPC, seconds), then EVM
+    # (slow Blockscout pagination, potentially minutes).  This prevents
+    # a large EVM wallet from starving Solana / BTC / Cosmos wallets.
+    def _priority(addr: str) -> int:
+        p = provider_for(addr)
+        return 0 if p is not None and p.chain_type != "evm" else 1
+
+    wallets_list.sort(key=lambda w: _priority(w["address"]))
+    _refresh_log.info(
+        "Daily refresh order: %s",
+        ", ".join(f"{w['address'][:10]}...({_priority(w['address'])})" for w in wallets_list),
+    )
+
     for w in wallets_list:
-        count = await _fetch_transactions_for_wallet(user_id, w["address"])
-        await _fetch_full_address_transactions(user_id, w["address"])
-        await _enrich_historical_prices(user_id)
-        if count > 0:
-            await _rebuild_history(user_id, w["address"], _compute_portfolio)
+        addr = w["address"]
+        try:
+            p = provider_for(addr)
+            is_evm = p is None or p.chain_type == "evm"
+
+            count = await _fetch_transactions_for_wallet(user_id, addr)
+            if is_evm:
+                # _fetch_full_address_transactions iterates EVM CHAINS
+                # (Blockscout hosts) — skip for non-EVM to avoid wasted
+                # HTTP calls against incompatible endpoints.
+                count += await _fetch_full_address_transactions(user_id, addr)
+            await _enrich_historical_prices(user_id)
+            if count > 0:
+                await _rebuild_history(user_id, addr, _compute_portfolio)
+        except Exception as e:
+            _refresh_log.warning(
+                "Daily refresh FAILED for wallet %s: %s", addr[:20], e,
+            )
+
     # Fetch gas fees after daily refresh (non-blocking)
     asyncio.create_task(_fetch_gas_for_user(user_id))
 
@@ -3128,14 +3165,40 @@ async def enrich_transactions(user=Depends(get_current_user), db=Depends(get_db)
 
 @app.post("/api/transactions/fetch")
 async def fetch_transactions(user=Depends(get_current_user), db=Depends(get_db)):
+    _fetch_log = logging.getLogger("crypto.tx")
     cur = await db.execute("SELECT address, label FROM wallets WHERE user_id=?", (user["id"],))
-    wallets_list = await cur.fetchall()
+    wallets_list = list(await cur.fetchall())
     if not wallets_list:
         raise HTTPException(400, "Aucun wallet")
+
+    # Sort: non-EVM wallets first (fast keyless RPC, seconds), then EVM
+    # (slow Blockscout pagination, potentially minutes).  This prevents
+    # a large EVM wallet from starving Solana / BTC / Cosmos wallets.
+    def _priority(addr: str) -> int:
+        p = provider_for(addr)
+        return 0 if p is not None and p.chain_type != "evm" else 1
+
+    wallets_list.sort(key=lambda w: _priority(w["address"]))
+    _fetch_log.info(
+        "Fetch order: %s",
+        ", ".join(f"{w['address'][:10]}...({_priority(w['address'])})" for w in wallets_list),
+    )
+
     total_tx = 0
     for w in wallets_list:
-        total_tx += await _fetch_transactions_for_wallet(user["id"], w["address"])
-        total_tx += await _fetch_full_address_transactions(user["id"], w["address"])
+        addr = w["address"]
+        try:
+            p = provider_for(addr)
+            is_evm = p is None or p.chain_type == "evm"
+
+            total_tx += await _fetch_transactions_for_wallet(user["id"], addr)
+            if is_evm:
+                total_tx += await _fetch_full_address_transactions(user["id"], addr)
+        except Exception as e:
+            _fetch_log.warning(
+                "Manual fetch FAILED for wallet %s: %s", addr[:20], e,
+            )
+
     return {"ok": True, "transactions_fetched": total_tx}
 
 

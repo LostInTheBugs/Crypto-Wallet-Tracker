@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — 2026.07.27.c1
+# Crypto Wallet Tracker — 2026.07.27.c2
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM + Bitcoin + Solana + Cosmos, 100 % gratuit (API Blockscout + mempool.space + Solana RPC public + LCD Cosmos).
 
@@ -186,6 +186,8 @@ Crypto-Wallet-Tracker/
 - **Rafraichissement** : le refresh quotidien et le fetch manuel (`POST /api/transactions/fetch`) parcourent desormais correctement les wallets non-EVM — leurs transactions sont persistees et visibles dans la vue agregee.
 - **Filtre wallet insensible a la casse preserve** : le filtre `lower(wallet_address) IN (SELECT lower(address) FROM wallets)` fonctionne correctement pour les adresses Solana (base58, sensible a la casse) car la comparaison se fait en minuscule des deux cotes.
 - **Tests** : `tests/test_agg_tx.py` — 67 assertions (persistance send/receive/swap, idempotence, reconstruction via `group_transaction_events`, liens explorer non-EVM, non-regression EVM, filtre wallet-aware). Tous les tests existants passent (swap_grouping, solana_tx).
+
+### 2026.07.27.c2 — Correctif : fetch des transactions non-EVM fiabilise (wallets non-EVM traites en premier + declenchement au chargement d'un portfolio non-EVM) — les transactions Solana/BTC/Cosmos sont desormais recuperees et affichees
 
 ### 2026.07.27.c1 — Correctif : transactions Solana SPL desormais detectees (matching par owner au lieu de accountIndex) — les transferts de tokens SPL apparaissent enfin dans la page Transactions
 
