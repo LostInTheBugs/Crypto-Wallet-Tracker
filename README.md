@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — 2026.07.26
+# Crypto Wallet Tracker — 2026.07.27
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM + Bitcoin + Solana + Cosmos, 100 % gratuit (API Blockscout + mempool.space + Solana RPC public + LCD Cosmos).
 
@@ -170,13 +170,21 @@ Crypto-Wallet-Tracker/
 
 ### Phase 3 — Transactions completes, fiscal/PnL, DeFi cross-chain, nouvelles chaines
 - [x] 2026.07.26 — Transactions Solana (historique complet)
-- [ ] 2026.07.27 — Transactions Cosmos (historique complet)
+- [x] 2026.07.27 — Transactions non-EVM dans la vue agregee (Solana visible)
 - [ ] 2026.07.28 — Fiscal/PnL avance (cout d'acquisition, realise/latent)
 - [ ] 2026.07.29 — Rapports fiscaux exportables (CSV/PDF)
 - [ ] 2026.07.30 — DeFi cross-chain (LP, lending, health-factor unifie)
 - [ ] 2026.07.31 — Nouvelles chaines (L2 EVM puis non-EVM)
 
 ## 📋 Changelog
+
+### 2026.07.27 — Transactions non-EVM persistees dans la vue agregee : Solana/BTC/Cosmos apparaissent desormais dans la page Transactions (routage provider + persistance + liens explorer par chaine)
+
+- **Persistance non-EVM dans la table `transactions`** : `_fetch_transactions_for_wallet` route desormais TOUS les wallets (EVM et non-EVM). Quand un provider non-EVM est detecte, les evenements sont persistes dans la meme table SQLite que l'EVM — une ligne par jambe (swap = 2 lignes meme tx_hash, log_index distincts). Dedup idempotent sur `(tx_hash, log_index, user_id)`. La vue agregee (`/api/transactions` sans wallet) lit desormais les transactions de TOUTES les chaines depuis la meme table.
+- **Liens explorer par chaine** : les URL d'explorer sont resolues par provider (`explorer_tx_url`) pour les chaines non-EVM (Solscan pour Solana, mempool.space pour Bitcoin, Mintscan pour Cosmos). Les chaines EVM continuent d'utiliser le mapping `CHAINS` (Blockscout).
+- **Rafraichissement** : le refresh quotidien et le fetch manuel (`POST /api/transactions/fetch`) parcourent desormais correctement les wallets non-EVM — leurs transactions sont persistees et visibles dans la vue agregee.
+- **Filtre wallet insensible a la casse preserve** : le filtre `lower(wallet_address) IN (SELECT lower(address) FROM wallets)` fonctionne correctement pour les adresses Solana (base58, sensible a la casse) car la comparaison se fait en minuscule des deux cotes.
+- **Tests** : `tests/test_agg_tx.py` — 67 assertions (persistance send/receive/swap, idempotence, reconstruction via `group_transaction_events`, liens explorer non-EVM, non-regression EVM, filtre wallet-aware). Tous les tests existants passent (swap_grouping, solana_tx).
 
 ### 2026.07.26 — Transactions Solana : historique complet (RPC getSignaturesForAddress + getTransaction, send/receive/swap, liens Solscan)
 

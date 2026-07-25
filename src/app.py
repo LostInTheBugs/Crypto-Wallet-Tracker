@@ -784,13 +784,123 @@ TX_RETRIES = 3
 TX_RETRY_BACKOFF = 1.5         # seconds base backoff (exponential)
 
 
+async def _persist_non_evm_events(user_id: int, address: str, events: list[dict]) -> int:
+    """Persist non-EVM transaction events into the `transactions` table.
+
+    Each event from a provider.get_transactions() is mapped to one or two rows
+    (swap = 2 rows: one out leg + one in leg, same tx_hash, distinct log_index).
+    Dedup on (tx_hash, log_index, user_id) — idempotent across refreshes.
+    """
+    inserted = 0
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with write_locked():
+                for ev in events:
+                    ev_type = ev.get("type", "")
+                    tx_hash = ev.get("tx_hash", "")
+                    chain = ev.get("chain", "")
+                    block_time_raw = ev.get("block_time", "")
+                    # Normalise block_time: "YYYY-MM-DD HH:MM:SS" (comme EVM)
+                    bt = block_time_raw.replace("T", " ").replace("Z", "")[:19] if block_time_raw else ""
+                    gas = ev.get("gas_fee_usd") or 0.0
+
+                    if ev_type == "swap":
+                        # 2 lignes : jambe out (log_index=0) + jambe in (log_index=1)
+                        sent = ev.get("sent") or {}
+                        recv = ev.get("received") or {}
+                        for log_idx, leg, direction in ((0, sent, "out"), (1, recv, "in")):
+                            sym = (leg.get("symbol") or ev.get("sent_symbol") if direction == "out" else ev.get("recv_symbol")) or "?"
+                            name = leg.get("name") or ""
+                            amt = abs(leg.get("amount") or 0)
+                            price = leg.get("usd_price") or 0
+                            val = leg.get("usd_value") or 0
+                            contract = leg.get("contract") or ""
+                            if amt <= 0:
+                                continue
+                            # Dedup
+                            cur = await db.execute(
+                                "SELECT id FROM transactions WHERE tx_hash=? AND log_index=? AND user_id=?",
+                                (tx_hash, log_idx, user_id))
+                            if await cur.fetchone():
+                                continue
+                            await db.execute(
+                                "INSERT INTO transactions (user_id, wallet_address, token_symbol, token_name, amount, usd_price, usd_value, chain, tx_hash, block_time, direction, log_index, gas_fee_usd, contract_address, event_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                (user_id, address, sym, name, amt, price, val, chain, tx_hash, bt, direction, log_idx, gas if log_idx == 0 else 0.0, contract, ev_type))
+                            inserted += 1
+                    elif ev_type in ("send", "receive"):
+                        direction = "out" if ev_type == "send" else "in"
+                        leg = ev.get("sent") if ev_type == "send" else ev.get("received") or {}
+                        sym = (leg.get("symbol") or ev.get("sent_symbol") if ev_type == "send" else ev.get("recv_symbol")) or "?"
+                        name = leg.get("name") or ""
+                        amt = abs(leg.get("amount") or 0)
+                        price = leg.get("usd_price") or 0
+                        val = leg.get("usd_value") or 0
+                        contract = leg.get("contract") or ""
+                        log_idx = ev.get("log_index") or 0
+                        if amt <= 0:
+                            continue
+                        cur = await db.execute(
+                            "SELECT id FROM transactions WHERE tx_hash=? AND log_index=? AND user_id=?",
+                            (tx_hash, log_idx, user_id))
+                        if await cur.fetchone():
+                            continue
+                        await db.execute(
+                            "INSERT INTO transactions (user_id, wallet_address, token_symbol, token_name, amount, usd_price, usd_value, chain, tx_hash, block_time, direction, log_index, gas_fee_usd, contract_address, event_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            (user_id, address, sym, name, amt, price, val, chain, tx_hash, bt, direction, log_idx, gas, contract, ev_type))
+                        inserted += 1
+                    # approve/contract/native: persist as single row
+                    elif ev_type in ("approve", "contract", "native"):
+                        direction = ev.get("direction") or ""
+                        sym = ev.get("token_symbol") or "?"
+                        name = ev.get("token_name") or ""
+                        amt = abs(ev.get("amount") or 0)
+                        price = ev.get("usd_price") or 0
+                        val = ev.get("usd_value") or 0
+                        log_idx = ev.get("log_index") or 0
+                        if amt <= 0:
+                            continue
+                        cur = await db.execute(
+                            "SELECT id FROM transactions WHERE tx_hash=? AND log_index=? AND user_id=?",
+                            (tx_hash, log_idx, user_id))
+                        if await cur.fetchone():
+                            continue
+                        await db.execute(
+                            "INSERT INTO transactions (user_id, wallet_address, token_symbol, token_name, amount, usd_price, usd_value, chain, tx_hash, block_time, direction, log_index, gas_fee_usd, contract_address, event_type, event_method) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            (user_id, address, sym, name, amt, price, val, chain, tx_hash, bt, direction, log_idx, gas, "", ev_type, ev.get("event_method") or ""))
+                        inserted += 1
+            await db.commit()
+    except Exception as e:
+        logging.getLogger("crypto.tx_fetch").debug("Non-EVM persist error for %s: %s", address[:20], e)
+    return inserted
+
+
 async def _fetch_transactions_for_wallet(user_id: int, address: str) -> int:
     """Fetch token transfers with pagination. Dedup on (tx_hash, log_index, user_id).
+
+    For EVM addresses: Blockscout token-transfers + full-address transactions.
+    For non-EVM addresses: delegate to the matching provider, persist results.
 
     Continues until next_page_params is exhausted (or MAX_TX_PAGES safety cap).
     Retries transient HTTP errors (timeout, 5xx) with exponential backoff.
     A chain that fails does not interrupt the others.
     """
+    # ── Non-EVM path ──────────────────────────────────────────
+    p = provider_for(address)
+    if p is not None and p.chain_type != "evm":
+        _tx_log = logging.getLogger("crypto.tx_fetch")
+        try:
+            res = await p.get_transactions(address=address, wallet=address, limit=50)
+            items = res.get("items", [])
+            if items:
+                inserted = await _persist_non_evm_events(user_id, address, items)
+                _tx_log.info("Non-EVM persist for %s (%s): %d events, %d rows inserted",
+                             address[:20], p.chain_type, len(items), inserted)
+                return inserted
+        except Exception as e:
+            _tx_log.warning("Non-EVM fetch failed for %s (%s): %s",
+                          address[:20], p.chain_type, e)
+        return 0
+
     total_tx = 0
     import logging
     _tx_log = logging.getLogger("crypto.tx_fetch")
@@ -1154,7 +1264,21 @@ async def get_transactions(wallet: str = Query(None), chain: str = Query(None), 
 
     for ev in page:
         ev["wallet_label"] = _wallet_labels.get(ev["wallet_address"], "")
-        ev["explorer_url"] = f"https://{CHAINS[ev['chain']]}/tx/{ev['tx_hash']}" if ev["tx_hash"] and CHAINS.get(ev["chain"]) else ""
+        # Explorer URL: EVM via CHAINS dict, non-EVM via provider explorer_tx_url
+        chain = ev.get("chain", "")
+        tx_hash = ev.get("tx_hash", "")
+        if tx_hash:
+            if CHAINS.get(chain):
+                ev["explorer_url"] = f"https://{CHAINS[chain]}/tx/{tx_hash}"
+            else:
+                # Non-EVM: resolve via provider
+                w_prov = provider_for(ev.get("wallet_address", ""))
+                if w_prov and w_prov.chain_type != "evm":
+                    ev["explorer_url"] = w_prov.explorer_tx_url(tx_hash) or ""
+                else:
+                    ev["explorer_url"] = ""
+        else:
+            ev["explorer_url"] = ""
         tag_key = f"{ev['tx_hash']}:{ev['chain']}"
         ev["tag"] = tag_map.get(tag_key) or {}
     return {"total": total, "items": page, "counts": counts}
