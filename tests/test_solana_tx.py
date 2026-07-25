@@ -82,12 +82,13 @@ def _mk_tx(block_time, pre_balances, post_balances,
     }
 
 
-def _tb_entry(account_index, mint, ui_amount, decimals=6):
-    """Build a token balance entry."""
+def _tb_entry(account_index, mint, ui_amount, decimals=6, owner=ADDR):
+    """Build a token balance entry. owner defaults to ADDR (the tracked wallet)."""
     amount_str = str(int(ui_amount * 10**decimals))
     return {
         "accountIndex": account_index,
         "mint": mint,
+        "owner": owner,
         "uiTokenAmount": {
             "uiAmount": ui_amount,
             "decimals": decimals,

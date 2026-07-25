@@ -385,7 +385,7 @@ def _parse_solana_tx(
     def _tb_lookup(tb_list: list[dict]) -> dict[str, tuple[float, int]]:
         out: dict[str, tuple[float, int]] = {}
         for entry in tb_list:
-            if entry.get("accountIndex") != our_idx:
+            if entry.get("owner") != address:
                 continue
             mint = entry.get("mint", "")
             amt = entry.get("uiTokenAmount", {})

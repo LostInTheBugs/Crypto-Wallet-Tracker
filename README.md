@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — 2026.07.27
+# Crypto Wallet Tracker — 2026.07.27.c1
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM + Bitcoin + Solana + Cosmos, 100 % gratuit (API Blockscout + mempool.space + Solana RPC public + LCD Cosmos).
 
@@ -171,6 +171,7 @@ Crypto-Wallet-Tracker/
 ### Phase 3 — Transactions completes, fiscal/PnL, DeFi cross-chain, nouvelles chaines
 - [x] 2026.07.26 — Transactions Solana (historique complet)
 - [x] 2026.07.27 — Transactions non-EVM dans la vue agregee (Solana visible)
+- [x] 2026.07.27.c1 — Correctif : detection SPL par owner (plus accountIndex)
 - [ ] 2026.07.28 — Fiscal/PnL avance (cout d'acquisition, realise/latent)
 - [ ] 2026.07.29 — Rapports fiscaux exportables (CSV/PDF)
 - [ ] 2026.07.30 — DeFi cross-chain (LP, lending, health-factor unifie)
@@ -185,6 +186,15 @@ Crypto-Wallet-Tracker/
 - **Rafraichissement** : le refresh quotidien et le fetch manuel (`POST /api/transactions/fetch`) parcourent desormais correctement les wallets non-EVM — leurs transactions sont persistees et visibles dans la vue agregee.
 - **Filtre wallet insensible a la casse preserve** : le filtre `lower(wallet_address) IN (SELECT lower(address) FROM wallets)` fonctionne correctement pour les adresses Solana (base58, sensible a la casse) car la comparaison se fait en minuscule des deux cotes.
 - **Tests** : `tests/test_agg_tx.py` — 67 assertions (persistance send/receive/swap, idempotence, reconstruction via `group_transaction_events`, liens explorer non-EVM, non-regression EVM, filtre wallet-aware). Tous les tests existants passent (swap_grouping, solana_tx).
+
+### 2026.07.27.c1 — Correctif : transactions Solana SPL desormais detectees (matching par owner au lieu de accountIndex) — les transferts de tokens SPL apparaissent enfin dans la page Transactions
+
+- **Racine du bug** : `_tb_lookup` dans `_parse_solana_tx` filtrait les entrees `pre/postTokenBalances` par `accountIndex` (l'index du compte de token ATA), au lieu de `owner` (l'adresse du wallet proprietaire). Comme l'`accountIndex` d'une ATA n'est jamais egal a l'index du wallet dans `accountKeys`, la fonction ne retournait JAMAIS de delta SPL → toute transaction purement SPL (recevoir/envoyer de l'USDC ou d'un token, cas le plus frequent) etait droppee via `if not has_out and not has_in: return None`. Seules les transactions avec mouvement de SOL natif produisaient un evenement.
+- **Correctif 1 ligne** : `if entry.get(\"accountIndex\") != our_idx` → `if entry.get(\"owner\") != address` dans `_tb_lookup`. Le champ `owner` est le wallet proprietaire et correspond directement a `address`.
+- **Cas limites geres** : token account apparait en pre mais pas en post (compte ferme) ou l'inverse (compte cree) → merge des mints avec pre_amt/post_amt par defaut a 0.
+- **Non-regression** : detection SOL natif inchangee (`our_idx` toujours utilise pour `preBalances/postBalances`). Providers EVM/BTC/Cosmos inchanges.
+- **Validation mainnet reelle** : adresse `5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1` — 3 swaps SPL detectes (USDT→SOL, SOL→USDC, USDC→SOL), 6 jambes persistees, regroupement `group_transaction_events` correct, idempotence verifiee, liens Solscan valides, filtre wallet-aware insensible a la casse preserve les adresses Solana base58.
+- **Tests** : `tests/test_solana_spl_fix.py` — 27 assertions (detection SPL via owner, owner different non capture, SOL non-regression, ATA creation/fermeture). `tests/test_solana_tx.py` mis a jour (fixtures `_tb_entry` avec champ `owner`). Tous les tests existants passent (74+70+34+67+swap_grouping = 245+ assertions).
 
 ### 2026.07.26 — Transactions Solana : historique complet (RPC getSignaturesForAddress + getTransaction, send/receive/swap, liens Solscan)
 
