@@ -870,7 +870,8 @@ async def _persist_non_evm_events(user_id: int, address: str, events: list[dict]
                         inserted += 1
             await db.commit()
     except Exception as e:
-        logging.getLogger("crypto.tx_fetch").debug("Non-EVM persist error for %s: %s", address[:20], e)
+        logging.getLogger("crypto.tx_fetch").warning(
+            "Non-EVM persist error for %s (%s): %s", address[:20], type(e).__name__, e)
     return inserted
 
 
@@ -1184,6 +1185,13 @@ async def import_progress(user=Depends(get_current_user)):
     return _import_progress.get(user["id"], {"stage": "idle", "done": 0, "total": 0})
 
 
+# ── Non-EVM live tx cache (merge live into aggregated view) ────────
+# Key: (user_id, lower(wallet_address)) -> (timestamp, items list)
+# TTL 300s — avoids calling RPC on every page or filter change.
+_non_evm_tx_cache: dict[str, tuple[float, list]] = {}
+_NON_EVM_TX_CACHE_TTL = 300  # seconds
+
+
 @app.get("/api/transactions")
 async def get_transactions(wallet: str = Query(None), chain: str = Query(None), token: str = Query(None),
                            direction: str = Query(None), event_type: str = Query(None, alias="type"),
@@ -1222,17 +1230,17 @@ async def get_transactions(wallet: str = Query(None), chain: str = Query(None), 
                     "items": [],
                     "counts": {},
                 }
-    # v2.12.4 — événements regroupés par (wallet, chain, tx_hash) : swap/send/receive.
-    # Le REGROUPEMENT se fait AVANT la pagination (sinon les deux jambes d'un swap
-    # peuvent tomber sur deux pages différentes). Filtres wallet/chain en SQL ;
-    # token/direction/type appliqués APRÈS regroupement pour garder les jambes entières.
+
+    # ═══════════════════════════════════════════════════════════════
+    # AGGREGATED view (wallet=None or wallet="ALL" or EVM wallet)
+    # ═══════════════════════════════════════════════════════════════
+
+    # ── 1. EVM events from DB (UNCHANGED) ──────────────────────
     conditions = ["user_id=?"]
     params = [user["id"]]
-    # v2.12.5 — défense en profondeur : ne jamais exposer les lignes d'un wallet
-    # absent de la table wallets (orphelins d'une suppression). Insensible à la casse.
     conditions.append("lower(wallet_address) IN (SELECT lower(address) FROM wallets WHERE user_id=?)")
     params.append(user["id"])
-    if wallet:
+    if wallet and wallet.lower() != "all":
         conditions.append("lower(wallet_address)=lower(?)")
         params.append(wallet)
     if chain:
@@ -1245,15 +1253,81 @@ async def get_transactions(wallet: str = Query(None), chain: str = Query(None), 
     rows = await cur.fetchall()
 
     events = group_transaction_events(rows)
+
+    # ── 2. Merge LIVE non-EVM events (aggregated only, cache-aware) ──
+    is_aggregated = not wallet or wallet.lower() == "all"
+    if is_aggregated:
+        cur_w = await db.execute(
+            "SELECT address FROM wallets WHERE user_id=? AND (chain_type!='evm' OR chain_type IS NULL)",
+            (user["id"],))
+        wal_rows = await cur_w.fetchall()
+        non_evm_addrs = [r["address"] for r in wal_rows if r["address"]]
+
+        # Detect non-EVM by provider (fallback for NULL chain_type)
+        for r in wal_rows:
+            a = r["address"]
+            p = provider_for(a)
+            if p is not None and p.chain_type != "evm" and a not in non_evm_addrs:
+                non_evm_addrs.append(a)
+
+        for addr in non_evm_addrs:
+            cache_key = f"{user['id']}:{addr.lower()}"
+            cached = _non_evm_tx_cache.get(cache_key)
+            now = _time.time()
+
+            if cached and (now - cached[0]) < _NON_EVM_TX_CACHE_TTL:
+                live_items = cached[1]
+            else:
+                prov = provider_for(addr)
+                if prov is None or prov.chain_type == "evm":
+                    continue
+                try:
+                    res = await prov.get_transactions(address=addr, wallet=addr, limit=50)
+                    live_items = res.get("items", [])
+                    # Ensure wallet_address is set on every item
+                    for it in live_items:
+                        if not it.get("wallet_address"):
+                            it["wallet_address"] = addr
+                        # Normalize block_time: "YYYY-MM-DDTHH:MM:SSZ" → "YYYY-MM-DD HH:MM:SS"
+                        # (same format as DB rows), so lexical sort works across providers.
+                        bt = it.get("block_time", "")
+                        if bt and "T" in bt:
+                            it["block_time"] = bt.replace("T", " ").replace("Z", "")[:19]
+                    _non_evm_tx_cache[cache_key] = (now, live_items)
+                except Exception as e:
+                    logging.getLogger("crypto.transactions").debug(
+                        "Non-EVM live merge failed for %s (%s): %s",
+                        addr[:20], type(prov).__name__, e,
+                    )
+                    live_items = cached[1] if cached else []
+
+            # Attach explorer URLs
+            prov_explorer = provider_for(addr)
+            for ev in live_items:
+                tx_hash = ev.get("tx_hash", "")
+                if tx_hash and prov_explorer:
+                    ev["explorer_url"] = prov_explorer.explorer_tx_url(tx_hash) or ""
+                else:
+                    ev["explorer_url"] = ""
+
+            events.extend(live_items)
+
+    # ── 3. Filter, sort, count ─────────────────────────────────
     events = filter_events(events, token=token, direction=direction)
+
     counts = {"swap": 0, "send": 0, "receive": 0, "approve": 0, "contract": 0, "native": 0}
     for ev in events:
         counts[ev["type"]] = counts.get(ev["type"], 0) + 1
+
     events = filter_events(events, event_type=event_type)
+
+    # Sort by block_time DESC (secondarily by usd_value DESC for same timestamp)
+    events.sort(key=lambda e: (e.get("block_time", ""), e.get("usd_value", 0)), reverse=True)
 
     total = len(events)
     page = events[offset:offset + limit]
 
+    # ── 4. Enrich page with tags, labels, explorer URLs ────────
     # 2026.07.5 — attach user tags to events
     tag_cur = await db.execute(
         "SELECT tx_hash, chain, category, note FROM user_tx_tags WHERE user_id=?",
@@ -1263,23 +1337,25 @@ async def get_transactions(wallet: str = Query(None), chain: str = Query(None), 
         tag_map[f"{tr['tx_hash']}:{tr['chain']}"] = {"category": tr["category"] or "", "note": tr["note"] or ""}
 
     for ev in page:
-        ev["wallet_label"] = _wallet_labels.get(ev["wallet_address"], "")
+        wa = ev.get("wallet_address", "")
+        if not ev.get("wallet_label"):
+            ev["wallet_label"] = _wallet_labels.get(wa, "")
         # Explorer URL: EVM via CHAINS dict, non-EVM via provider explorer_tx_url
-        chain = ev.get("chain", "")
+        ch = ev.get("chain", "")
         tx_hash = ev.get("tx_hash", "")
         if tx_hash:
-            if CHAINS.get(chain):
-                ev["explorer_url"] = f"https://{CHAINS[chain]}/tx/{tx_hash}"
-            else:
-                # Non-EVM: resolve via provider
-                w_prov = provider_for(ev.get("wallet_address", ""))
+            if CHAINS.get(ch):
+                ev["explorer_url"] = f"https://{CHAINS[ch]}/tx/{tx_hash}"
+            elif not ev.get("explorer_url"):
+                # Non-EVM: resolve via provider (may already be set from live merge)
+                w_prov = provider_for(wa)
                 if w_prov and w_prov.chain_type != "evm":
                     ev["explorer_url"] = w_prov.explorer_tx_url(tx_hash) or ""
                 else:
                     ev["explorer_url"] = ""
         else:
             ev["explorer_url"] = ""
-        tag_key = f"{ev['tx_hash']}:{ev['chain']}"
+        tag_key = f"{ev.get('tx_hash', '')}:{ev.get('chain', '')}"
         ev["tag"] = tag_map.get(tag_key) or {}
     return {"total": total, "items": page, "counts": counts}
 
@@ -3239,15 +3315,19 @@ async def latest_version():
                 semver_tags = []
                 for item in data:
                     name = item["name"]
-                    if re.match(r"^\d{4}\.\d{2}\.\d+$", name):
+                    if re.match(r"^\d{4}\.\d{2}\.\d+(\.c\d+)?$", name):
                         calver_tags.append(name)
                     elif re.match(r"^v?\d+\.\d+\.\d+$", name):
                         semver_tags.append(name.lstrip("v"))
                 # CalVer tags are always more recent than semver
                 if calver_tags:
                     def _calver_key(t):
-                        p = t.split(".")
-                        return (int(p[0]), int(p[1]), int(p[2]))
+                        parts = t.split(".")
+                        base = (int(parts[0]), int(parts[1]), int(parts[2]))
+                        cn = 0
+                        if len(parts) > 3 and parts[3].startswith("c"):
+                            cn = int(parts[3][1:])
+                        return (base[0], base[1], base[2], cn)
                     calver_tags.sort(key=_calver_key, reverse=True)
                     return {"tag": calver_tags[0]}
                 elif semver_tags:

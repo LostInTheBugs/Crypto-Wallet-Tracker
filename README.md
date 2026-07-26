@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — 2026.07.27.c2
+# Crypto Wallet Tracker — 2026.07.27.c3
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM + Bitcoin + Solana + Cosmos, 100 % gratuit (API Blockscout + mempool.space + Solana RPC public + LCD Cosmos).
 
@@ -186,6 +186,14 @@ Crypto-Wallet-Tracker/
 - **Rafraichissement** : le refresh quotidien et le fetch manuel (`POST /api/transactions/fetch`) parcourent desormais correctement les wallets non-EVM — leurs transactions sont persistees et visibles dans la vue agregee.
 - **Filtre wallet insensible a la casse preserve** : le filtre `lower(wallet_address) IN (SELECT lower(address) FROM wallets)` fonctionne correctement pour les adresses Solana (base58, sensible a la casse) car la comparaison se fait en minuscule des deux cotes.
 - **Tests** : `tests/test_agg_tx.py` — 67 assertions (persistance send/receive/swap, idempotence, reconstruction via `group_transaction_events`, liens explorer non-EVM, non-regression EVM, filtre wallet-aware). Tous les tests existants passent (swap_grouping, solana_tx).
+
+### 2026.07.27.c3 — Transactions non-EVM dans la vue agregee via merge live (Solana visible) + correctif systeme d'update pour les tags .cX
+
+- **Merge live des transactions non-EVM** : la vue agregee (`/api/transactions` sans filtre wallet) merge desormais en DIRECT les transactions non-EVM (Solana, BTC, Cosmos) depuis les providers, au lieu de dependre de la persistance SQLite (qui echoue silencieusement en production). Cache memoire de 300s par (user, wallet_address) pour ne pas rappeler le RPC a chaque navigation. Defensif : un provider timeout n'impacte JAMAIS la vue EVM. Format de date normalise (YYYY-MM-DD HH:MM:SS) pour un tri lexical coherent entre EVM et non-EVM.
+- **Liens explorer automatiques** : les URL Solscan (Solana), mempool.space (Bitcoin) et Mintscan (Cosmos) sont attachees aux evenements live.
+- **Correctif systeme d'update** : `GET /api/version/latest` reconnait desormais les tags de correction `.cX` (regex `^\d{4}\.\d{2}\.\d+(\.c\d+)?$`) et les trie correctement via `_calver_key` : une correction est consideree comme posterieure a la version de base (ex: 2026.07.27.c3 > 2026.07.27). Le frontend (`_cmpVer` dans `checkVersion()`) compare desormais 4 composants (annee, mois, patch, cn) avec cn=0 pour les versions sans suffixe.
+- **Logging ameliore** : `_persist_non_evm_events` log en WARNING avec le type d'exception pour faciliter le diagnostic futur du probleme de persistance.
+- **Tests** : `tests/test_live_merge_2026_07_27_c3.py` — 52 assertions (merge live EVM+Solana, cache TTL, echec provider isole, non-regression EVM, tri _calver_key avec .cN, regex accept/reject). Tous les tests existants passent (swap_grouping, agg_tx).
 
 ### 2026.07.27.c2 — Correctif : fetch des transactions non-EVM fiabilise (wallets non-EVM traites en premier + declenchement au chargement d'un portfolio non-EVM) — les transactions Solana/BTC/Cosmos sont desormais recuperees et affichees
 
