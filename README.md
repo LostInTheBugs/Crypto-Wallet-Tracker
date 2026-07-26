@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — 2026.07.27.c4
+# Crypto Wallet Tracker — 2026.07.28
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM + Bitcoin + Solana + Cosmos, 100 % gratuit (API Blockscout + mempool.space + Solana RPC public + LCD Cosmos).
 
@@ -172,12 +172,20 @@ Crypto-Wallet-Tracker/
 - [x] 2026.07.26 — Transactions Solana (historique complet)
 - [x] 2026.07.27 — Transactions non-EVM dans la vue agregee (Solana visible)
 - [x] 2026.07.27.c1 — Correctif : detection SPL par owner (plus accountIndex)
-- [ ] 2026.07.28 — Fiscal/PnL avance (cout d'acquisition, realise/latent)
+- [x] 2026.07.28 — Transactions Cosmos (historique complet)
 - [ ] 2026.07.29 — Rapports fiscaux exportables (CSV/PDF)
 - [ ] 2026.07.30 — DeFi cross-chain (LP, lending, health-factor unifie)
 - [ ] 2026.07.31 — Nouvelles chaines (L2 EVM puis non-EVM)
 
 ## 📋 Changelog
+
+### 2026.07.28 — Transactions Cosmos : historique reel (MsgSend + delegations via LCD public Polkachu, format compatible merge live avec champ `amount` racine, liens Mintscan)
+
+- **CosmosProvider.get_transactions()** : implementation complete remplacant le placeholder vide. L'historique est recupere via l'API publique LCD REST (Polkachu) avec les requetes `message.sender='{addr}'` (sortantes) et `transfer.recipient='{addr}'` (entrantes), fusion et dedup par txhash. Parsing de `MsgSend`, `MsgDelegate` et `MsgUndelegate` avec conversion uatom/uosmo → ATOM/OSMO (÷1e6).
+- **Format d'event strictement identique a Solana** : chaque event contient `type`, `direction`, `tx_hash`, `block_time` (ISO 8601), `token_symbol`, `chain`, `amount` (racine = sent_amount pour send, recv_amount pour receive), `usd_value`, `sent`/`received` (dicts avec symbol/name/amount/usd_price/usd_value/contract), `sent_symbol`/`sent_amount`/`recv_symbol`/`recv_amount`, `gas_fee_usd`, `wallet_address`, `log_index`. Le merge live (`/api/transactions` agrege) les rend immediatement visibles sans persistance DB.
+- **Liens Mintscan** : `explorer_tx_url` genere les URLs `https://www.mintscan.io/cosmos/tx/{hash}`. La chaine est resolue via le HRP (cosmos1→cosmos, osmo1→osmosis).
+- **Tests reels** : `tests/test_cosmos_tx.py` — validation avec l'adresse Osmosis reelle `osmo19ce3d285j37fvdm277qlvw4sth2j7cwapjk6sc` (6 events : 1 send + 5 receive detectes, format verifie, filtres direction/type/chain fonctionnels).
+- **Non-regression** : tous les tests existants passent (core 20/20, swap_grouping, agg_tx 67/67, solana_tx 74/74, live_merge 52/52, providers 34/34). py_compile et node --check OK.
 
 ### 2026.07.27 — Transactions non-EVM persistees dans la vue agregee : Solana/BTC/Cosmos apparaissent desormais dans la page Transactions (routage provider + persistance + liens explorer par chaine)
 

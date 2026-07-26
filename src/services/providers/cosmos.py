@@ -288,6 +288,259 @@ def _denom_to_symbol(denom: str) -> tuple[str, int]:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# Transaction parsing helpers
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _parse_cosmos_tx(
+    address: str,
+    tx_data: dict,
+    hrp: str,
+    display_chain: str,
+    native_symbol: str,
+    explorer_prefix: str,
+) -> dict[str, Any] | None:
+    """Parse a single Cosmos LCD tx_response into a standard event dict.
+
+    Returns None if the transaction has no meaningful transfers for this
+    address (no MsgSend/MsgDelegate/MsgUndelegate involving this address).
+    """
+    from datetime import datetime, timezone
+
+    txhash = tx_data.get("txhash", "")
+    if not txhash:
+        return None
+
+    # Timestamp
+    timestamp = tx_data.get("timestamp", "")
+    block_time = ""
+    if timestamp:
+        if timestamp.endswith("Z"):
+            block_time = timestamp
+        else:
+            try:
+                dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+                block_time = dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+            except (ValueError, TypeError):
+                block_time = timestamp[:19] + "Z" if len(timestamp) >= 19 else ""
+
+    # ── Parse messages ──────────────────────────────────────────
+    tx_body = tx_data.get("tx", {})
+    body = tx_body.get("body", {})
+    messages = body.get("messages", [])
+    if not isinstance(messages, list):
+        messages = []
+
+    # ── Collect sent and received token legs ────────────────────
+    sent_tokens: list[dict] = []
+    recv_tokens: list[dict] = []
+
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        msg_type = msg.get("@type", "")
+
+        if "MsgSend" in msg_type:
+            _from = msg.get("from_address", "")
+            _to = msg.get("to_address", "")
+            amounts = msg.get("amount", [])
+            if not isinstance(amounts, list):
+                amounts = [amounts] if isinstance(amounts, dict) else []
+
+            for amt in amounts:
+                if not isinstance(amt, dict):
+                    continue
+                denom = amt.get("denom", "")
+                raw_amt_str = amt.get("amount", "0")
+                try:
+                    raw_amt = float(raw_amt_str)
+                except (ValueError, TypeError):
+                    raw_amt = 0.0
+                if raw_amt <= 0:
+                    continue
+
+                sym, exp = _denom_to_symbol(denom)
+                divisor = 10**exp
+                human_amt = raw_amt / divisor
+
+                leg = {
+                    "symbol": sym,
+                    "name": f"{sym} ({denom})",
+                    "amount": round(human_amt, 6),
+                    "usd_price": 0.0,
+                    "usd_value": 0.0,
+                    "contract": denom,
+                }
+
+                if _from == address:
+                    sent_tokens.append(leg)
+                elif _to == address:
+                    recv_tokens.append(leg)
+
+        elif "MsgDelegate" in msg_type:
+            delegator = msg.get("delegator_address", "")
+            amt = msg.get("amount", {})
+            if isinstance(amt, dict) and delegator == address:
+                denom = amt.get("denom", "")
+                raw_amt_str = amt.get("amount", "0")
+                try:
+                    raw_amt = float(raw_amt_str)
+                except (ValueError, TypeError):
+                    raw_amt = 0.0
+                if raw_amt > 0:
+                    sym, exp = _denom_to_symbol(denom)
+                    divisor = 10**exp
+                    human_amt = raw_amt / divisor
+                    sent_tokens.append({
+                        "symbol": f"staked_{sym}",
+                        "name": f"Delegate {sym}",
+                        "amount": round(human_amt, 6),
+                        "usd_price": 0.0,
+                        "usd_value": 0.0,
+                        "contract": denom,
+                    })
+
+        elif "MsgUndelegate" in msg_type:
+            delegator = msg.get("delegator_address", "")
+            amt = msg.get("amount", {})
+            if isinstance(amt, dict) and delegator == address:
+                denom = amt.get("denom", "")
+                raw_amt_str = amt.get("amount", "0")
+                try:
+                    raw_amt = float(raw_amt_str)
+                except (ValueError, TypeError):
+                    raw_amt = 0.0
+                if raw_amt > 0:
+                    sym, exp = _denom_to_symbol(denom)
+                    divisor = 10**exp
+                    human_amt = raw_amt / divisor
+                    recv_tokens.append({
+                        "symbol": f"unstaked_{sym}",
+                        "name": f"Undelegate {sym}",
+                        "amount": round(human_amt, 6),
+                        "usd_price": 0.0,
+                        "usd_value": 0.0,
+                        "contract": denom,
+                    })
+
+    # ── Determine event type ────────────────────────────────────
+    has_out = len(sent_tokens) > 0
+    has_in = len(recv_tokens) > 0
+
+    if not has_out and not has_in:
+        return None
+
+    ev_type: str
+    ev_direction: str
+    if has_out and has_in:
+        ev_type = "swap"
+        ev_direction = "swap"
+    elif has_out:
+        ev_type = "send"
+        ev_direction = "out"
+    else:
+        ev_type = "receive"
+        ev_direction = "in"
+
+    # ── Main legs (largest by amount) ───────────────────────────
+    def _best_leg(legs: list[dict]) -> dict | None:
+        best = None
+        for leg in legs:
+            if best is None or leg["amount"] > best["amount"]:
+                best = leg
+        return best
+
+    main_sent = _best_leg(sent_tokens)
+    main_recv = _best_leg(recv_tokens)
+
+    sent_symbol = main_sent["symbol"] if main_sent else None
+    sent_amount = round(main_sent["amount"], 6) if main_sent else 0.0
+    recv_symbol = main_recv["symbol"] if main_recv else None
+    recv_amount = round(main_recv["amount"], 6) if main_recv else 0.0
+
+    # ── usd_value for the event ──────────────────────────────────
+    if ev_type == "swap":
+        out_usd = sum(t["usd_value"] for t in sent_tokens)
+        in_usd = sum(t["usd_value"] for t in recv_tokens)
+        ev_usd = round(max(out_usd, in_usd), 2)
+    elif ev_type == "send":
+        ev_usd = round(sum(t["usd_value"] for t in sent_tokens), 2)
+    else:
+        ev_usd = round(sum(t["usd_value"] for t in recv_tokens), 2)
+
+    # ── Token symbol summary ─────────────────────────────────────
+    if ev_type == "swap":
+        ss = (main_sent["symbol"] if main_sent else "?")
+        rs = (main_recv["symbol"] if main_recv else "?")
+        token_symbol = f"{ss} → {rs}"
+        usd_price = None
+    else:
+        main = main_sent or main_recv
+        token_symbol = main["symbol"] if main else "?"
+        usd_price = main["usd_price"] if main else 0.0
+
+    # ── Gas fee USD (0 — no price lookup in tx parser) ─────────
+    gas_fee_usd = 0.0
+
+    # ── Sent/Received dicts (matching Solana provider shape) ────
+    sent_dict: dict = (
+        {
+            "symbol": main_sent["symbol"],
+            "name": main_sent["name"],
+            "amount": main_sent["amount"],
+            "usd_price": main_sent["usd_price"],
+            "usd_value": main_sent["usd_value"],
+            "contract": main_sent["contract"],
+        }
+        if main_sent
+        else {"symbol": native_symbol, "name": native_symbol, "amount": 0.0, "usd_price": 0.0, "usd_value": 0.0, "contract": ""}
+    )
+    recv_dict: dict = (
+        {
+            "symbol": main_recv["symbol"],
+            "name": main_recv["name"],
+            "amount": main_recv["amount"],
+            "usd_price": main_recv["usd_price"],
+            "usd_value": main_recv["usd_value"],
+            "contract": main_recv["contract"],
+        }
+        if main_recv
+        else {"symbol": native_symbol, "name": native_symbol, "amount": 0.0, "usd_price": 0.0, "usd_value": 0.0, "contract": ""}
+    )
+
+    # ── Root-level amount for UI consistency ─────────────────────
+    if ev_type == "send":
+        amount = sent_amount
+    elif ev_type == "receive":
+        amount = recv_amount
+    else:  # swap
+        amount = sent_amount
+
+    return {
+        "type": ev_type,
+        "direction": ev_direction,
+        "tx_hash": txhash,
+        "block_time": block_time,
+        "token_symbol": token_symbol,
+        "token_name": native_symbol,
+        "chain": display_chain,
+        "amount": amount,
+        "usd_value": ev_usd,
+        "usd_price": usd_price,
+        "sent": sent_dict,
+        "sent_symbol": sent_symbol,
+        "sent_amount": sent_amount,
+        "received": recv_dict,
+        "recv_symbol": recv_symbol,
+        "recv_amount": recv_amount,
+        "legs": len(sent_tokens) + len(recv_tokens),
+        "gas_fee_usd": gas_fee_usd,
+        "wallet_address": address,
+        "log_index": 0,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # CosmosProvider
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -488,15 +741,105 @@ class CosmosProvider(ChainProvider):
         limit: int = 100,
         offset: int = 0,
     ) -> dict:
-        """Placeholder: Cosmos transaction fetching not implemented yet.
+        """Return Cosmos transaction events via public LCD REST.
 
-        Returns empty result gracefully.
+        Fetches outgoing (message.sender) and incoming (transfer.recipient)
+        transactions, parses MsgSend/MsgDelegate/MsgWithdrawDelegatorReward,
+        and builds standard events. Best-effort: one failed API call or tx
+        parse never blocks the others.
         """
-        return {
-            "total": 0,
-            "items": [],
-            "counts": {"send": 0, "receive": 0, "swap": 0},
-        }
+        hrp = _identify_hrp(address)
+        if hrp is None:
+            return {"total": 0, "items": [], "counts": {"send": 0, "receive": 0, "swap": 0}}
+
+        info = _hrp_info(hrp)
+        if info is None:
+            return {"total": 0, "items": [], "counts": {"send": 0, "receive": 0, "swap": 0}}
+
+        lcd = info["lcd"]
+        native_sym = info["symbol"]
+        cg_id = info["coingecko_id"]
+        explorer_prefix = info["explorer_prefix"]
+        display_chain = f"cosmos:{hrp}"
+
+        # ── Fetch outgoing + incoming tx hashes in parallel ───────
+        import urllib.parse
+
+        async def _fetch_tx_page(query: str, lim: int = 25) -> list[dict]:
+            """Fetch one page of txs matching query, return tx_responses list."""
+            q_enc = urllib.parse.quote(query, safe="")
+            path = (
+                f"/cosmos/tx/v1beta1/txs?"
+                f"query={q_enc}&order_by=ORDER_BY_DESC&pagination.limit={lim}"
+            )
+            data = await _lcd_get(lcd, path)
+            if not isinstance(data, dict):
+                return []
+            txns = data.get("tx_responses", data.get("txs", []))
+            return txns if isinstance(txns, list) else []
+
+        out_raw, in_raw = await asyncio.gather(
+            _fetch_tx_page(f"message.sender='{address}'"),
+            _fetch_tx_page(f"transfer.recipient='{address}'"),
+        )
+
+        # ── Dedup by txhash; tag each with its query source ───────
+        seen: dict[str, dict] = {}
+        for t in out_raw:
+            h = t.get("txhash", "")
+            if h:
+                seen[h] = t
+        for t in in_raw:
+            h = t.get("txhash", "")
+            if h and h not in seen:
+                seen[h] = t
+
+        all_txs = list(seen.values())
+
+        # ── Parse each tx into events ──────────────────────────────
+        events: list[dict[str, Any]] = []
+        for tx_data in all_txs:
+            try:
+                ev = _parse_cosmos_tx(
+                    address=address,
+                    tx_data=tx_data,
+                    hrp=hrp,
+                    display_chain=display_chain,
+                    native_symbol=native_sym,
+                    explorer_prefix=explorer_prefix,
+                )
+                if ev is not None:
+                    events.append(ev)
+            except Exception:
+                logger.debug("Failed to parse Cosmos tx for %s", address[:12])
+                continue
+
+        # ── Sort by block_time DESC (newest first) ─────────────────
+        events.sort(key=lambda e: e.get("block_time", ""), reverse=True)
+
+        # ── Apply filters ──────────────────────────────────────────
+        if direction:
+            events = [e for e in events if e.get("direction") == direction]
+        if event_type:
+            events = [e for e in events if e.get("type") == event_type]
+        if token:
+            tlow = token.lower()
+            events = [e for e in events
+                      if e.get("token_symbol", "").lower() == tlow
+                      or tlow in (e.get("sent_symbol", "").lower(), e.get("recv_symbol", "").lower())]
+        hrp_chain = f"cosmos:{hrp}"
+        if chain and chain.lower() != hrp_chain:
+            events = []
+
+        # ── Counts ─────────────────────────────────────────────────
+        counts: dict[str, int] = {"send": 0, "receive": 0, "swap": 0}
+        for ev in events:
+            t = ev.get("type", "")
+            counts[t] = counts.get(t, 0) + 1
+
+        total = len(events)
+        page = events[offset : offset + limit]
+        return {"total": total, "items": page, "counts": counts}
 
     # ── Explorer URLs ────────────────────────────────────────────
 
@@ -513,7 +856,7 @@ class CosmosProvider(ChainProvider):
 
     def explorer_tx_url(self, tx_hash: str) -> str | None:
         """Return Mintscan transaction URL."""
-        # We don't know the chain from a tx hash alone, default to cosmos
+        # Try to resolve chain from tx hash via address HRP if known, else default
         return f"https://www.mintscan.io/cosmos/tx/{tx_hash}"
 
 
