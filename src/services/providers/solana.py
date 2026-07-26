@@ -535,6 +535,14 @@ def _parse_solana_tx(
         else {"symbol": "SOL", "name": "Solana", "amount": 0.0, "usd_price": sol_price or 0, "usd_value": 0.0, "contract": ""}
     )
 
+    # Root-level amount for UI consistency (EVM events expose "amount")
+    if ev_type == "send":
+        amount = sent_amount
+    elif ev_type == "receive":
+        amount = recv_amount
+    else:  # swap
+        amount = sent_amount  # match EVM group_transaction_events convention
+
     return {
         "type": ev_type,
         "direction": ev_direction,
@@ -543,6 +551,7 @@ def _parse_solana_tx(
         "token_symbol": token_symbol,
         "token_name": "Solana",
         "chain": "solana",
+        "amount": amount,
         "usd_value": ev_usd,
         "usd_price": usd_price,
         "sent": sent_dict,

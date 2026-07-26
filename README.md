@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — 2026.07.27.c3
+# Crypto Wallet Tracker — 2026.07.27.c4
 
 **Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM + Bitcoin + Solana + Cosmos, 100 % gratuit (API Blockscout + mempool.space + Solana RPC public + LCD Cosmos).
 
@@ -186,6 +186,16 @@ Crypto-Wallet-Tracker/
 - **Rafraichissement** : le refresh quotidien et le fetch manuel (`POST /api/transactions/fetch`) parcourent desormais correctement les wallets non-EVM — leurs transactions sont persistees et visibles dans la vue agregee.
 - **Filtre wallet insensible a la casse preserve** : le filtre `lower(wallet_address) IN (SELECT lower(address) FROM wallets)` fonctionne correctement pour les adresses Solana (base58, sensible a la casse) car la comparaison se fait en minuscule des deux cotes.
 - **Tests** : `tests/test_agg_tx.py` — 67 assertions (persistance send/receive/swap, idempotence, reconstruction via `group_transaction_events`, liens explorer non-EVM, non-regression EVM, filtre wallet-aware). Tous les tests existants passent (swap_grouping, solana_tx).
+
+### 2026.07.27.c4 — Correctif : quantite des transactions non-EVM (Solana) desormais affichee (champ `amount` racine ajoute aux events send/receive/native)
+
+- **Racine du bug** : les evenements non-EVM (Solana, Bitcoin) construits par les providers n'exposaient PAS de champ racine `amount` (seulement `sent_amount`, `recv_amount`, `sent.amount`, `received.amount`). Le frontend (`renderTxnTable`) lit `tx.amount` pour les types send/receive/native (ligne 2328) → `undefined` → `fmtAmt` retourne 0. Les events EVM (`group_transaction_events`) avaient bien `amount` via le regroupement, mais les events live non-EVM passes dans la vue agregee (merge c3) arrivaient sans ce champ.
+- **Correctif (cote serveur, providers)** : ajout d'un champ racine `amount` coherent avec le type de l'evenement dans `_parse_solana_tx` (Solana) et `get_transactions` (Bitcoin) :
+  * send → `amount = sent_amount`
+  * receive → `amount = recv_amount`
+  * swap → `amount = sent_amount` (coherent avec la convention EVM de `group_transaction_events`)
+  * Les champs existants (`sent_amount`, `recv_amount`, `sent`, `received`) restent inchanges.
+- **Non-regression** : tous les tests existants passent (solana_tx 74/74, swap_grouping, agg_tx 67/67, core 20/20). Validation explicite : 16 assertions prouvant `amount > 0` et `amount == sent_amount/recv_amount` pour chaque type d'evenement Solana.
 
 ### 2026.07.27.c3 — Transactions non-EVM dans la vue agregee via merge live (Solana visible) + correctif systeme d'update pour les tags .cX
 

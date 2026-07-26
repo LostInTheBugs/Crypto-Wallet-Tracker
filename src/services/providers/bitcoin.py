@@ -274,6 +274,7 @@ class BitcoinProvider(ChainProvider):
                     "token_symbol": "BTC",
                     "token_name": "Bitcoin",
                     "chain": "bitcoin",
+                    "amount": round(btc_amount, 8),
                     "usd_value": usd_value,
                     "usd_price": price or 0,
                     "sent": {
