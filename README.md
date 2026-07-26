@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — 2026.07.29
+# Crypto Wallet Tracker — 2026.07.30
 
 > ⚠️ **DISCLAIMER — This is a proof-of-concept / experimental application.** It is NOT financial, tax, accounting, or investment advice and is NOT a substitute for a qualified professional. Balances, valuations, transactions, PnL and any tax-related figures may be inaccurate, incomplete, or wrong — do NOT rely on them for decisions, reporting, or filing. Always verify with a licensed professional. Use at your own risk; no warranty of any kind.
 
@@ -179,6 +179,12 @@ Crypto-Wallet-Tracker/
 - [ ] 2026.07.31 — New chains (L2 EVM then non-EVM)
 
 ## 📋 Changelog
+
+### 2026.07.30 — Fix: Analytics change no longer shows a spurious large negative — history reconstruction anchored to the live spam-filtered portfolio (no phantom balances) and change shows "—" when history is flat/unreliable
+
+- **`_rebuild_history` anchored to live portfolio**: phantom tokens (present in reconstruction but absent from current on-chain balance, e.g. WETH unwrapped without a captured outbound tx) are now excluded from the historical value computation. The reconstruction uses the same token set as the live spam-filtered portfolio — no more inflated daily_history aggregates (~$18918 plateau with phantom WETH vs real $8530).
+- **`compute_change_periods` flat/aberrant guards**: if the `daily_history` aggregate is plateaued (all rows identical — a reconstruction artefact, not real market data), the Analytics `change` block returns `None` for all three periods (frontend displays "—"). Additionally, if the picked baseline diverges by more than 2× from the current portfolio value (phantom balances, missing outbound txs), the period is skipped — never show a misleading −54.9% based on a phantom baseline.
+- **Tests**: `test_analytics_service.py` extended with 8 new assertions covering flat history detection, aberrant baseline filtering, and non-regression of normal scenarios. All existing tests pass (EVM, Solana, BTC unchanged).
 
 ### 2026.07.29 — Removed Cosmos support (fragmented ecosystem); README translated to English; added proof-of-concept disclaimer
 

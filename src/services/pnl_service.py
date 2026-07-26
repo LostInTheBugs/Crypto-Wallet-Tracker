@@ -216,6 +216,7 @@ async def _rebuild_history(
     # Fetch current portfolio prices/values as ultimate fallback (keyed by tid)
     current_prices: Dict[str, float] = {}   # tid -> price
     current_values: Dict[str, float] = {}   # tid -> usd_value
+    current_tids: set = set()              # tids currently held (live portfolio — anchor)
     if compute_portfolio:
         try:
             from_portfolio = await compute_portfolio(wallet_address)
@@ -229,6 +230,7 @@ async def _rebuild_history(
                     current_prices[tid] = price
                 if total_val > 0:
                     current_values[tid] = total_val
+                    current_tids.add(tid)
         except Exception as e:
             logger.warning(f"[rebuild] portfolio fetch failed: {e}")
 
@@ -380,6 +382,11 @@ async def _rebuild_history(
         for tid in active_tids:
             bal = balances.get(tid, 0.0)
             if bal <= 0 or tid in excluded_tids:
+                continue
+            # ── Anchor to live portfolio: skip tokens not currently held.
+            #     Prevents phantom balances (e.g. WETH unwrapped off-chain
+            #     without a captured out tx) from inflating historical value.
+            if current_tids and tid not in current_tids:
                 continue
 
             if tid in price_matrix:

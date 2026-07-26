@@ -25,6 +25,43 @@ PERIODS = {"24h": 1, "7d": 7, "30d": 30}
 # Beyond that the history is considered insufficient → None ("—" in the UI).
 TOLERANCE_DAYS = {"24h": 1, "7d": 2, "30d": 5}
 
+# ── 2026.07.30: Flat history detection ──────────────────────────
+# Threshold for triggering "plateau" detection in daily_history.
+# If min_val/max_val > this ratio across all aggregate rows, the history
+# is considered unreliable (reconstruction artefact, not real market data).
+FLAT_RATIO_THRESHOLD = 0.995  # all values within 0.5% of each other
+FLAT_MIN_POINTS = 3
+
+
+def _is_history_flat(agg_rows) -> bool:
+    """True if all aggregate-history values are virtually identical.
+
+    A plateaued daily_history (all rows same value) is a reconstruction
+    artefact — not real market data.  Cause examples:
+      • Prices are entirely fallback (single static price × reconstructed
+        balances) → no daily variation.
+      • Phantom balances from uncaptured outbound transactions inflate every
+        day equally.
+    When the history is flat the Analytics change percentages are meaningless.
+    """
+    if not agg_rows or len(agg_rows) < FLAT_MIN_POINTS:
+        return False
+    values = []
+    for row in agg_rows:
+        try:
+            v = float(row[1])
+        except (TypeError, ValueError, IndexError):
+            continue
+        if v > 0:
+            values.append(v)
+    if len(values) < FLAT_MIN_POINTS:
+        return False
+    min_v = min(values)
+    max_v = max(values)
+    if min_v <= 0:
+        return False
+    return (min_v / max_v) > FLAT_RATIO_THRESHOLD
+
 
 def _finite(v, default: float = 0.0) -> float:
     """float(v) if finite, else `default`. Accepts None/str/garbage."""
@@ -158,10 +195,24 @@ def compute_change_periods(agg_rows, current_value, today=None):
             "%Y-%m-%d")
     except (TypeError, ValueError):
         return out
+
+    # ── 2026.07.30: Flat history gate ─────────────────────────────
+    # If daily_history aggregate is plateaued (all rows same value),
+    # the reconstruction is unreliable → show "—" for all periods.
+    if _is_history_flat(agg_rows):
+        return out
+
     for label, days in PERIODS.items():
         target = (base_dt - datetime.timedelta(days=days)).strftime("%Y-%m-%d")
         past = pick_closest(agg_rows, target, TOLERANCE_DAYS[label])
         if past is None or past <= 0:
+            continue
+        # ── 2026.07.30: Aberrant baseline guard ───────────────────
+        # Skip when the baseline diverges by > 2× from current value.
+        # This catches cases where the reconstruction includes phantom
+        # balances (uncaptured outbound txs, etc.) and the live portfolio
+        # does NOT — e.g. history=18918 vs current=8530.
+        if past > cur * 2.0 or cur > past * 2.0:
             continue
         diff = cur - past
         pct = diff / past * 100.0

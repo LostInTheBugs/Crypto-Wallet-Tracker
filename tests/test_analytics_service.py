@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from services.analytics_service import (  # noqa: E402
     filter_active_tokens, build_allocation, compute_change_periods,
     compute_performers, pick_closest, pct_from_price_points,
+    _is_history_flat, PERIODS,
 )
 
 FAILED = 0
@@ -161,6 +162,58 @@ check(pct_from_price_points([{"price": 0.0}, {"price": 5.0}]) is None,
       "benchmark: premier prix 0 → None")
 check(pct_from_price_points([{"price": None}, {"price": 5.0}]) is None,
       "benchmark: prix None → None")
+
+# ── 2026.07.30: Flat history + aberrant baseline guards ──────────
+
+# _is_history_flat — plateaued history (= all rows identical)
+flat_rows = [("2026-06-22", 18918.0), ("2026-07-01", 18918.0),
+             ("2026-07-18", 18918.0), ("2026-07-19", 18918.0)]
+check(_is_history_flat(flat_rows), "_is_history_flat: plateau identique → True")
+
+# Non-flat with real variation
+var_rows = [("2026-06-22", 8000.0), ("2026-07-01", 8500.0),
+            ("2026-07-18", 8300.0), ("2026-07-19", 8600.0)]
+check(not _is_history_flat(var_rows), "_is_history_flat: variation réelle → False")
+
+# Too few points
+check(not _is_history_flat([("2026-07-01", 100.0), ("2026-07-02", 100.0)]),
+      "_is_history_flat: <3 points → False")
+check(not _is_history_flat([]), "_is_history_flat: vide → False")
+
+# compute_change_periods — flat history → all None
+chg_flat = compute_change_periods(flat_rows, 8530.0, today="2026-07-19")
+check(chg_flat == {"24h": None, "7d": None, "30d": None},
+      f"change: historique plateau → 3× None (obtenu {chg_flat})")
+
+# compute_change_periods — aberrant baseline diverges > 2× from current
+# (history ~18918 vs current ~8530 → 2.22× → gardé-fou)
+hist_aberrant = [("2026-06-19", 18918.0), ("2026-07-12", 18918.0),
+                 ("2026-07-18", 18918.0)]
+chg_ab = compute_change_periods(hist_aberrant, 8530.0, today="2026-07-19")
+# 24h: past=18918 > 8530*2=17060 → None
+# 7d:  same
+# 30d: same
+# BUT flat guard already catches it first — so all None anyway.
+check(chg_ab["24h"] is None and chg_ab["7d"] is None and chg_ab["30d"] is None,
+      f"change: baseline aberrante → None sur toutes les périodes (obtenu {chg_ab})")
+
+# compute_change_periods — baseline within 2× but not flat → should work
+# (test the aberrant guard independently by having non-flat but divergent)
+hist_aberrant2 = [("2026-06-19", 17000.0), ("2026-07-01", 17100.0),
+                  ("2026-07-10", 17300.0), ("2026-07-18", 18918.0)]
+# Not flat (min 17000, max 18918, ratio 0.899 < 0.995)
+chg_ab2 = compute_change_periods(hist_aberrant2, 8530.0, today="2026-07-19")
+# 24h: past=18918 > 8530*2=17060 → None
+check(chg_ab2["24h"] is None, "change 24h aberrant >2× → None")
+# 30d: target=2026-06-19, past=17000, 17000 > 8530*2=17060? No, 17000 < 17060
+# So 30d SHOULD compute. 8530-17000 = -8470.  -8470/17000 = -49.82%
+check(chg_ab2["30d"] is not None and abs(chg_ab2["30d"]["pct"] + 49.82) < 0.1,
+      f"change 30d non-aberrant: ok ({chg_ab2['30d']})")
+
+# Normal input still works (regression check on original tests)
+chg_norm = compute_change_periods(hist, 1000.0, today="2026-07-19")
+check(chg_norm["24h"] == {"abs_usd": 20.0, "pct": 2.04},
+      f"change (nouveau garde-fou): 24h inchangé ({chg_norm['24h']})")
 
 # ── Résultat ─────────────────────────────────────────────────────
 print()
