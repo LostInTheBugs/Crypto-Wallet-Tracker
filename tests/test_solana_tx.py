@@ -393,7 +393,7 @@ def test_get_transactions_shape():
 
 
 def test_non_regression():
-    section("13. Non-regression — EVM/BTC/Cosmos routing")
+    section("13. Non-regression — EVM/BTC routing")
     # EVM
     p_evm = provider_for("0x15CD7D7aE29f3F76FDC9d89e1FbC58B23E8D9C30")
     check(p_evm is not None and p_evm.chain_type == "evm",
@@ -402,10 +402,10 @@ def test_non_regression():
     p_btc = provider_for("bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq")
     check(p_btc is not None and p_btc.chain_type == "bitcoin",
           "BTC address → BitcoinProvider")
-    # Cosmos
+    # Cosmos removed — verify it returns None
     p_cosmos = provider_for("cosmos1hsk6jryyqjfhp5dhv55tc4hfer5d6ylts98eqd")
-    check(p_cosmos is not None and p_cosmos.chain_type == "cosmos",
-          "Cosmos address → CosmosProvider")
+    check(p_cosmos is None,
+          "Cosmos address → None (removed 2026.07.29)")
     # Solana
     p_sol = provider_for("7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV")
     check(p_sol is not None and p_sol.chain_type == "solana",
@@ -433,13 +433,13 @@ def test_provider_metadata():
 
 
 def test_registry():
-    section("15. Registry — 4 providers")
+    section("15. Registry — 3 providers (Cosmos removed)")
     types = {p.chain_type for p in PROVIDERS}
     check("evm" in types, "EVM registered")
     check("bitcoin" in types, "BTC registered")
     check("solana" in types, "SOL registered")
-    check("cosmos" in types, "COSMOS registered")
-    check(len(PROVIDERS) >= 4, f"≥ 4 providers (got {len(PROVIDERS)})")
+    check("cosmos" not in types, "COSMOS NOT registered (removed 2026.07.29)")
+    check(len(PROVIDERS) >= 3, f"≥ 3 providers (got {len(PROVIDERS)})")
 
 
 # ═══════════════════════════════════════════════════════════════════

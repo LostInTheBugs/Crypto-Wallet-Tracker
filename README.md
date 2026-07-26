@@ -1,36 +1,38 @@
-# Crypto Wallet Tracker — 2026.07.28
+# Crypto Wallet Tracker — 2026.07.29
 
-**Inventaire local de wallets crypto** — multi-wallets, multi-chaînes EVM + Bitcoin + Solana + Cosmos, 100 % gratuit (API Blockscout + mempool.space + Solana RPC public + LCD Cosmos).
+> ⚠️ **DISCLAIMER — This is a proof-of-concept / experimental application.** It is NOT financial, tax, accounting, or investment advice and is NOT a substitute for a qualified professional. Balances, valuations, transactions, PnL and any tax-related figures may be inaccurate, incomplete, or wrong — do NOT rely on them for decisions, reporting, or filing. Always verify with a licensed professional. Use at your own risk; no warranty of any kind.
 
-Dashboard agrégé, graphiques d'évolution, historique des prix via DefiLlama, PNL par token, transactions paginées, comptes utilisateurs. Le tout en Docker, une seule commande.
+**Local crypto wallet inventory** — multi-wallet, multi-chain EVM + Bitcoin + Solana, 100% free (Blockscout API + mempool.space + Solana public RPC).
+
+Aggregated dashboard, historical charts, price history via DefiLlama, per-token PNL, paginated transactions, user accounts. All Docker, one command.
 
 ---
 
-## ✨ Fonctionnalités
+## ✨ Features
 
-- 🔗 **22 chaînes EVM** — Ethereum, Base, Optimism, Arbitrum, Polygon, Gnosis, zkSync, Celo, Scroll, Soneium, Ink, Mode, Unichain, Lisk, Linea, Etherlink, Metis, Manta, BOB, Zora, World Chain, HyperEVM
-- 🪙 **Solde natif** — ETH/POL/xDAI/CELO/XTZ/METIS récupéré en parallèle des tokens (appel API natif)
-- 💰 **Valorisation USD/€** — temps réel via Blockscout, conversion EUR (Frankfurter)
-- 🦙 **Fallback prix DefiLlama** — si Blockscout ne donne pas de prix, appel batch à l'API gratuite `coins.llama.fi/prices/current`
-- 🔒 **Détection DeFi best-effort** — catégorisation fine (lending, LP, staked, vault, synthetic) via heuristiques sur les symboles, aucun service tiers, 100 % gratuit. Section DeFi dédiée avec badges colorés et sous-totaux par catégorie
-- 🏦 **Page DeFi (Moralis)** — page dédiée listant les vraies positions DeFi par protocole (lending fourni/emprunté, staking, LP) avec récompenses, health factor, APY, PnL quand disponibles, et lien vers chaque position (dapp ou explorer). Résumé global fourni/emprunté/récompenses/valeur nette. Clé API Moralis (gratuite) recommandée dans Paramètres → Clés API externes ; **sans clé, mode gratuit best-effort** : les positions (lending fourni/emprunté, staking, LP, vaults) sont reconstruites depuis les balances on-chain Blockscout — récompenses/APY/health factor indisponibles
-- 🎛️ **Gestion des tokens intégrée** — tout se passe dans l'onglet « Détail tokens » : compteurs actifs/inactifs, interrupteur on/off sur chaque ligne, section repliable des tokens inactifs (badge du motif), formulaire d'ajout manuel. Les tokens sans valeur, le spam, les memecoins illiquides et les prix à faible confiance DefiLlama sont désactivés par défaut ; un token désactivé est exclu des totaux, de la répartition DeFi et de l'historique (effet rétroactif)
-- 👥 **Comptes utilisateurs** — inscription, connexion, wallets privés (bcrypt + sessions)
-- 📊 **Dashboard** — valeur totale, répartition par chaîne (donut), cartes PNL Total / PNL 24h, mini-graphe, gaz cumulé
-- 📈 **Statistiques** — courbes valeur/coût d'achat, barres PNL journalier (7j/30j/90j/1a/All), filtrable par wallet/token/chaîne
-- 📜 **Transactions** — événements regroupés par transaction (Swap / Envoyé / Reçu), tableau paginé, filtrable par wallet/chaîne/type, colonnes prix/valeur/gaz
-- 📋 **Détail tokens** — balance, prix, valeur et **PNL par token** (vert/rouge)
-- 🔙 **Historique des prix** — DefiLlama (gratuit, sans clé API) + cache SQLite, fallback CoinGecko optionnel
-- 🧮 **PNL calculé** — coût moyen pondéré, soldes reconstruits par date, PNL journalier
-- 🛡️ **Filtre anti-spam** — détection automatique des tokens de scam/airdrop
-- ⚙️ **Paramètres** — langue (FR/EN), devise (USD/EUR), changement de mot de passe, clés API utilisateur
-- 🔑 **Clés API par utilisateur** — catalogue de 7 services (CoinGecko, OpenSea, Etherscan, DefiLlama, Alchemy, Moralis, CoinMarketCap) avec validation best-effort et interface en cartes avec logos
-- 📦 **Vérification de version** — compare avec le dernier tag GitHub
-- ⚡ **Cache prix** — table `price_history`, 2ᵉ rebuild ~0 appel réseau
-- 🔔 **Alertes** — prix, valeur portefeuille, mouvements (> X% en 24h), **health factor / risque de liquidation** avec notifications in-app + canaux externes (webhook, Telegram, e-mail)
-- 🪂 **Airdrops a claim** — detection best-effort multi-chaines via un registre de checkers extensible. Rewards de staking Cosmos remontes automatiquement, alertes integrees. API `/api/airdrops` + page dediee
-- 📬 **Digest** — resume quotidien ou hebdo du portefeuille
-- 🐳 **Docker** — une commande pour déployer
+- 🔗 **22 EVM chains** — Ethereum, Base, Optimism, Arbitrum, Polygon, Gnosis, zkSync, Celo, Scroll, Soneium, Ink, Mode, Unichain, Lisk, Linea, Etherlink, Metis, Manta, BOB, Zora, World Chain, HyperEVM
+- 🪙 **Native balance** — ETH/POL/xDAI/CELO/XTZ/METIS fetched in parallel with tokens (native API call)
+- 💰 **USD/€ valuation** — real-time via Blockscout, EUR conversion (Frankfurter)
+- 🦙 **DefiLlama price fallback** — if Blockscout has no price, batch call to free `coins.llama.fi/prices/current` API
+- 🔒 **Best-effort DeFi detection** — fine-grained categorization (lending, LP, staked, vault, synthetic) via symbol heuristics, zero third-party services, 100% free. Dedicated DeFi section with colored badges and per-category subtotals
+- 🏦 **DeFi Page (Moralis)** — dedicated page listing real DeFi positions by protocol (lending supplied/borrowed, staking, LP) with rewards, health factor, APY, PnL when available, and link to each position (dapp or explorer). Global supplied/borrowed/rewards/net value summary. Moralis API key (free) recommended in Settings → External API keys; **without a key, free best-effort mode**: positions (lending supplied/borrowed, staking, LP, vaults) are reconstructed from on-chain Blockscout balances — rewards/APY/health factor unavailable
+- 🎛️ **Integrated token management** — everything in the « Token Details » tab: active/inactive counters, on/off toggle per row, collapsible inactive tokens section (with reason badge), manual add form. Zero-value tokens, spam, illiquid memecoins, and low-confidence DefiLlama prices are disabled by default; a disabled token is excluded from totals, DeFi breakdown, and history (retroactive effect)
+- 👥 **User accounts** — sign-up, login, private wallets (bcrypt + sessions)
+- 📊 **Dashboard** — total value, chain breakdown (donut), Total PNL / 24h PNL cards, mini chart, cumulative gas
+- 📈 **Statistics** — value/cost-basis curves, daily PNL bars (7d/30d/90d/1y/All), filterable by wallet/token/chain
+- 📜 **Transactions** — events grouped by transaction (Swap / Sent / Received), paginated table, filterable by wallet/chain/type, price/value/gas columns
+- 📋 **Token Details** — balance, price, value, and **per-token PNL** (green/red)
+- 🔙 **Price history** — DefiLlama (free, no API key) + SQLite cache, optional CoinGecko fallback
+- 🧮 **PNL calculated** — weighted average cost, balances reconstructed by date, daily PNL
+- 🛡️ **Anti-spam filter** — automatic scam/airdrop token detection
+- ⚙️ **Settings** — language (FR/EN), currency (USD/EUR), password change, per-user API keys
+- 🔑 **Per-user API keys** — catalog of 7 services (CoinGecko, OpenSea, Etherscan, DefiLlama, Alchemy, Moralis, CoinMarketCap) with best-effort validation and card UI with logos
+- 📦 **Version check** — compares against latest GitHub tag
+- ⚡ **Price cache** — `price_history` table, 2nd rebuild ≈ 0 network calls
+- 🔔 **Alerts** — price, portfolio value, movements (> X% in 24h), **health factor / liquidation risk** with in-app notifications + external channels (webhook, Telegram, email)
+- 🪂 **Airdrops to claim** — best-effort multi-chain detection via extensible checker registry. API `/api/airdrops` + dedicated page
+- 📬 **Digest** — daily or weekly portfolio summary
+- 🐳 **Docker** — single command to deploy
 
 ---
 
@@ -40,9 +42,9 @@ Dashboard agrégé, graphiques d'évolution, historique des prix via DefiLlama, 
 curl -fsSL https://raw.githubusercontent.com/LostInTheBugs/Crypto-Wallet-Tracker/main/install.sh | sudo bash
 ```
 
-Puis ouvre `http://<ip-du-serveur>`.
+Then open `http://<server-ip>`.
 
-### Manuel (Docker)
+### Manual (Docker)
 
 ```bash
 git clone https://github.com/LostInTheBugs/Crypto-Wallet-Tracker.git
@@ -57,20 +59,19 @@ docker compose up -d
 ```
 Crypto-Wallet-Tracker/
 ├── src/
-│   ├── app.py               # Backend FastAPI — routes, auth, wallet CRUD (~900 lignes)
-│   └── services/            # Modules métier
-│       ├── price_service.py   # SYMBOL_TO_CG, DefiLlama/CoinGecko, cache prix
-│       ├── pnl_service.py     # Timeline unifié, reconstruction soldes, PNL
-│       ├── portfolio_service.py  # 22 chaînes, natif, fallback prix, spam, staked
-│       ├── airdrops/              # Détection airdrops best-effort (checkers extensibles)
-│       │   └── checkers/staking_rewards.py
-│       ├── providers/             # Abstraction multi-chaine (EVM, BTC, Solana, Cosmos)
-│       │   ├── base.py, evm.py, bitcoin.py, solana.py, cosmos.py
-│       (+ defi_service.py — normaliseur positions DeFi Moralis, module pur)
-├── public/index.html        # Frontend SPA + Chart.js (~800 lignes)
+│   ├── app.py               # FastAPI backend — routes, auth, wallet CRUD (~900 lines)
+│   └── services/            # Business modules
+│       ├── price_service.py   # SYMBOL_TO_CG, DefiLlama/CoinGecko, price cache
+│       ├── pnl_service.py     # Unified timeline, balance reconstruction, PNL
+│       ├── portfolio_service.py  # 22 chains, native, price fallback, spam, staked
+│       ├── airdrops/              # Best-effort airdrop detection (extensible checkers)
+│       ├── providers/             # Multi-chain abstraction (EVM, BTC, Solana)
+│       │   ├── base.py, evm.py, bitcoin.py, solana.py
+│       (+ defi_service.py — Moralis DeFi positions normalizer, pure module)
+├── public/index.html        # SPA frontend + Chart.js (~800 lines)
 ├── Dockerfile
 ├── docker-compose.yml
-├── install.sh               # Installeur automatique
+├── install.sh               # Auto-installer
 ├── requirements.txt
 └── README.md
 ```
@@ -79,363 +80,369 @@ Crypto-Wallet-Tracker/
 
 ## 🔧 Configuration (.env)
 
-| Variable | Défaut | Description |
+| Variable | Default | Description |
 |---|---|---|
-| `PORT` | `80` | Port d'écoute |
-| `SESSION_SECRET` | auto | Secret JWT (fixer pour persister les sessions) |
-| `ALCHEMY_API_KEY` | — | Optionnel : fallback pour balances/transfers si Blockscout échoue |
+| `PORT` | `80` | Listen port |
+| `SESSION_SECRET` | auto | JWT secret (set to persist sessions) |
+| `ALCHEMY_API_KEY` | — | Optional: fallback for balances/transfers if Blockscout fails |
 
 ---
 
 ## 🛠️ Stack
 
-| Couche | Technologie |
+| Layer | Technology |
 |---|---|
 | Backend | Python 3.12 · FastAPI · aiosqlite · httpx |
 | Frontend | Vanilla JS · Chart.js 4 · GitHub dark theme |
-| Prix historiques | **DefiLlama** (primaire, gratuit) + CoinGecko (fallback, nécessite clé) |
+| Historical prices | **DefiLlama** (primary, free) + CoinGecko (fallback, requires key) |
 | Transactions | Blockscout API v2 (ERC-20/721/1155 token-transfers) |
-| Déploiement | Docker · docker compose |
+| Deployment | Docker · docker compose |
 
 ---
 
-## 📡 Sources de données
+## 📡 Data sources
 
-| Donnée | Source | Gratuit |
+| Data | Source | Free |
 |---|---|---|
-| Soldes temps réel | Blockscout `/token-balances` | ✅ |
-| Transferts de tokens | Blockscout `/token-transfers` | ✅ |
-| Prix historiques | DefiLlama `/chart` | ✅ |
-| Prix historiques (fallback) | CoinGecko `/market_chart/range` | ❌ (clé API) |
-| Frais de gaz | Blockscout `/transactions` | ✅ |
-| Prix actuels | Blockscout (intégré dans `/token-balances`) | ✅ |
-| Conversion EUR | Frankfurter (BCE) | ✅ |
-| Prix plancher NFT | OpenSea / Moralis / Reservoir | ✅ / ❌ (clé) |
+| Real-time balances | Blockscout `/token-balances` | ✅ |
+| Token transfers | Blockscout `/token-transfers` | ✅ |
+| Historical prices | DefiLlama `/chart` | ✅ |
+| Historical prices (fallback) | CoinGecko `/market_chart/range` | ❌ (API key) |
+| Gas fees | Blockscout `/transactions` | ✅ |
+| Current prices | Blockscout (built into `/token-balances`) | ✅ |
+| EUR conversion | Frankfurter (ECB) | ✅ |
+| NFT floor prices | OpenSea / Moralis / Reservoir | ✅ / ❌ (key) |
 
 ---
 
-## 🧮 Calcul du PNL
+## 🧮 PNL calculation
 
-- **Soldes reconstruits** : cumul des transferts signés par date (`in` − `out`)
-- **Coût d'achat** : coût moyen pondéré par token (entrées au prix du jour, sorties au coût moyen)
-- **PNL** : `valeur_actuelle − coût_moyen`
-- **PNL journalier** : `valeur(j) − valeur(j−1) − flux_nets(j)`
-- **Réconciliation** : delta entre historique et portfolio affiché en avertissement si >15%
+- **Reconstructed balances**: cumulative signed transfers by date (`in` − `out`)
+- **Cost basis**: weighted average cost per token (buys at day's price, sells at average cost)
+- **PNL**: `current_value − average_cost`
+- **Daily PNL**: `value(j) − value(j−1) − net_flows(j)`
+- **Reconciliation**: delta between history and portfolio shown as warning if >15%
 
 ---
 
-## 🔐 Sécurité
+## 🔐 Security
 
-- Mots de passe hashés **bcrypt**
-- Sessions en cookies httpOnly
-- **Double authentification (2FA TOTP)** optionnelle — activation dans Paramètres
-- **Anti-brute-force** — rate-limiting des tentatives de login
-- **Changement de mot de passe** dans Paramètres
-- **Aucune clé privée** — uniquement des adresses publiques
-- Clés API utilisateur : stockées chiffrées, jamais renvoyées en clair (masquées `sk-...abc`)
-- Données 100 % locales (SQLite)
+- Passwords hashed with **bcrypt**
+- httpOnly cookie sessions
+- **Optional two-factor authentication (2FA TOTP)** — enable in Settings
+- **Anti-brute-force** — login attempt rate-limiting
+- **Password change** in Settings
+- **No private keys** — public addresses only
+- User API keys: stored encrypted, never returned in plaintext (masked `sk-...abc`)
+- 100% local data (SQLite)
 
 ---
 
 ## 🗺️ Roadmap
 
-### Phase 1 — Fonctionnalites
-- [x] 2026.07.3 — Analytics (repartition & performance)
-- [x] 2026.07.4 — Export CSV/PDF (holdings, tx, PnL fiscal)
-- [x] 2026.07.5 — Transactions : approbations, interactions, gaz
-- [x] 2026.07.6 — Moteur d'alertes + digest
-- [x] 2026.07.7 — Alertes health-factor / liquidation
-- [x] 2026.07.8 — Valorisation NFT (prix planchers)
-- [x] 2026.07.9 — Pricing multi-sources + test des cles
-- [x] 2026.07.10 — NFT : liens source + fiabilite des floors
-- [x] 2026.07.11 — PWA, theme, recherche, watchlist
-- [x] 2026.07.12 — Consolidation SQLite (ecritures serialisees)
-- [x] 2026.07.13 — Self-update via updater cote hote (bouton Mettre a jour fonctionnel)
-- [x] 2026.07.14 — Updater self-update fiabilise
-- [x] 2026.07.15 — Declencheur self-update fiabilise
-- [x] 2026.07.16 — Choix maj auto/manuelle
-- [x] 2026.07.17 — Sauvegardes auto + sante + tests/CI
-- [x] 2026.07.18 — Updater self-update en HTTPS (fetch fiable, plus de cle SSH)
-- [x] 2026.07.19 — Barre du haut retiree
-- [x] 2026.07.20 — Durcissement auth & comptes
+### Phase 1 — Features
+- [x] 2026.07.3 — Analytics (allocation & performance)
+- [x] 2026.07.4 — CSV/PDF export (holdings, txs, tax PnL)
+- [x] 2026.07.5 — Transactions: approvals, interactions, gas
+- [x] 2026.07.6 — Alert engine + digest
+- [x] 2026.07.7 — Health factor / liquidation alerts
+- [x] 2026.07.8 — NFT valuation (floor prices)
+- [x] 2026.07.9 — Multi-source pricing + key testing
+- [x] 2026.07.10 — NFT: source links + floor reliability
+- [x] 2026.07.11 — PWA, theme, search, watchlist
+- [x] 2026.07.12 — SQLite consolidation (serialized writes)
+- [x] 2026.07.13 — Self-update via host-side updater (Update button functional)
+- [x] 2026.07.14 — Updater self-update hardened
+- [x] 2026.07.15 — Self-update trigger hardened
+- [x] 2026.07.16 — Auto/manual update choice
+- [x] 2026.07.17 — Auto backups + health + tests/CI
+- [x] 2026.07.18 — HTTPS self-update (reliable fetch, no SSH key)
+- [x] 2026.07.19 — Top bar removed
+- [x] 2026.07.20 — Auth hardening & accounts
 
-### Phase 2 — Multi-chaines non-EVM & airdrops
-- [x] 2026.07.21 — Abstraction multi-provider (fondation non-EVM)
+### Phase 2 — Non-EVM multi-chain & airdrops
+- [x] 2026.07.21 — Multi-provider abstraction (non-EVM foundation)
 - [x] 2026.07.22 — Bitcoin (BTC)
-- [x] 2026.07.23 — Solana (SOL + tokens SPL via RPC public)
-- [x] 2026.07.24 — Support Cosmos/ATOM (staking natif)
-- [x] 2026.07.25 — Airdrops a claim (detection best-effort + alertes)
+- [x] 2026.07.23 — Solana (SOL + SPL tokens via public RPC)
+- [x] 2026.07.24 — ~~Support Cosmos/ATOM (native staking)~~ (removed 2026.07.29)
+- [x] 2026.07.25 — Airdrops to claim (best-effort detection + alerts)
 
-**Phase 2 terminee !** 🎉
+**Phase 2 complete!** 🎉
 
-### Phase 3 — Transactions completes, fiscal/PnL, DeFi cross-chain, nouvelles chaines
-- [x] 2026.07.26 — Transactions Solana (historique complet)
-- [x] 2026.07.27 — Transactions non-EVM dans la vue agregee (Solana visible)
-- [x] 2026.07.27.c1 — Correctif : detection SPL par owner (plus accountIndex)
-- [x] 2026.07.28 — Transactions Cosmos (historique complet)
-- [ ] 2026.07.29 — Rapports fiscaux exportables (CSV/PDF)
-- [ ] 2026.07.30 — DeFi cross-chain (LP, lending, health-factor unifie)
-- [ ] 2026.07.31 — Nouvelles chaines (L2 EVM puis non-EVM)
+### Phase 3 — Full transactions, tax/PnL, cross-chain DeFi, new chains
+- [x] 2026.07.26 — Solana transactions (full history)
+- [x] 2026.07.27 — Non-EVM transactions in aggregated view (Solana visible)
+- [x] 2026.07.27.c1 — Fix: SPL detection by owner (not accountIndex)
+- [x] 2026.07.28 — ~~Cosmos transactions (full history)~~ (removed 2026.07.29)
+- [ ] 2026.07.29 — Exportable tax reports (CSV/PDF)
+- [ ] 2026.07.30 — Cross-chain DeFi (LP, lending, unified health factor)
+- [ ] 2026.07.31 — New chains (L2 EVM then non-EVM)
 
 ## 📋 Changelog
 
-### 2026.07.28 — Transactions Cosmos : historique reel (MsgSend + delegations via LCD public Polkachu, format compatible merge live avec champ `amount` racine, liens Mintscan)
+### 2026.07.29 — Removed Cosmos support (fragmented ecosystem); README translated to English; added proof-of-concept disclaimer
 
-- **CosmosProvider.get_transactions()** : implementation complete remplacant le placeholder vide. L'historique est recupere via l'API publique LCD REST (Polkachu) avec les requetes `message.sender='{addr}'` (sortantes) et `transfer.recipient='{addr}'` (entrantes), fusion et dedup par txhash. Parsing de `MsgSend`, `MsgDelegate` et `MsgUndelegate` avec conversion uatom/uosmo → ATOM/OSMO (÷1e6).
-- **Format d'event strictement identique a Solana** : chaque event contient `type`, `direction`, `tx_hash`, `block_time` (ISO 8601), `token_symbol`, `chain`, `amount` (racine = sent_amount pour send, recv_amount pour receive), `usd_value`, `sent`/`received` (dicts avec symbol/name/amount/usd_price/usd_value/contract), `sent_symbol`/`sent_amount`/`recv_symbol`/`recv_amount`, `gas_fee_usd`, `wallet_address`, `log_index`. Le merge live (`/api/transactions` agrege) les rend immediatement visibles sans persistance DB.
-- **Liens Mintscan** : `explorer_tx_url` genere les URLs `https://www.mintscan.io/cosmos/tx/{hash}`. La chaine est resolue via le HRP (cosmos1→cosmos, osmo1→osmosis).
-- **Tests reels** : `tests/test_cosmos_tx.py` — validation avec l'adresse Osmosis reelle `osmo19ce3d285j37fvdm277qlvw4sth2j7cwapjk6sc` (6 events : 1 send + 5 receive detectes, format verifie, filtres direction/type/chain fonctionnels).
-- **Non-regression** : tous les tests existants passent (core 20/20, swap_grouping, agg_tx 67/67, solana_tx 74/74, live_merge 52/52, providers 34/34). py_compile et node --check OK.
+- **Cosmos support fully removed**: `CosmosProvider`, Cosmos routing, staking rewards airdrop checker, and all Cosmos tests deleted. `provider_for("cosmos1...")` and `provider_for("osmo1...")` now return `None` (chain not supported). EVM, Bitcoin, and Solana providers unchanged. All existing tests pass.
+- **README translated to English**: full French-to-English translation of all sections, titles, feature descriptions, roadmap, and changelog.
+- **Disclaimer added**: prominent proof-of-concept disclaimer at the top of the README.
 
-### 2026.07.27 — Transactions non-EVM persistees dans la vue agregee : Solana/BTC/Cosmos apparaissent desormais dans la page Transactions (routage provider + persistance + liens explorer par chaine)
+### 2026.07.28 — Cosmos transactions: real history (MsgSend + delegations via Polkachu public LCD, live-merge compatible event shape with root `amount`, Mintscan links)
 
-- **Persistance non-EVM dans la table `transactions`** : `_fetch_transactions_for_wallet` route desormais TOUS les wallets (EVM et non-EVM). Quand un provider non-EVM est detecte, les evenements sont persistes dans la meme table SQLite que l'EVM — une ligne par jambe (swap = 2 lignes meme tx_hash, log_index distincts). Dedup idempotent sur `(tx_hash, log_index, user_id)`. La vue agregee (`/api/transactions` sans wallet) lit desormais les transactions de TOUTES les chaines depuis la meme table.
-- **Liens explorer par chaine** : les URL d'explorer sont resolues par provider (`explorer_tx_url`) pour les chaines non-EVM (Solscan pour Solana, mempool.space pour Bitcoin, Mintscan pour Cosmos). Les chaines EVM continuent d'utiliser le mapping `CHAINS` (Blockscout).
-- **Rafraichissement** : le refresh quotidien et le fetch manuel (`POST /api/transactions/fetch`) parcourent desormais correctement les wallets non-EVM — leurs transactions sont persistees et visibles dans la vue agregee.
-- **Filtre wallet insensible a la casse preserve** : le filtre `lower(wallet_address) IN (SELECT lower(address) FROM wallets)` fonctionne correctement pour les adresses Solana (base58, sensible a la casse) car la comparaison se fait en minuscule des deux cotes.
-- **Tests** : `tests/test_agg_tx.py` — 67 assertions (persistance send/receive/swap, idempotence, reconstruction via `group_transaction_events`, liens explorer non-EVM, non-regression EVM, filtre wallet-aware). Tous les tests existants passent (swap_grouping, solana_tx).
+- **CosmosProvider.get_transactions()**: full implementation replacing the empty placeholder. History fetched via Polkachu public LCD REST API with `message.sender='{addr}'` (outgoing) and `transfer.recipient='{addr}'` (incoming) queries, merged and deduped by txhash. Parsing of `MsgSend`, `MsgDelegate` and `MsgUndelegate` with uatom/uosmo → ATOM/OSMO conversion (÷1e6).
+- **Strictly identical event format to Solana**: each event contains `type`, `direction`, `tx_hash`, `block_time` (ISO 8601), `token_symbol`, `chain`, `amount` (root = sent_amount for send, recv_amount for receive), `usd_value`, `sent`/`received` (dicts with symbol/name/amount/usd_price/usd_value/contract), `sent_symbol`/`sent_amount`/`recv_symbol`/`recv_amount`, `gas_fee_usd`, `wallet_address`, `log_index`. Live merge (`/api/transactions` aggregated) makes them immediately visible without DB persistence.
+- **Mintscan links**: `explorer_tx_url` generates `https://www.mintscan.io/cosmos/tx/{hash}` URLs. Chain resolved by HRP (cosmos1→cosmos, osmo1→osmosis).
+- **Real tests**: `tests/test_cosmos_tx.py` — validation with real Osmosis address `osmo19ce3d285j37fvdm277qlvw4sth2j7cwapjk6sc` (6 events: 1 send + 5 receive detected, format verified, direction/type/chain filters functional).
+- **Non-regression**: all existing tests pass (core 20/20, swap_grouping, agg_tx 67/67, solana_tx 74/74, live_merge 52/52, providers 34/34). py_compile and node --check OK.
 
-### 2026.07.27.c4 — Correctif : quantite des transactions non-EVM (Solana) desormais affichee (champ `amount` racine ajoute aux events send/receive/native)
+### 2026.07.27 — Non-EVM transactions persisted in aggregated view: Solana/BTC/Cosmos now appear on Transactions page (provider routing + persistence + per-chain explorer links)
 
-- **Racine du bug** : les evenements non-EVM (Solana, Bitcoin) construits par les providers n'exposaient PAS de champ racine `amount` (seulement `sent_amount`, `recv_amount`, `sent.amount`, `received.amount`). Le frontend (`renderTxnTable`) lit `tx.amount` pour les types send/receive/native (ligne 2328) → `undefined` → `fmtAmt` retourne 0. Les events EVM (`group_transaction_events`) avaient bien `amount` via le regroupement, mais les events live non-EVM passes dans la vue agregee (merge c3) arrivaient sans ce champ.
-- **Correctif (cote serveur, providers)** : ajout d'un champ racine `amount` coherent avec le type de l'evenement dans `_parse_solana_tx` (Solana) et `get_transactions` (Bitcoin) :
+- **Non-EVM persistence in `transactions` table**: `_fetch_transactions_for_wallet` now routes ALL wallets (EVM and non-EVM). When a non-EVM provider is detected, events are persisted in the same SQLite table as EVM — one row per leg (swap = 2 rows same tx_hash, distinct log_index). Idempotent dedup on `(tx_hash, log_index, user_id)`. The aggregated view (`/api/transactions` without wallet filter) now reads transactions from ALL chains from the same table.
+- **Per-chain explorer links**: explorer URLs resolved by provider (`explorer_tx_url`) for non-EVM chains (Solscan for Solana, mempool.space for Bitcoin, Mintscan for Cosmos). EVM chains continue using the `CHAINS` mapping (Blockscout).
+- **Refresh**: daily refresh and manual fetch (`POST /api/transactions/fetch`) now correctly iterate non-EVM wallets — their transactions are persisted and visible in the aggregated view.
+- **Case-insensitive wallet filter preserved**: the `lower(wallet_address) IN (SELECT lower(address) FROM wallets)` filter works correctly for Solana addresses (base58, case-sensitive) because comparison is done in lowercase on both sides.
+- **Tests**: `tests/test_agg_tx.py` — 67 assertions (send/receive/swap persistence, idempotence, reconstruction via `group_transaction_events`, non-EVM explorer links, EVM non-regression, wallet-aware filter). All existing tests pass (swap_grouping, solana_tx).
+
+### 2026.07.27.c4 — Fix: non-EVM transaction amounts (Solana) now displayed (root `amount` field added to send/receive/native events)
+
+- **Root cause**: non-EVM events (Solana, Bitcoin) built by providers did NOT expose a root `amount` field (only `sent_amount`, `recv_amount`, `sent.amount`, `received.amount`). The frontend (`renderTxnTable`) reads `tx.amount` for send/receive/native types (line 2328) → `undefined` → `fmtAmt` returns 0. EVM events (`group_transaction_events`) had `amount` via grouping, but live non-EVM events passed in the aggregated view (c3 merge) arrived without this field.
+- **Fix (server-side, providers)**: added a root `amount` field consistent with event type in `_parse_solana_tx` (Solana) and `get_transactions` (Bitcoin):
   * send → `amount = sent_amount`
   * receive → `amount = recv_amount`
-  * swap → `amount = sent_amount` (coherent avec la convention EVM de `group_transaction_events`)
-  * Les champs existants (`sent_amount`, `recv_amount`, `sent`, `received`) restent inchanges.
-- **Non-regression** : tous les tests existants passent (solana_tx 74/74, swap_grouping, agg_tx 67/67, core 20/20). Validation explicite : 16 assertions prouvant `amount > 0` et `amount == sent_amount/recv_amount` pour chaque type d'evenement Solana.
+  * swap → `amount = sent_amount` (consistent with EVM convention from `group_transaction_events`)
+  * Existing fields (`sent_amount`, `recv_amount`, `sent`, `received`) remain unchanged.
+- **Non-regression**: all existing tests pass (solana_tx 74/74, swap_grouping, agg_tx 67/67, core 20/20). Explicit validation: 16 assertions proving `amount > 0` and `amount == sent_amount/recv_amount` for each Solana event type.
 
-### 2026.07.27.c3 — Transactions non-EVM dans la vue agregee via merge live (Solana visible) + correctif systeme d'update pour les tags .cX
+### 2026.07.27.c3 — Non-EVM transactions in aggregated view via live merge (Solana visible) + update system fix for .cX tags
 
-- **Merge live des transactions non-EVM** : la vue agregee (`/api/transactions` sans filtre wallet) merge desormais en DIRECT les transactions non-EVM (Solana, BTC, Cosmos) depuis les providers, au lieu de dependre de la persistance SQLite (qui echoue silencieusement en production). Cache memoire de 300s par (user, wallet_address) pour ne pas rappeler le RPC a chaque navigation. Defensif : un provider timeout n'impacte JAMAIS la vue EVM. Format de date normalise (YYYY-MM-DD HH:MM:SS) pour un tri lexical coherent entre EVM et non-EVM.
-- **Liens explorer automatiques** : les URL Solscan (Solana), mempool.space (Bitcoin) et Mintscan (Cosmos) sont attachees aux evenements live.
-- **Correctif systeme d'update** : `GET /api/version/latest` reconnait desormais les tags de correction `.cX` (regex `^\d{4}\.\d{2}\.\d+(\.c\d+)?$`) et les trie correctement via `_calver_key` : une correction est consideree comme posterieure a la version de base (ex: 2026.07.27.c3 > 2026.07.27). Le frontend (`_cmpVer` dans `checkVersion()`) compare desormais 4 composants (annee, mois, patch, cn) avec cn=0 pour les versions sans suffixe.
-- **Logging ameliore** : `_persist_non_evm_events` log en WARNING avec le type d'exception pour faciliter le diagnostic futur du probleme de persistance.
-- **Tests** : `tests/test_live_merge_2026_07_27_c3.py` — 52 assertions (merge live EVM+Solana, cache TTL, echec provider isole, non-regression EVM, tri _calver_key avec .cN, regex accept/reject). Tous les tests existants passent (swap_grouping, agg_tx).
+- **Live merge of non-EVM transactions**: the aggregated view (`/api/transactions` without wallet filter) now DIRECTLY merges non-EVM transactions (Solana, BTC, Cosmos) from providers, instead of depending on SQLite persistence (which silently fails in production). 300s in-memory cache per (user, wallet_address) to avoid re-calling RPC on every navigation. Defensive: a provider timeout NEVER impacts the EVM view. Normalized date format (YYYY-MM-DD HH:MM:SS) for consistent lexical sorting between EVM and non-EVM.
+- **Automatic explorer links**: Solscan (Solana), mempool.space (Bitcoin), and Mintscan (Cosmos) URLs are attached to live events.
+- **Update system fix**: `GET /api/version/latest` now recognizes `.cX` correction tags (regex `^\d{4}\.\d{2}\.\d+(\.c\d+)?$`) and sorts them correctly via `_calver_key`: a correction is considered later than the base version (e.g., 2026.07.27.c3 > 2026.07.27). The frontend (`_cmpVer` in `checkVersion()`) now compares 4 components (year, month, patch, cn) with cn=0 for versions without suffix.
+- **Improved logging**: `_persist_non_evm_events` logs at WARNING with exception type for easier future diagnosis of persistence issues.
+- **Tests**: `tests/test_live_merge_2026_07_27_c3.py` — 52 assertions (EVM+Solana live merge, cache TTL, isolated provider failure, EVM non-regression, `_calver_key` with .cN sorting, regex accept/reject). All existing tests pass (swap_grouping, agg_tx).
 
-### 2026.07.27.c2 — Correctif : fetch des transactions non-EVM fiabilise (wallets non-EVM traites en premier + declenchement au chargement d'un portfolio non-EVM) — les transactions Solana/BTC/Cosmos sont desormais recuperees et affichees
+### 2026.07.27.c2 — Fix: non-EVM transaction fetch hardened (non-EVM wallets processed first + trigger on non-EVM portfolio load) — Solana/BTC/Cosmos transactions now fetched and displayed
 
-### 2026.07.27.c1 — Correctif : transactions Solana SPL desormais detectees (matching par owner au lieu de accountIndex) — les transferts de tokens SPL apparaissent enfin dans la page Transactions
+### 2026.07.27.c1 — Fix: Solana SPL transactions now detected (matching by owner instead of accountIndex) — SPL token transfers now appear on Transactions page
 
-- **Racine du bug** : `_tb_lookup` dans `_parse_solana_tx` filtrait les entrees `pre/postTokenBalances` par `accountIndex` (l'index du compte de token ATA), au lieu de `owner` (l'adresse du wallet proprietaire). Comme l'`accountIndex` d'une ATA n'est jamais egal a l'index du wallet dans `accountKeys`, la fonction ne retournait JAMAIS de delta SPL → toute transaction purement SPL (recevoir/envoyer de l'USDC ou d'un token, cas le plus frequent) etait droppee via `if not has_out and not has_in: return None`. Seules les transactions avec mouvement de SOL natif produisaient un evenement.
-- **Correctif 1 ligne** : `if entry.get(\"accountIndex\") != our_idx` → `if entry.get(\"owner\") != address` dans `_tb_lookup`. Le champ `owner` est le wallet proprietaire et correspond directement a `address`.
-- **Cas limites geres** : token account apparait en pre mais pas en post (compte ferme) ou l'inverse (compte cree) → merge des mints avec pre_amt/post_amt par defaut a 0.
-- **Non-regression** : detection SOL natif inchangee (`our_idx` toujours utilise pour `preBalances/postBalances`). Providers EVM/BTC/Cosmos inchanges.
-- **Validation mainnet reelle** : adresse `5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1` — 3 swaps SPL detectes (USDT→SOL, SOL→USDC, USDC→SOL), 6 jambes persistees, regroupement `group_transaction_events` correct, idempotence verifiee, liens Solscan valides, filtre wallet-aware insensible a la casse preserve les adresses Solana base58.
-- **Tests** : `tests/test_solana_spl_fix.py` — 27 assertions (detection SPL via owner, owner different non capture, SOL non-regression, ATA creation/fermeture). `tests/test_solana_tx.py` mis a jour (fixtures `_tb_entry` avec champ `owner`). Tous les tests existants passent (74+70+34+67+swap_grouping = 245+ assertions).
+- **Root cause**: `_tb_lookup` in `_parse_solana_tx` filtered `pre/postTokenBalances` entries by `accountIndex` (the token account ATA index), instead of `owner` (the wallet owner address). Since an ATA's `accountIndex` is never equal to the wallet's index in `accountKeys`, the function NEVER returned an SPL delta → any pure SPL transaction (receiving/sending USDC or a token, the most common case) was dropped via `if not has_out and not has_in: return None`. Only transactions with native SOL movements produced an event.
+- **1-line fix**: `if entry.get("accountIndex") != our_idx` → `if entry.get("owner") != address` in `_tb_lookup`. The `owner` field is the wallet owner and directly matches `address`.
+- **Handled edge cases**: token account appears in pre but not post (closed account) or vice versa (new account) → merge mints with pre_amt/post_amt defaulting to 0.
+- **Non-regression**: native SOL detection unchanged (`our_idx` still used for `preBalances/postBalances`). EVM/BTC/Cosmos providers unchanged.
+- **Real mainnet validation**: address `5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1` — 3 SPL swaps detected (USDT→SOL, SOL→USDC, USDC→SOL), 6 legs persisted, `group_transaction_events` grouping correct, idempotence verified, Solscan links valid, case-insensitive wallet-aware filter preserves Solana base58 addresses.
+- **Tests**: `tests/test_solana_spl_fix.py` — 27 assertions (SPL detection via owner, non-owner not captured, SOL non-regression, ATA creation/closure). `tests/test_solana_tx.py` updated (`_tb_entry` fixtures with `owner` field). All existing tests pass (74+70+34+67+swap_grouping = 245+ assertions).
 
-### 2026.07.26 — Transactions Solana : historique complet (RPC getSignaturesForAddress + getTransaction, send/receive/swap, liens Solscan)
+### 2026.07.26 — Solana transactions: full history (getSignaturesForAddress + getTransaction RPC, send/receive/swap, Solscan links)
 
-- **Historique des transactions Solana** : le placeholder vide est remplacé par un vrai historique via le RPC public `api.mainnet-beta.solana.com`. Utilise `getSignaturesForAddress` (25 signatures récentes) puis `getTransaction` (jsonParsed, maxSupportedTransactionVersion:0) pour ~22 transactions par appel.
-- **Détection send/receive/swap** : le sens est déduit des `preBalances`/`postBalances` (SOL) et `preTokenBalances`/`postTokenBalances` (SPL). Une transaction avec à la fois des entrées et sorties de tokens différents est classée « swap ». Les types « send », « receive » et « swap » sont détectés.
-- **Prix USD best-effort** : prix SOL via DefiLlama (`_get_sol_price_usd`), prix SPL par batch (`_get_spl_prices`). Si un prix est indisponible, `usd_value` vaut 0 sans planter.
-- **Défensif** : timeout, erreurs RPC, 429 → la transaction défaillante est sautée, les autres continuent. Jamais de 500. Un wallet sans transactions renvoie une liste vide proprement.
-- **Liens Solscan** : chaque événement a `tx_hash` + lien `https://solscan.io/tx/{signature}` (via `explorer_tx_url` déjà existant).
-- **Format standard** : les événements respectent le même format que les transactions EVM/BTC — `type`, `direction`, `sent`/`received`, `sent_symbol`/`recv_symbol`, `gas_fee_usd`, `usd_value`, `block_time`. Compatible avec `group_transaction_events()` dans `tx_events.py` et l'affichage frontend existant.
-- **Tests** : `tests/test_solana_tx.py` — 74 assertions (parsing SOL send/receive, SPL send/receive, swap USDC→USDT, swap SOL→USDC, défensif, non-regression). `tests/test_solana_provider.py` mis à jour (le test placeholder vérifie désormais la forme des vrais événements). Test live sur adresse Solana réelle : 8 transactions remontées avec succès.
-- **Roadmap Phase 3** ajoutée au README.
+- **Solana transaction history**: the empty placeholder replaced with real history via public RPC `api.mainnet-beta.solana.com`. Uses `getSignaturesForAddress` (25 recent signatures) then `getTransaction` (jsonParsed, maxSupportedTransactionVersion:0) for ~22 transactions per call.
+- **Send/receive/swap detection**: direction inferred from `preBalances`/`postBalances` (SOL) and `preTokenBalances`/`postTokenBalances` (SPL). A transaction with both out and in of different tokens is classified as "swap". Types "send", "receive", and "swap" are detected.
+- **Best-effort USD pricing**: SOL price via DefiLlama (`_get_sol_price_usd`), SPL prices via batch (`_get_spl_prices`). If a price is unavailable, `usd_value` is 0 without crashing.
+- **Defensive**: timeout, RPC errors, 429 → failed transaction skipped, others continue. Never 500. Wallet with no transactions returns empty list cleanly.
+- **Solscan links**: each event has `tx_hash` + link `https://solscan.io/tx/{signature}` (via existing `explorer_tx_url`).
+- **Standard format**: events follow the same format as EVM/BTC transactions — `type`, `direction`, `sent`/`received`, `sent_symbol`/`recv_symbol`, `gas_fee_usd`, `usd_value`, `block_time`. Compatible with `group_transaction_events()` in `tx_events.py` and existing frontend display.
+- **Tests**: `tests/test_solana_tx.py` — 74 assertions (SOL send/receive parsing, SPL send/receive, USDC→USDT swap, SOL→USDC swap, defensive, non-regression). `tests/test_solana_provider.py` updated (placeholder test now verifies real event shape). Live test on real Solana address: 8 transactions successfully fetched.
+- **Phase 3 Roadmap** added to README.
 
-### 2026.07.25 — Airdrops a claim : detection best-effort (staking rewards claimables, registre de checkers extensible) + page dediee + alertes
+### 2026.07.25 — Airdrops to claim: best-effort detection (claimable staking rewards, extensible checker registry) + dedicated page + alerts
 
-- **Registre de checkers** : architecture extensible `src/services/airdrops/` — interface `AirdropChecker` (name, chain_types, async check()) + registre `get_claimable_airdrops(address, chain_type)`. Routage par chain_type : un checker cosmos n'est JAMAIS appele pour une adresse EVM. Defensif : un checker qui echoue/timeout n'impacte jamais les autres (timeout 15s par checker, isolation totale).
-- **Checker staking rewards Cosmos** : le plus fiable — reutilise les appels LCD existants de CosmosProvider (`_get_rewards`) pour detecter les rewards de staking en attente. Chaque reward devient un AirdropClaim (status "claimable", lien Mintscan, montant + valeur USD). Prix DefiLlama (gratuit).
-- **API `/api/airdrops`** : endpoint GET qui agrege tous les airdrops claimables pour tous les wallets de l'utilisateur (toutes chaines). Reponse groupee par `wallet_address → chain → claims`, avec `total_claimable_usd` et `total_claims`. Generation de notification in-app automatique.
-- **Page Airdrops 🪂** : nouvelle page dediee dans le menu lateral (entre NFTs et Transactions). Tableau par wallet/chaine avec source, token, montant, valeur, lien Claim. Etat vide clair ("Aucun airdrop a claim detecte"). i18n FR/EN.
-- **Alertes integrees** : quand un airdrop est detecte, une notification est automatiquement creee via `send_alert_notification()` (systeme existant). Non-intrusif, visible dans la page Alertes 🔔.
-- **Tests** : `tests/test_airdrops.py` — 32 assertions : registre routant par chain_type, parsing rewards statique, isolation defensive (checker qui crash/hang), introspection registre, non-regression provider_for(x) pour EVM/BTC/Solana/Cosmos.
+- **Checker registry**: extensible architecture `src/services/airdrops/` — interface `AirdropChecker` (name, chain_types, async check()) + registry `get_claimable_airdrops(address, chain_type)`. Routing by chain_type: a cosmos checker is NEVER called for an EVM address. Defensive: a checker that fails/times out never impacts others (15s timeout per checker, total isolation).
+- **Cosmos staking rewards checker**: the most reliable — reuses CosmosProvider's existing LCD calls (`_get_rewards`) to detect pending staking rewards. Each reward becomes an AirdropClaim (status "claimable", Mintscan link, amount + USD value). DefiLlama pricing (free).
+- **API `/api/airdrops`**: GET endpoint that aggregates all claimable airdrops for all user wallets (all chains). Response grouped by `wallet_address → chain → claims`, with `total_claimable_usd` and `total_claims`. Automatic in-app notification generation.
+- **Airdrops Page 🪂**: new dedicated page in sidebar menu (between NFTs and Transactions). Table by wallet/chain with source, token, amount, value, Claim link. Clean empty state ("No claimable airdrops detected"). i18n FR/EN.
+- **Integrated alerts**: when an airdrop is detected, a notification is automatically created via `send_alert_notification()` (existing system). Non-intrusive, visible in Alerts page 🔔.
+- **Tests**: `tests/test_airdrops.py` — 32 assertions: registry routing by chain_type, static rewards parsing, defensive isolation (crashing/hanging checker), registry introspection, non-regression provider_for(x) for EVM/BTC/Solana/Cosmos.
 
-### 2026.07.24 — Support Cosmos/ATOM (solde + staking delegue + rewards via LCD public)
+### 2026.07.24 — Support Cosmos/ATOM (balance + delegated staking + rewards via public LCD)
 
-- **CosmosProvider** : nouveau provider multi-chaîne pour les adresses bech32 Cosmos (cosmos1…, osmo1…, celestia1…, juno1…, stars1…, akash1…, inj1…, kujira1…, stride1…). Détection conservative — rejette EVM (`0x...`), BTC bech32 (`bc1...`), Solana. Module `src/services/providers/cosmos.py` (+ fichier test `tests/test_cosmos_provider.py`, 77 assertions).
-- **LCD public gratuit** : endpoints Cosmos REST (Polkachu) — solde disponible (`/cosmos/bank/v1beta1/balances`), délégations staking (`/cosmos/staking/v1beta1/delegations`), récompenses en attente (`/cosmos/distribution/v1beta1/delegators/{addr}/rewards`). 3 appels en parallèle, timeout 20s, défensif — chaque appel indépendant, jamais de 500.
-- **Prix ATOM/OSMO** : DefiLlama (coins.llama.fi) — gratuit, sans clé. Conversion uatom/uosmo → ATOM/OSMO (÷1e6). Denoms inconnus → `price_unknown`, jamais de prix inventé.
-- **Portfolio standard** : token natif disponible + token staké (category `"staked"`) + token récompenses (category `"rewards"`). `staked_usd` agrégé, `chains`, `total_usd`, `defi_breakdown`. Transactions : placeholder (retourne vide, pas de crash).
-- **Explorer** : liens Mintscan (`mintscan.io/{chain}/address/` et `/tx/`), mappé selon le HRP de l'adresse.
-- **Routage automatique** : `provider_for()` reconnaît les adresses Cosmos → `/api/portfolio` et `/api/wallets` (ajout) fonctionnent sans code spécifique. Vue agrégée ALL somme EVM + BTC + Solana + Cosmos. Mise à jour du test `test_providers.py` (provider_for Cosmos → CosmosProvider au lieu de None).
-- **Staking natif** : le staking Cosmos (délégué + récompenses) apparaît dans la vue portfolio avec `category: "staked"` et `category: "rewards"` — prêt pour l'affichage DeFi/positions. NFT : vide propre.
+- **CosmosProvider**: new multi-chain provider for Cosmos bech32 addresses (cosmos1…, osmo1…, celestia1…, juno1…, stars1…, akash1…, inj1…, kujira1…, stride1…). Conservative detection — rejects EVM (`0x...`), BTC bech32 (`bc1...`), Solana. Module `src/services/providers/cosmos.py` (+ test file `tests/test_cosmos_provider.py`, 77 assertions).
+- **Free public LCD**: Cosmos REST endpoints (Polkachu) — available balance (`/cosmos/bank/v1beta1/balances`), staking delegations (`/cosmos/staking/v1beta1/delegations`), pending rewards (`/cosmos/distribution/v1beta1/delegators/{addr}/rewards`). 3 parallel calls, 20s timeout, defensive — each call independent, never 500.
+- **ATOM/OSMO pricing**: DefiLlama (coins.llama.fi) — free, no key. uatom/uosmo → ATOM/OSMO conversion (÷1e6). Unknown denoms → `price_unknown`, never invented prices.
+- **Standard portfolio**: available native token + staked token (category `"staked"`) + rewards token (category `"rewards"`). Aggregated `staked_usd`, `chains`, `total_usd`, `defi_breakdown`. Transactions: placeholder (returns empty, no crash).
+- **Explorer**: Mintscan links (`mintscan.io/{chain}/address/` and `/tx/`), mapped by address HRP.
+- **Auto-routing**: `provider_for()` recognizes Cosmos addresses → `/api/portfolio` and `/api/wallets` (add) work without chain-specific code. ALL aggregated view sums EVM + BTC + Solana + Cosmos. `test_providers.py` updated (provider_for Cosmos → CosmosProvider instead of None).
+- **Native staking**: Cosmos staking (delegated + rewards) appears in portfolio view with `category: "staked"` and `category: "rewards"` — ready for DeFi/positions display. NFT: clean empty.
 
-### 2026.07.23 — Support Solana (SOL + tokens SPL via RPC public)
+### 2026.07.23 — Solana support (SOL + SPL tokens via public RPC)
 
-- **SolanaProvider** : nouveau provider multi-chaîne pour les adresses Solana (clés publiques base58 32 octets). Détection conservative — rejette EVM (`0x...`), BTC bech32 (`bc1...`), Cosmos-like. Décodage base58 minimal intégré (stdlib seulement, pas de dépendance externe). Module `src/services/providers/solana.py`.
-- **RPC public gratuit** : balance native SOL (`getBalance` en lamports) + comptes SPL (`getTokenAccountsByOwner` via le program ID Token). Timeout 20s, défensif — jamais de 500, best-effort.
-- **Prix SOL/USD** : DefiLlama (coins.llama.fi) — gratuit, sans clé. Prix SPL : batch DefiLlama `solana:{mint}` par paquets de 50 — best-effort, sans prix → `price_unknown`.
-- **Portfolio standard** : même forme que EVM/BTC — token SOL + tokens SPL (symboles connus pour ~40 tokens majeurs, sinon mint tronqué). `chains`, `total_usd`, `defi_breakdown`, `active_count`. Transactions : placeholder (retourne vide, pas de crash).
-- **Explorer** : liens Solscan (`solscan.io/account/` et `/tx/`).
-- **Routage automatique** : `provider_for()` reconnaît les adresses Solana → `/api/portfolio` et `/api/wallets` (ajout) fonctionnent sans code spécifique. Vue agrégée ALL somme EVM + BTC + Solana.
-- **NFT / DeFi** : renvoie vide proprement pour Solana (pas de crash).
-- **Tests** : `tests/test_solana_provider.py` (66 assertions) — base58, detect, provider_for, metadata, portfolio shape, lamports, SPL lookup, registry, transactions placeholder. Tests EVM/BTC mis à jour (provider_for reconnaît désormais toutes les chaînes).
+- **SolanaProvider**: new multi-chain provider for Solana addresses (32-byte base58 public keys). Conservative detection — rejects EVM (`0x...`), BTC bech32 (`bc1...`), Cosmos-like. Minimal built-in base58 decoding (stdlib only, no external dependency). Module `src/services/providers/solana.py`.
+- **Free public RPC**: native SOL balance (`getBalance` in lamports) + SPL accounts (`getTokenAccountsByOwner` via Token program ID). 20s timeout, defensive — never 500, best-effort.
+- **SOL/USD price**: DefiLlama (coins.llama.fi) — free, no key. SPL pricing: DefiLlama batch `solana:{mint}` in batches of 50 — best-effort, no price → `price_unknown`.
+- **Standard portfolio**: same shape as EVM/BTC — SOL token + SPL tokens (known symbols for ~40 major tokens, otherwise truncated mint). `chains`, `total_usd`, `defi_breakdown`, `active_count`. Transactions: placeholder (returns empty, no crash).
+- **Explorer**: Solscan links (`solscan.io/account/` and `/tx/`).
+- **Auto-routing**: `provider_for()` recognizes Solana addresses → `/api/portfolio` and `/api/wallets` (add) work without chain-specific code. ALL aggregated view sums EVM + BTC + Solana.
+- **NFT / DeFi**: returns clean empty for Solana (no crash).
+- **Tests**: `tests/test_solana_provider.py` (66 assertions) — base58, detect, provider_for, metadata, portfolio shape, lamports, SPL lookup, registry, transactions placeholder. EVM/BTC tests updated (provider_for now recognizes all chains).
 
-### 2026.07.22 — Support Bitcoin (BTC via mempool.space)
+### 2026.07.22 — Bitcoin support (BTC via mempool.space)
 
-- **BitcoinProvider** : nouveau provider pour adresses Bitcoin (bech32 `bc1...`, legacy `1...`, P2SH `3...`). Solde via mempool.space (gratuit, sans clé), prix BTC/USD via DefiLlama, transactions basiques. Module `src/services/providers/bitcoin.py`.
-- **Portfolio standard** : même forme que EVM — token BTC unique, `chains`, `total_usd`, `errors`. Transactions events format standard (send/receive with USD values).
-- **Routage** : wallets acceptent et routent les adresses BTC automatiquement via `provider_for()`.
+- **BitcoinProvider**: new provider for Bitcoin addresses (bech32 `bc1...`, legacy `1...`, P2SH `3...`). Balance via mempool.space (free, no key), BTC/USD price via DefiLlama, basic transactions. Module `src/services/providers/bitcoin.py`.
+- **Standard portfolio**: same shape as EVM — single BTC token, `chains`, `total_usd`, `errors`. Transaction events in standard format (send/receive with USD values).
+- **Routing**: wallets accept and route BTC addresses automatically via `provider_for()`.
 
-### 2026.07.21 — Abstraction multi-provider (ChainProvider) — fondation pour Bitcoin/Solana/Cosmos, zero changement EVM
+### 2026.07.21 — Multi-provider abstraction (ChainProvider) — foundation for Bitcoin/Solana/Cosmos, zero EVM changes
 
-- **Interface `ChainProvider`** : classe abstraite définissant le contrat commun pour tous les futurs providers de chaîne (`detect()`, `get_portfolio()`, `get_transactions()`, `explorer_url()`, `chain_type`, `native_symbol`). Module `src/services/providers/base.py`.
-- **Registre** : liste ordonnée `PROVIDERS` + fonction `provider_for(address)` qui retourne le premier provider dont `detect()` est vrai, ou `None`. Extensible : ajouter un provider = implémenter l'interface + l'enregistrer.
-- **`EvmProvider`** : wrapper fin qui délègue à `_compute_portfolio` et à la logique de transactions existante SANS RÉÉCRIRE AUCUNE logique métier. Détection `0x...` (42 caractères hex). Module `src/services/providers/evm.py`.
-- **Routage non-cassant** : les endpoints `/api/portfolio` et `/api/transactions` vérifient `provider_for(address)` avant d'exécuter la logique EVM. Adresse EVM → chemin inchangé (zero regression). Adresse non-EVM (`bc1...`, Solana, Cosmos) → réponse propre `{supported: false, message: "Chaine non prise en charge (a venir)"}` sans erreur 400.
-- **Helper `get_portfolio_via_provider(address)`** : point d'entrée canonique pour les futures intégrations multi-chaînes.
-- **Tests** : `tests/test_providers.py` (34 assertions) — détection, registre, extensibilité, délégation, contrat de réponse non-supportée.
+- **`ChainProvider` interface**: abstract class defining the common contract for all future chain providers (`detect()`, `get_portfolio()`, `get_transactions()`, `explorer_url()`, `chain_type`, `native_symbol`). Module `src/services/providers/base.py`.
+- **Registry**: ordered `PROVIDERS` list + `provider_for(address)` function returning the first provider whose `detect()` is true, or `None`. Extensible: adding a provider = implementing the interface + registering it.
+- **`EvmProvider`**: thin wrapper delegating to `_compute_portfolio` and existing transaction logic WITHOUT REWRITING ANY business logic. Detection `0x...` (42 hex chars). Module `src/services/providers/evm.py`.
+- **Non-breaking routing**: `/api/portfolio` and `/api/transactions` endpoints check `provider_for(address)` before executing EVM logic. EVM address → unchanged path (zero regression). Non-EVM address (`bc1...`, Solana, Cosmos) → clean response `{supported: false, message: "Chaine non prise en charge (a venir)"}` without 400 error.
+- **Helper `get_portfolio_via_provider(address)`**: canonical entry point for future multi-chain integrations.
+- **Tests**: `tests/test_providers.py` (34 assertions) — detection, registry, extensibility, delegation, unsupported response contract.
 
-### 2026.07.20 — Durcissement auth : 2FA TOTP optionnelle, anti-brute-force, changement de mot de passe, isolation multi-utilisateurs
+### 2026.07.20 — Auth hardening: optional 2FA TOTP, anti-brute-force, password change, multi-user isolation
 
-- **2FA TOTP optionnelle** : authentification à deux facteurs (TOTP) via app mobile (Google Authenticator, Authy...). Désactivée par défaut — rétro-compatibilité totale : un utilisateur sans 2FA se connecte comme avant. Activation en 3 étapes dans ⚙️ Paramètres → carte « Sécurité » : scan du QR code (ou saisie manuelle du secret), vérification du code, activation. Désactivation par code TOTP ou mot de passe. QR code généré côté serveur (`pyotp` + `qrcode`) — fonctionne hors ligne. Login : si 2FA activée, le backend renvoie `twofa_required:true` → le frontend affiche un champ code TOTP → vérification en seconde étape via `/api/auth/login/2fa`. Secrets stockés en base, jamais renvoyés après activation.
-- **Anti-brute-force** : limiteur de tentatives de login échouées en mémoire (par username+IP). Après 5 échecs consécutifs dans une fenêtre de 5 min, backoff de 60 s (doublant à chaque palier de 5 échecs supplémentaires). Message clair « Trop de tentatives, réessayez dans X s ». Compteur réinitialisé au succès. Aucune persistance — l'application locale n'a pas besoin de Redis.
-- **Changement de mot de passe** : endpoint `PUT /api/auth/password` révisé — vérifie `old_password` (bcrypt), impose longueur minimale (4 caractères), stocke le nouveau hash bcrypt. UI dans ⚙️ Paramètres → carte « Mot de passe » avec confirmation.
-- **Isolation multi-utilisateurs auditee** : vérification exhaustive de chaque endpoint de données (wallets, transactions, snapshots, PNL, alerts, notifications, API keys, token prefs, backups, analytics, exports, DeFi, NFTs) — tous filtrent par `user_id`. Correction : `PUT /api/wallets/{id}` vérifie désormais `cur.rowcount` et renvoie 404 si le wallet n'appartient pas à l'utilisateur. Tests d'isolation : `tests/test_isolation.py` — 10 assertions (création de 2 utilisateurs, vérification étanche entre leurs wallets, alerts, API keys, 2FA, transactions).
+- **Optional 2FA TOTP**: two-factor authentication (TOTP) via mobile app (Google Authenticator, Authy...). Disabled by default — full backward compatibility: a user without 2FA logs in as before. 3-step activation in ⚙️ Settings → "Security" card: scan QR code (or manual secret entry), verify code, activate. Deactivation by TOTP code or password. QR code generated server-side (`pyotp` + `qrcode`) — works offline. Login: if 2FA enabled, backend returns `twofa_required:true` → frontend shows TOTP code field → second-step verification via `/api/auth/login/2fa`. Secrets stored in DB, never returned after activation.
+- **Anti-brute-force**: in-memory failed login attempt limiter (by username+IP). After 5 consecutive failures in a 5-min window, backoff of 60s (doubling at each 5-failure threshold). Clear message "Too many attempts, try again in X s". Counter reset on success. No persistence — local app doesn't need Redis.
+- **Password change**: `PUT /api/auth/password` endpoint revised — verifies `old_password` (bcrypt), enforces minimum length (4 chars), stores new bcrypt hash. UI in ⚙️ Settings → "Password" card with confirmation.
+- **Multi-user isolation audited**: exhaustive check of every data endpoint (wallets, transactions, snapshots, PNL, alerts, notifications, API keys, token prefs, backups, analytics, exports, DeFi, NFTs) — all filter by `user_id`. Fix: `PUT /api/wallets/{id}` now checks `cur.rowcount` and returns 404 if wallet doesn't belong to user. Isolation tests: `tests/test_isolation.py` — 10 assertions (2 users created, airtight verification across their wallets, alerts, API keys, 2FA, transactions).
 
-- **Topbar supprimee** : la barre du haut contenant le champ de recherche (`#globalSearch`) et le selecteur rapide de wallet (`#quickWallet`) est retiree. Le bandeau d'onglets wallets (`#walletTabs`) est egalement supprime.
-- **Vue agregee permanente** : `activeWallet` est force a `"ALL"` en permanence — l'app affiche toujours l'agregat de tous les wallets.
-- **JS neutralise** : les fonctions orphelines (`applyGlobalSearch`, `populateQuickWallet`, `changeWallet`, `renderWalletTabs`) sont supprimees. Aucune erreur JS au chargement (`Cannot read properties of null`).
-- **CSS nettoye** : les regles `.topbar`, `.wallets-bar`, `.wallet-tab` retirees (economie ~20 lignes CSS).
-- **Smoke test** : `tests/smoke-topbar-removal.js` — verifie que les 4 fonctions sont absentes et que les fonctions coeur (`selectWallet`, `switchPage`, `esc`, `t`) fonctionnent sans erreur.
+- **Topbar removed**: the top bar containing the search field (`#globalSearch`) and quick wallet selector (`#quickWallet`) is removed. The wallet tab band (`#walletTabs`) is also removed.
+- **Permanent aggregated view**: `activeWallet` is forced to `"ALL"` permanently — the app always shows the aggregate of all wallets.
+- **JS neutralized**: orphan functions (`applyGlobalSearch`, `populateQuickWallet`, `changeWallet`, `renderWalletTabs`) removed. No JS errors on load (`Cannot read properties of null`).
+- **CSS cleaned**: `.topbar`, `.wallets-bar`, `.wallet-tab` rules removed (~20 CSS lines saved).
+- **Smoke test**: `tests/smoke-topbar-removal.js` — verifies that 4 functions are absent and core functions (`selectWallet`, `switchPage`, `esc`, `t`) work without errors.
 
-### 2026.07.18 — Updater self-update en HTTPS (depot public, plus de probleme de cle)
+### 2026.07.18 — Updater self-update via HTTPS (public repo, no key issues)
 
-- **Fetch en HTTPS** : l'updater hôte (`host-updater.sh`) utilise désormais `git fetch` via HTTPS (`https://github.com/LostInTheBugs/Crypto-Wallet-Tracker.git`) au lieu de SSH (`git@github.com`). Le dépôt étant public, aucune clé ni authentification n'est nécessaire.
-- **Suppression de la logique SSH** : toute la détection/copie de clés SSH (`find_and_copy_key`, `GIT_SSH_COMMAND`, `DEPLOY_KEY`) est retirée. Plus de `Permission denied (publickey)` ni de prompts interactifs — `credential.helper` est explicitement désactivé (`git -c credential.helper=`).
-- **Bootstrap** : le remote du dépôt sur la VM de production est basculé en HTTPS. L'updater corrigé est réinstallé, le service redémarré.
+- **HTTPS fetch**: the host updater (`host-updater.sh`) now uses `git fetch` via HTTPS (`https://github.com/LostInTheBugs/Crypto-Wallet-Tracker.git`) instead of SSH (`git@github.com`). Since the repo is public, no key or authentication needed.
+- **SSH logic removed**: all SSH key detection/copying (`find_and_copy_key`, `GIT_SSH_COMMAND`, `DEPLOY_KEY`) removed. No more `Permission denied (publickey)` or interactive prompts — `credential.helper` is explicitly disabled (`git -c credential.helper=`).
+- **Bootstrap**: the production VM repo remote switched to HTTPS. The fixed updater reinstalled, service restarted.
 
-### 2026.07.17 — Sauvegardes automatiques de la base, page santé/statut, tests + CI
+### 2026.07.17 — Auto database backups, health/status page, tests + CI
 
-- **Sauvegardes automatiques** : tâche de fond asyncio sauvegarde `/data/wallets.db` vers `/data/backups/wallets-YYYYMMDD-HHMMSS.db` tous les jours (configurable, `BACKUP_INTERVAL_HOURS`). Sauvegarde cohérente via l'API `sqlite3.backup()` (snapshot WAL), coordonnée avec le verrou d'écriture global. Rétention des N derniers backups (défaut 7, `BACKUP_RETENTION`), les plus anciens sont supprimés. Résiliente : une erreur de backup ne casse pas l'app.
-- **Endpoints backup** : `POST /api/backups/run` déclenche une sauvegarde immédiate, `GET /api/backups` liste les backups (nom, taille, date). Authentification requise.
-- **Santé / Statut** : `GET /api/health` (public) renvoie `{status, version, db_ok, uptime_s, counts, last_backup}`. Tolérant : `db_ok=false` au lieu de 500. N'expose aucun secret.
-- **UI** : carte « 🫀 État / Santé » dans les Paramètres affichant version, état DB, uptime, dernière sauvegarde. Bouton « Sauvegarder maintenant » + liste des backups avec tailles.
-- **Tests étendus** : 13 nouveaux tests unitaires purs dans `tests/test_core.py` pour `token_tid`, `classify_token`, et le classifieur DeFi `classify_token_type` (20 tests au total). Exécutable sans réseau ni base réelle.
-- **CI GitHub Actions** : workflow `.github/workflows/ci.yml` sur push/PR : `python -m py_compile` sur `src/`, tests unitaires, `node --check` sur le JS inline de `public/index.html`.
-- **Roadmap** : lignes corrigées (2026.07.17 cochée, 2026.07.18 pour auth).
+- **Auto backups**: background asyncio task backs up `/data/wallets.db` to `/data/backups/wallets-YYYYMMDD-HHMMSS.db` daily (configurable, `BACKUP_INTERVAL_HOURS`). Consistent backup via `sqlite3.backup()` API (WAL snapshot), coordinated with global write lock. Retention of last N backups (default 7, `BACKUP_RETENTION`), oldest deleted. Resilient: a backup error doesn't crash the app.
+- **Backup endpoints**: `POST /api/backups/run` triggers immediate backup, `GET /api/backups` lists backups (name, size, date). Auth required.
+- **Health / Status**: `GET /api/health` (public) returns `{status, version, db_ok, uptime_s, counts, last_backup}`. Tolerant: `db_ok=false` instead of 500. No secrets exposed.
+- **UI**: "🫀 Health / Status" card in Settings showing version, DB state, uptime, last backup. "Backup now" button + backup list with sizes.
+- **Extended tests**: 13 new pure unit tests in `tests/test_core.py` for `token_tid`, `classify_token`, and DeFi classifier `classify_token_type` (20 tests total). Runnable without network or real DB.
+- **CI GitHub Actions**: workflow `.github/workflows/ci.yml` on push/PR: `python -m py_compile` on `src/`, unit tests, `node --check` on inline JS in `public/index.html`.
+- **Roadmap**: corrected lines (2026.07.17 checked, 2026.07.18 for auth).
 
-### 2026.07.16 — Mise à jour automatique ou manuelle (au choix, dans Paramètres)
+### 2026.07.16 — Auto or manual updates (choice, in Settings)
 
-- **Choix du mode de mise à jour** : nouveau paramètre dans ⚙️ Paramètres → carte Version — radio bouton `Manuelle / Automatique`. Persisté dans `/data/deploy/config.json` (volume partagé, lisible par l'updater hôte).
-- **Endpoints API** : `GET /api/settings/update-mode` (lecture), `PUT /api/settings/update-mode {mode:"auto"|"manual"}` (écriture, auth requise).
-- **Mode automatique** : l'updater hôte (`host-updater.sh`) vérifie périodiquement (~3 min) si `origin/main` est en avance via `git fetch` + comparaison de hash. Si une nouvelle version est détectée, le cycle complet de déploiement (reset --hard + rebuild Docker) est déclenché automatiquement, sans clic.
-- **Mode manuel** (défaut) : comportement inchangé — le bouton « Mettre à jour » apparaît quand une nouvelle version est disponible, et le déploiement est déclenché par clic (écriture de `request.json`).
-- **UI** : en mode auto, le bouton « Mettre à jour » est masqué et remplacé par un message « ⚙️ Mises à jour automatiques activées — l'application se met à jour seule ». Le toggle met à jour le fichier de config et rafraîchit l'affichage immédiatement.
-- **i18n** : nouvelles clés `updModeLabel`, `updManual`, `updAuto`, `updAutoMsg` (FR + EN).
-- **Robustesse** : l'updater lit le fichier de config à chaque itération (pas de redémarrage nécessaire). Échec de fetch → pas de blocage. Mode auto → status cohérent (`state:done/failed`, version depuis `verCurrent`). Le mécanisme existant de requêtes manuelles (`request.json`) est préservé et prioritaire.
+- **Update mode choice**: new setting in ⚙️ Settings → Version card — radio button `Manual / Auto`. Persisted in `/data/deploy/config.json` (shared volume, readable by host updater).
+- **API endpoints**: `GET /api/settings/update-mode` (read), `PUT /api/settings/update-mode {mode:"auto"|"manual"}` (write, auth required).
+- **Auto mode**: host updater (`host-updater.sh`) periodically checks (~3 min) if `origin/main` is ahead via `git fetch` + hash comparison. If a new version is detected, the full deploy cycle (reset --hard + Docker rebuild) is triggered automatically, without a click.
+- **Manual mode** (default): unchanged behavior — "Update" button appears when a new version is available, deploy triggered by click (writing `request.json`).
+- **UI**: in auto mode, the "Update" button is hidden and replaced with "⚙️ Auto-updates enabled — the app updates itself". Toggle updates config file and refreshes display immediately.
+- **i18n**: new keys `updModeLabel`, `updManual`, `updAuto`, `updAutoMsg` (FR + EN).
+- **Robustness**: updater reads config file on every iteration (no restart needed). Fetch failure → no blocking. Auto mode → consistent status (`state:done/failed`, version from `verCurrent`). Existing manual request mechanism (`request.json`) preserved and takes priority.
 
-### 2026.07.15 — Declencheur de self-update fiabilise (polling, suppression de la demande, version correcte)
+### 2026.07.15 — Self-update trigger hardened (polling, request cleanup, correct version)
 
-- **Polling robuste** : abandon du systemd.path (PathExists) fragile — remplacement par un service de polling long-running (boucle toutes les ~12 s). Plus de blocage `unit-start-limit-hit` quand `request.json` n'etait pas supprime.
-- **Suppression systematique** : `request.json` est toujours supprime apres chaque cycle (succes ou echec) — le prochain clic sur « Mettre a jour » redeclenche proprement.
-- **Version reelle** : la version rapportee dans `status.json` est lue depuis `public/index.html` (`id="verCurrent"`) apres le reset, plus depuis un tag git obsolete.
-- **Verification** : 3 cycles consecutifs de mise a jour idempotents verifies sur la VM de production.
+- **Robust polling**: abandoned fragile systemd.path (PathExists) — replaced with long-running polling service (loop every ~12s). No more `unit-start-limit-hit` when `request.json` wasn't deleted.
+- **Systematic cleanup**: `request.json` always deleted after each cycle (success or failure) — the next "Update" click cleanly re-triggers.
+- **Real version**: version reported in `status.json` is read from `public/index.html` (`id="verCurrent"`) after reset, not from an obsolete git tag.
+- **Verification**: 3 consecutive idempotent update cycles verified on production VM.
 
-### 2026.07.14 — Updater fiabilise (git reset --hard, plus de blocage sur divergence locale)
+### 2026.07.14 — Updater hardened (git reset --hard, no more local divergence blocking)
 
-- **Updater robuste** : remplacement de `git pull origin main` par `git fetch origin main --quiet && git reset --hard origin/main && git clean -fd`. L'updater amène désormais toujours /opt/crypto-wallet-tracker exactement à origin/main, quelle que soit la divergence locale — plus jamais de « Your local changes would be overwritten by merge — Aborting ».
-- **Vérification** : 2 cycles complets de mise à jour idempotents vérifiés sur la VM de production.
+- **Robust updater**: replaced `git pull origin main` with `git fetch origin main --quiet && git reset --hard origin/main && git clean -fd`. The updater now always brings /opt/crypto-wallet-tracker exactly to origin/main, regardless of local divergence — never again "Your local changes would be overwritten by merge — Aborting".
+- **Verification**: 2 complete idempotent update cycles verified on production VM.
 
-### 2026.07.13 — Self-update via updater côté hôte (bouton Mettre à jour fonctionnel)
+### 2026.07.13 — Self-update via host-side updater (Update button functional)
 
-- **Updater côté hôte** : le conteneur ne gère plus son propre déploiement (il n'a ni git ni docker). Un clic sur « Mettre à jour » dans ⚙️ Paramètres écrit un fichier de demande sur un volume Docker partagé (`/data/deploy/request.json`). Un service systemd sur l'hôte (`crypto-update.path` + `crypto-update.service`) surveille cette demande, exécute `git pull origin main` puis `docker compose up -d --build`, et écrit l'état dans `/data/deploy/status.json`. Le frontend poll l'état toutes les 3 secondes et recharge la page au succès.
-- **Sécurité** : le conteneur n'a jamais accès à la socket Docker, à git, ni au host. Il se contente d'écrire un fichier sur un volume partagé. L'updater tourne en `root` sur l'hôte avec les permissions nécessaires.
-- **Correction UI** : le frontend n'affiche plus jamais « undefined » en cas d'erreur — fallback sur `d.msg || d.detail || "Demande échouée"`. Ajout des clés i18n FR/EN pour tous les états du déploiement (demande, déploiement, terminé, échec, timeout).
-- Fichiers ajoutés : `deploy/host-updater.sh`, `deploy/crypto-update.path`, `deploy/crypto-update.service`.
+- **Host-side updater**: the container no longer manages its own deployment (it has neither git nor docker). Clicking "Update" in ⚙️ Settings writes a request file on a shared Docker volume (`/data/deploy/request.json`). A systemd service on the host (`crypto-update.path` + `crypto-update.service`) watches this request, runs `git pull origin main` then `docker compose up -d --build`, and writes status to `/data/deploy/status.json`. Frontend polls status every 3 seconds and reloads on success.
+- **Security**: the container never has access to the Docker socket, git, or host. It only writes a file on a shared volume. Updater runs as `root` on host with necessary permissions.
+- **UI fix**: frontend never shows "undefined" on error — falls back to `d.msg || d.detail || "Request failed"`. Added i18n keys FR/EN for all deploy states (requesting, deploying, done, failed, timeout).
+- Files added: `deploy/host-updater.sh`, `deploy/crypto-update.path`, `deploy/crypto-update.service`.
 
-### 2026.07.12 — Consolidation SQLite : ecritures serialisees (fin des "database is locked")
+### 2026.07.12 — SQLite consolidation: serialized writes (end of "database is locked")
 
-- **Verrou d'ecriture global** : un `asyncio.Lock` partagé (`src/services/db.py`) sérialise TOUTES les écritures SQLite (INSERT/UPDATE/DELETE/CREATE/REPLACE + commit). Les lectures ne prennent PAS le verrou (WAL). Plus aucun « database is locked » sous concurrence (workers de fond : rebuild historique, enrichissement prix, evaluateur d'alertes + requetes utilisateur qui écrivent).
-- **Defense en profondeur** : WAL + busy_timeout=10000 conserves. Sous-processus (rebuild_worker.py, enrich_worker.py) utilisent sqlite3 synchrone avec busy_timeout.
-- **Test de concurrence** : `tests/test_write_lock.py` — 20 workers × 25 ecritures concurrentes = 500 INSERT+COMMIT → 0 erreur « database is locked », toutes les lignes validees.
+- **Global write lock**: a shared `asyncio.Lock` (`src/services/db.py`) serializes ALL SQLite writes (INSERT/UPDATE/DELETE/CREATE/REPLACE + commit). Reads do NOT take the lock (WAL). No more "database is locked" under concurrency (background workers: history rebuild, price enrichment, alert evaluator + user write requests).
+- **Defense in depth**: WAL + busy_timeout=10000 preserved. Subprocesses (rebuild_worker.py, enrich_worker.py) use synchronous sqlite3 with busy_timeout.
+- **Concurrency test**: `tests/test_write_lock.py` — 20 workers × 25 concurrent writes = 500 INSERT+COMMIT → 0 "database is locked" errors, all rows validated.
 
-### 2026.07.11 — PWA installable, theme clair/sombre, recherche globale, watchlist & groupes
+### 2026.07.11 — Installable PWA, light/dark theme, global search, watchlist & groups
 
-- **PWA installable** : manifest.json, service worker (cache app shell, network-first pour API), icônes 192×192 et 512×512. L'app est installable sur mobile/desktop avec affichage hors-ligne basique.
-- **Thème clair / sombre** : variables CSS pour les deux thèmes, bouton bascule 🌙/☀️ dans la sidebar, choix persisté dans localStorage. Vérifié pour la lisibilité (contraste des textes, badges, graphiques Chart.js).
-- **Recherche / filtre global** : champ de recherche dans la topbar qui filtre instantanément (côté client) les tokens (par symbole/nom/chaîne/wallet) et les transactions (par symbole/nom/hash/adresse/chaîne). Insensible à la casse.
-- **Watchlist (lecture seule)** : colonne `watch_only` sur les wallets. Une adresse en surveillance est affichée et consultable mais **exclue des totaux** (net worth, dashboard, analytics, snapshots). Badge « 👁 surveillance » et bouton pour basculer.
-- **Groupes de wallets** : champ `group_label` optionnel sur les wallets. Affichage groupé dans la liste des wallets (ligne de séparation par groupe). Sans impact sur les totaux.
+- **Installable PWA**: manifest.json, service worker (app shell cache, network-first for API), 192×192 and 512×512 icons. App installable on mobile/desktop with basic offline display.
+- **Light / Dark theme**: CSS variables for both themes, 🌙/☀️ toggle button in sidebar, choice persisted in localStorage. Verified for readability (text contrast, badges, Chart.js charts).
+- **Global search / filter**: search field in topbar that instantly filters (client-side) tokens (by symbol/name/chain/wallet) and transactions (by symbol/name/hash/address/chain). Case-insensitive.
+- **Watchlist (read-only)**: `watch_only` column on wallets. A watched address is displayed and viewable but **excluded from totals** (net worth, dashboard, analytics, snapshots). "👁 watch" badge and toggle button.
+- **Wallet groups**: optional `group_label` field on wallets. Grouped display in wallet list (separator line per group). No impact on totals.
 
-### 2026.07.10 — NFT : liens source directs + fiabilite des floors (liquidite)
+### 2026.07.10 — NFT: direct source links + floor reliability (liquidity)
 
-- **Liens source directs** : chaque NFT affiche désormais un lien direct vers sa source marketplace (`market_url`), en plus du lien explorer Blockscout (`explorer_url`). Si le floor vient d'OpenSea, le lien pointe vers la page de l'asset ou de la collection. Dans `/api/nfts`, chaque item a `market_url` (OpenSea) ET `explorer_url` (Blockscout). La collection de valorisation a aussi les deux liens. **Plus jamais de « source OpenSea » alors que l'item est introuvable sur OpenSea** — le lien pointe vers la vraie source.
-- **Fiabilité des floors (liquidité)** : chaque collection valorisée porte désormais `floor_reliable` (bool) + `floor_confidence` ("high"/"low"/"none"), déterminés par des signaux de liquidité récupérés des APIs sources : volume 24h, nombre de listings actifs, meilleure offre (top bid), nombre de propriétaires. Règles conservatrices : un floor sans volume, sans listings et sans offre = non fiable (confidence "none"), exclu du total.
-- **Totaux séparés** : `nft_total_value_usd` = somme des floors **fiables** uniquement. `nft_indicative_value_usd` = somme des floors non fiables. Le net worth Tokens+NFTs sur le dashboard n'utilise QUE les floors fiables — **plus jamais de net worth gonflé par des collections zombies**.
-- **UI enrichie** : badge de confiance par collection (✓ vert si fiable, « ⚠ indicatif » orange si non fiable, gris si low). Boutons directs « OS » (OpenSea) et « 🔗 » (Explorer) sur chaque carte NFT et chaque ligne de valorisation. La valeur indicative est affichée séparément en orange.
-- **APIs sources enrichies** : OpenSea remonte désormais listings_count, best_offer, volume_24h, num_owners. Reservoir remonte volume_24h, listings_count, best_offer_eth. Moralis inchangé (endpoint floor simple).
+- **Direct source links**: each NFT now shows a direct link to its marketplace source (`market_url`), in addition to the Blockscout explorer link (`explorer_url`). If floor comes from OpenSea, the link points to the asset or collection page. In `/api/nfts`, each item has `market_url` (OpenSea) AND `explorer_url` (Blockscout). Valuation collection also has both links. **No more "source OpenSea" when item is unfindable on OpenSea** — link points to real source.
+- **Floor reliability (liquidity)**: each valued collection now carries `floor_reliable` (bool) + `floor_confidence` ("high"/"low"/"none"), determined by liquidity signals from source APIs: 24h volume, active listing count, best offer (top bid), owner count. Conservative rules: floor with no volume, no listings, and no offer = unreliable (confidence "none"), excluded from total.
+- **Separate totals**: `nft_total_value_usd` = sum of **reliable** floors only. `nft_indicative_value_usd` = sum of unreliable floors. Token+NFT net worth on dashboard only uses reliable floors — **no more inflated net worth from zombie collections**.
+- **Enriched UI**: confidence badge per collection (✓ green if reliable, "⚠ indicative" orange if unreliable, gray if low). Direct "OS" (OpenSea) and "🔗" (Explorer) buttons on each NFT card and each valuation row. Indicative value displayed separately in orange.
+- **Enriched source APIs**: OpenSea now returns listings_count, best_offer, volume_24h, num_owners. Reservoir returns volume_24h, listings_count, best_offer_eth. Moralis unchanged (simple floor endpoint).
 
-### 2026.07.9 — Pricing multi-sources (CoinGecko) + test des clés API
+### 2026.07.9 — Multi-source pricing (CoinGecko) + API key testing
 
-- **CoinGecko comme source de prix prioritaire** : quand une clé API CoinGecko est configurée, les prix courants des tokens sont enrichis via l'API CoinGecko (`/simple/token_price` par contrat, `/simple/price` pour les coins natifs). **Conservateur** : un prix CoinGecko n'écrase un prix existant (Blockscout/DefiLlama) que s'il est strictement > 0. Sans clé, le comportement est inchangé. La couverture s'améliore notamment pour les memecoins et tokens exotiques.
-- **Champ `price_source` par token** : chaque token dans la réponse portfolio porte désormais `price_source` (`"blockscout"`, `"coingecko"`, ou `"defillama"`) indiquant l'origine de son prix courant.
-- **Bouton « Tester » par clé API** : endpoint `POST /api/settings/keys/{provider}/test` valide la clé stockée (ou fournie dans le body) via un appel léger au provider. Retourne `{valid: bool, message}`. Fonctionne pour CoinGecko, OpenSea, Etherscan, DefiLlama, Alchemy, Moralis, CoinMarketCap.
-- **Métadonnée « Débloque » par provider** : chaque entrée du catalogue `GET /api/settings/keys` inclut désormais `unlocks`, une courte phrase décrivant ce que la clé active concrètement. Affiché dans la page Réglages > Clés API externes.
+- **CoinGecko as primary price source**: when a CoinGecko API key is configured, current token prices are enriched via CoinGecko API (`/simple/token_price` by contract, `/simple/price` for native coins). **Conservative**: a CoinGecko price only overrides an existing price (Blockscout/DefiLlama) if strictly > 0. Without a key, behavior is unchanged. Coverage improves notably for memecoins and exotic tokens.
+- **`price_source` field per token**: each token in portfolio response now carries `price_source` (`"blockscout"`, `"coingecko"`, or `"defillama"`) indicating its current price origin.
+- **"Test" button per API key**: endpoint `POST /api/settings/keys/{provider}/test` validates the stored (or body-provided) key via a lightweight provider call. Returns `{valid: bool, message}`. Works for CoinGecko, OpenSea, Etherscan, DefiLlama, Alchemy, Moralis, CoinMarketCap.
+- **"Unlocks" metadata per provider**: each `GET /api/settings/keys` catalog entry now includes `unlocks`, a short phrase describing what the key concretely enables. Displayed on Settings > External API Keys page.
 
-### 2026.07.8 — Valorisation NFT (prix planchers) + net worth Tokens+NFTs
+### 2026.07.8 — NFT valuation (floor prices) + Tokens+NFT net worth
 
-- **Valorisation des NFT** : nouvel endpoint `GET /api/nfts/valuation?address=` qui retourne les prix planchers (floor prices) par collection détenue, avec un total `nft_total_value_usd`. Sources, dans l'ordre : OpenSea (clé API), Moralis (clé API), Reservoir (gratuit, best-effort). Sans aucune clé, `floor_source: "none"` + message invitant à configurer une clé. **Jamais de 500** — toute erreur API est isolée et dégrade gracieusement.
-- **Cache serveur 1h** par (user, address) — une seule requête par collection, pas par item individuel. Conversion ETH→USD via prix ETH (cache portfolio ou DefiLlama).
-- **Dashboard — net worth décomposé** : nouvelle ligne « Tokens : X + NFTs : Y = Total : Z » entre les cartes stats et les cartes PNL. **La valeur NFT n'est PAS injectée** dans le total des tokens, ni dans le PNL par token, ni dans daily_history — c'est une ligne d'affichage additionnelle qui ne pollue pas l'historique.
-- **Page NFTs enrichie** : carte de synthèse (valeur totale, source, nombre de collections valorisées), tableau des floors par collection (nom, floor ETH/USD, items, valeur totale, source), et badge d'avertissement « Ajoute une clé OpenSea/Moralis » avec lien vers Réglages quand aucune valorisation n'est disponible.
-- **Clés API** : le helper `_get_user_moralis_key` existant + nouveau `_get_user_opensea_key`. Les caches de valorisation sont invalidés à l'ajout/suppression d'une clé OpenSea ou Moralis.
-- **i18n** FR/EN complet, `esc()` partout, pas de `\n` littéral en JS, défensif total.
+- **NFT valuation**: new endpoint `GET /api/nfts/valuation?address=` returning floor prices per held collection, with total `nft_total_value_usd`. Sources, in order: OpenSea (API key), Moralis (API key), Reservoir (free, best-effort). Without any key, `floor_source: "none"` + message inviting key configuration. **Never 500** — any API error is isolated and degrades gracefully.
+- **1h server cache** per (user, address) — one request per collection, not per individual item. ETH→USD conversion via ETH price (portfolio cache or DefiLlama).
+- **Dashboard — decomposed net worth**: new line "Tokens: X + NFTs: Y = Total: Z" between stat cards and PNL cards. **NFT value is NOT injected** into token total, token PNL, or daily_history — it's an additional display line that doesn't pollute history.
+- **Enriched NFTs page**: summary card (total value, source, valued collection count), floor table per collection (name, floor ETH/USD, items, total value, source), and warning badge "Add an OpenSea/Moralis key" with Settings link when no valuation available.
+- **API keys**: existing `_get_user_moralis_key` helper + new `_get_user_opensea_key`. Valuation caches invalidated on OpenSea or Moralis key add/delete.
+- **i18n**: full FR/EN, `esc()` everywhere, no literal `\n` in JS, fully defensive.
 
-### 2026.07.7 — Alertes health-factor / risque de liquidation
+### 2026.07.7 — Health factor / liquidation risk alerts
 
-- **Nouveau type d'alerte « health »** : surveille le health factor des positions de lending (lending/borrowing) via l'API Moralis. Déclenche une notification quand le health factor d'au moins une position passe sous le seuil configuré (défaut 1.2).
-- **Intégration Moralis** : réutilise la source de données DeFi existante (`/api/defi/positions`). Sans clé Moralis, l'alerte est marquée « Nécessite une clé Moralis » — jamais de faux positifs ni de 500.
-- **Message d'alerte** inclut le protocole, la chaîne, le health factor courant, le seuil et les montants fournis/empruntés.
-- **UI** : nouveau type « Health / Liquidation » dans le formulaire de création d'alerte, champ seuil (défaut 1.2), scope protocole (tous ou spécifique). Badge « ⚠️ Nécessite une clé Moralis » sur les alertes health sans clé configurée.
-- **Correctif** : `POST /api/alerts` renvoie désormais le vrai `id` inséré (via `cursor.lastrowid` au lieu de `connection.last_insert_rowid`).
-- **i18n** FR/EN, `esc()` partout, défensif total (pas de clé → état lisible, pas de plantage).
+- **New "health" alert type**: monitors lending position health factor via Moralis API. Triggers a notification when at least one position's health factor drops below the configured threshold (default 1.2).
+- **Moralis integration**: reuses existing DeFi data source (`/api/defi/positions`). Without a Moralis key, alert is marked "Requires Moralis key" — never false positives or 500.
+- **Alert message** includes protocol, chain, current health factor, threshold, and supplied/borrowed amounts.
+- **UI**: new type "Health / Liquidation" in alert creation form, threshold field (default 1.2), protocol scope (all or specific). Badge "⚠️ Requires Moralis key" on health alerts without configured key.
+- **Fix**: `POST /api/alerts` now returns real inserted `id` (via `cursor.lastrowid` instead of `connection.last_insert_rowid`).
+- **i18n** FR/EN, `esc()` everywhere, fully defensive (no key → readable state, no crash).
 
-### 2026.07.6 — Moteur d'alertes (prix, portefeuille, mouvements) + notifications + digest
+### 2026.07.6 — Alert engine (price, portfolio, movements) + notifications + digest
 
-- **Moteur d'alertes** : création/suppression/activation d'alertes de 3 types — **prix** (token au-dessus/en-dessous d'un seuil), **portefeuille** (valeur totale au-dessus/en-dessous d'un seuil), **mouvement** (variation > X% sur 24h). Évaluateur asynchrone toutes les 10 minutes (cooldown par alerte, jamais de re-déclenchement en rafale).
-- **Centre de notifications in-app** : une notification est créée à chaque alerte déclenchée (titre + description). Interface dédiée avec marquage « lu », badge de compteur non-lu.
-- **Canaux externes** : **Webhook** (POST JSON), **Telegram** (API Bot), **E-mail** (SMTP, optionnel). Configuration par canal (URL, token, credentials), secrets masqués en GET, test d'envoi (`POST /api/alerts/test-channel`), robustes — un canal qui échoue ne bloque pas les autres.
-- **Digest** : résumé quotidien ou hebdomadaire du portefeuille (valeur, variations 24h/7j) envoyé via le canal choisi.
-- **Page 🔔 Alertes** dans le menu latéral — 4 sections : mes alertes (création + liste), centre de notifications, canaux de notification, digest. i18n FR/EN, `esc()` partout, états vides propres.
-- **APIs** : `GET/POST/PUT/DELETE /api/alerts`, `GET /api/notifications`, `POST /api/notifications/read`, `GET/PUT /api/settings/notif-channels`, `GET/PUT /api/settings/digest`, `POST /api/alerts/test-channel`, `GET /api/notifications/count`.
-- Base de données : 4 nouvelles tables `alerts`, `notifications`, `notif_channels`, `digest_prefs` (migrations idempotentes).
+- **Alert engine**: create/delete/enable alerts of 3 types — **price** (token above/below threshold), **portfolio** (total value above/below threshold), **movement** (change > X% in 24h). Async evaluator every 10 minutes (cooldown per alert, never burst re-triggering).
+- **In-app notification center**: a notification created on each triggered alert (title + description). Dedicated interface with "read" marking, unread counter badge.
+- **External channels**: **Webhook** (POST JSON), **Telegram** (Bot API), **Email** (SMTP, optional). Per-channel configuration (URL, token, credentials), secrets masked in GET, send test (`POST /api/alerts/test-channel`), robust — a failing channel doesn't block others.
+- **Digest**: daily or weekly portfolio summary (value, 24h/7d changes) sent via chosen channel.
+- **🔔 Alerts page** in sidebar menu — 4 sections: my alerts (create + list), notification center, notification channels, digest. i18n FR/EN, `esc()` everywhere, clean empty states.
+- **APIs**: `GET/POST/PUT/DELETE /api/alerts`, `GET /api/notifications`, `POST /api/notifications/read`, `GET/PUT /api/settings/notif-channels`, `GET/PUT /api/settings/digest`, `POST /api/alerts/test-channel`, `GET /api/notifications/count`.
+- Database: 4 new tables `alerts`, `notifications`, `notif_channels`, `digest_prefs` (idempotent migrations).
 
-### 2026.07.5 — Transactions enrichies (approve, contract interactions, gas analytics, tags/notes)
+### 2026.07.5 — Enriched transactions (approve, contract interactions, gas analytics, tags/notes)
 
-- **Collecte étendue** : en plus des token-transfers, capture maintenant toutes les transactions d'une adresse via l'endpoint Blockscout `/addresses/{address}/transactions`. Détecte les transactions `approve` (approbation de dépense), `contract` (interaction de contrat sans transfert de token), et `native` (envoi/réception de coin native).
-- **Pas de doublon** : un tx_hash déjà présent (transfert de token) est conservé enrichi (méthode), jamais dupliqué.
-- **API `/api/transactions`** : nouveaux types `approve|contract|native` dans le filtre `type=`, compteurs étendus, tags utilisateur attachés à chaque événement.
-- **Gaz analytics** : `GET /api/gas/analytics?address=&range=` → total gaz dépensé, série temporelle journalière, répartition par chaîne. Carte gaz sur la page Transactions avec mini-graphe Chart.js.
-- **Tags/notes** : table `user_tx_tags`, endpoints `POST /api/transactions/tag` (upsert) et `GET /api/transactions/tags`. Interface inline : clic sur l'icône tag → éditeur (catégorie + note), sauvegarde immédiate. Catégories suggérées : revenu, trade, transfert, frais, autre.
-- **UI** : badges colorés distincts (✅ Approve orange, 📄 Contrat bleu, 📥/📤 Natif vert/rouge). Filtre de type enrichi. i18n FR/EN exhaustif.
+- **Extended collection**: in addition to token-transfers, now captures all address transactions via Blockscout `/addresses/{address}/transactions` endpoint. Detects `approve` (spend approval), `contract` (contract interaction without token transfer), and `native` (native coin send/receive) transactions.
+- **No duplicates**: an already-present tx_hash (token transfer) is kept enriched (method), never duplicated.
+- **`/api/transactions` API**: new types `approve|contract|native` in `type=` filter, extended counts, user tags attached to each event.
+- **Gas analytics**: `GET /api/gas/analytics?address=&range=` → total gas spent, daily time series, per-chain breakdown. Gas card on Transactions page with mini Chart.js chart.
+- **Tags/notes**: `user_tx_tags` table, endpoints `POST /api/transactions/tag` (upsert) and `GET /api/transactions/tags`. Inline interface: click tag icon → editor (category + note), immediate save. Suggested categories: income, trade, transfer, fee, other.
+- **UI**: distinct colored badges (✅ Approve orange, 📄 Contract blue, 📥/📤 Native green/red). Enriched type filter. Exhaustive i18n FR/EN.
 
-### 2026.07.4 — Export CSV/PDF (holdings, transactions, rapport PnL, synthèse)
+### 2026.07.4 — CSV/PDF export (holdings, transactions, PnL report, summary)
 
-- **Section ⚙️ Réglages → 📤 Export / Sauvegarde** : 4 boutons de téléchargement (Holdings CSV, Transactions CSV, Rapport PnL CSV, Synthèse PDF), état « Génération… », gestion d'erreurs, respect du wallet actif (adresse ou `ALL`), i18n FR/EN.
-- **Endpoints protégés `GET /api/export/holdings.csv|transactions.csv|pnl.csv|summary.pdf?address=0x…|ALL`** avec en-têtes de téléchargement (`Content-Disposition: attachment`). Tokens **actifs** uniquement, wallets existants uniquement (défense anti-données-orphelines), agrégation par symbole+chaîne en mode `ALL`.
-- **holdings.csv** : token_name, symbol, chain, balance, usd_price, usd_value, category, cost_basis, pnl. **transactions.csv** : événements Envoyé/Reçu/Swap (logique de détection des swaps, jambes regroupées par tx), montants signés, gas. **pnl.csv** (rapport fiscal best-effort) : quantité, coût moyen unitaire, coût total, valeur actuelle, PnL latent — même logique de coût que le PNL par token du dashboard ; coût inconnu → cellules vides (jamais de faux « acheté gratuit »).
-- **summary.pdf** : valeur totale, PnL total, répartition par chaîne et par catégorie (logique /api/analytics), top 15 holdings, date de génération — générateur PDF minimaliste interne (PDF 1.4, **zéro dépendance ajoutée**).
-- Robustesse : CSV RFC 4180 (guillemets/virgules/retours ligne échappés), UTF-8, décimales point ; donnée manquante → cellule vide ; toute erreur → export vide avec en-têtes, **jamais de 500**.
-- Tests : `python3 tests/test_export_service.py` (CSV quoting, agrégation, PnL, structure PDF/xref) + `node tests/smoke_export_2026.07.4.js` (smoke runtime du rendu de la section Export).
+- **⚙️ Settings → 📤 Export / Backup section**: 4 download buttons (Holdings CSV, Transactions CSV, PnL Report CSV, Summary PDF), "Generating…" state, error handling, active wallet respect (address or `ALL`), i18n FR/EN.
+- **Protected endpoints `GET /api/export/holdings.csv|transactions.csv|pnl.csv|summary.pdf?address=0x…|ALL`** with download headers (`Content-Disposition: attachment`). **Active** tokens only, existing wallets only (anti-orphan-data defense), aggregation by symbol+chain in `ALL` mode.
+- **holdings.csv**: token_name, symbol, chain, balance, usd_price, usd_value, category, cost_basis, pnl. **transactions.csv**: Sent/Received/Swap events (swap detection logic, legs grouped by tx), signed amounts, gas. **pnl.csv** (best-effort tax report): quantity, average unit cost, total cost, current value, unrealized PnL — same cost logic as per-token PNL in dashboard; unknown cost → empty cells (never false "bought for free").
+- **summary.pdf**: total value, total PnL, chain and category breakdown (/api/analytics logic), top 15 holdings, generation date — internal minimal PDF generator (PDF 1.4, **zero added dependencies**).
+- Robustness: CSV RFC 4180 (quotes/commas/newlines escaped), UTF-8, dot decimals; missing data → empty cell; any error → empty export with headers, **never 500**.
+- Tests: `python3 tests/test_export_service.py` (CSV quoting, aggregation, PnL, PDF structure/xref) + `node tests/smoke_export_2026.07.4.js` (runtime smoke of Export section rendering).
 
-### 2026.07.3 — Page Analytics (répartition & performance)
+### 2026.07.3 — Analytics page (allocation & performance)
 
-- **Nouvelle page 📊 Analytics** (menu latéral) : vue synthétique de la répartition et de la performance du portefeuille — première release de la roadmap.
-- **Endpoint `GET /api/analytics?address=…&range=24h|7d|30d`** (address = wallet ou `ALL`) : allocation par chaîne / catégorie (wallet, lending, staked, LP, vault, synthetic) / actif (top 12 + « Autres »), variations de la valeur totale sur 24h/7j/30j (agrégat `daily_history`), meilleurs/pires performers par variation de **prix** (neutralise les apports/retraits, spam et poussière ignorés), benchmark best-effort Portefeuille vs BTC/ETH (DefiLlama). Tokens **actifs** uniquement. Défensif : historique insuffisant → `null`/« — », jamais de 500. Cache serveur 300 s par (user, address, range).
-- **UI** : 3 cartes de variation (vert/rouge, « — » si indispo), 3 donuts Chart.js (thème sombre, couleurs chaînes cohérentes avec le dashboard), tableau Top gagnants / Top perdants, sélecteur de période 24h/7j/30j, i18n FR/EN, états vides propres, destruction propre des instances Chart.js au rechargement.
-- Tests : `python3 tests/test_analytics_service.py` (48 assertions) + `node tests/smoke_analytics_2026.07.3.js` (smoke runtime du rendu). Pages Stats/Dashboard/portfolio inchangées (rétro-compat totale).
+- **New 📊 Analytics page** (sidebar menu): synthetic view of portfolio allocation and performance — first roadmap release.
+- **Endpoint `GET /api/analytics?address=…&range=24h|7d|30d`** (address = wallet or `ALL`): allocation by chain / category (wallet, lending, staked, LP, vault, synthetic) / asset (top 12 + "Others"), total value changes over 24h/7d/30d (`daily_history` aggregate), best/worst performers by **price** change (neutralizes inflows/outflows, spam and dust ignored), best-effort Portfolio vs BTC/ETH benchmark (DefiLlama). **Active** tokens only. Defensive: insufficient history → `null`/"—", never 500. 300s server cache per (user, address, range).
+- **UI**: 3 change cards (green/red, "—" if unavailable), 3 Chart.js donuts (dark theme, chain colors consistent with dashboard), Top gainers / Top losers table, 24h/7d/30d period selector, i18n FR/EN, clean empty states, proper Chart.js instance destruction on reload.
+- Tests: `python3 tests/test_analytics_service.py` (48 assertions) + `node tests/smoke_analytics_2026.07.3.js` (runtime smoke of rendering). Stats/Dashboard/portfolio pages unchanged (full backward compat).
 
-### 2026.07.2 — En-tête Cache-Control no-cache sur le SPA (fin des versions périmées en cache navigateur)
+### 2026.07.2 — Cache-Control: no-cache header on SPA (end of stale browser-cached versions)
 
-- **Cache-Control: no-cache, must-revalidate** sur la route racine — le navigateur conserve le fichier en cache mais doit revalider à chaque visite via ETag/Last-Modified. 304 si inchangé, nouvelle version dès le déploiement. Adieu les versions périmées servies depuis le cache du navigateur.
+- **Cache-Control: no-cache, must-revalidate** on root route — browser keeps file in cache but must revalidate on each visit via ETag/Last-Modified. 304 if unchanged, new version on deploy. Goodbye stale versions served from browser cache.
 
-### 2026.07.1 — Passage au versioning calendaire (AAAA.MM.N)
+### 2026.07.1 — Switch to calendar versioning (YYYY.MM.N)
 
-**Ce qui change :**
-- Le projet passe du **semver** (vX.Y.Z) au **calendar versioning** au format `AAAA.MM.N` (année.mois.numéro).
-- `N` repart à 1 chaque mois (prochaine release de juillet = `2026.07.2`, août = `2026.08.1`, etc.).
-- Le nouveau schéma démarre à `2026.07.1` (les anciens tags de développement ont été retirés pour garder un dépôt propre).
-- **Backend** : `GET /api/version/latest` reconnaît les tags CalVer et les compare numériquement par (année, mois, N). Un tag CalVer est toujours considéré plus récent qu'un tag semver.
-- **Frontend** : `checkVersion()` compare désormais correctement les versions CalVer (année → mois → N). Tout format inattendu déclenche un fallback égalité = à jour.
-- L'affichage n'utilise plus de préfixe `v` dans les messages de version.
+**What changes:**
+- Project switches from **semver** (vX.Y.Z) to **calendar versioning** in `YYYY.MM.N` format (year.month.number).
+- `N` resets to 1 each month (next July release = `2026.07.2`, August = `2026.08.1`, etc.).
+- New scheme starts at `2026.07.1` (old dev tags removed to keep repo clean).
+- **Backend**: `GET /api/version/latest` recognizes CalVer tags and compares them numerically by (year, month, N). A CalVer tag is always considered newer than a semver tag.
+- **Frontend**: `checkVersion()` now correctly compares CalVer versions (year → month → N). Any unexpected format triggers an equality fallback = up to date.
+- Display no longer uses `v` prefix in version messages.
 
-> Historique complet des anciennes versions v1/v2 : voir l'historique des commits Git.
+> Full history of old v1/v2 versions: see Git commit history.
 
-## 📝 Licence
+## 📝 License
 
 MIT

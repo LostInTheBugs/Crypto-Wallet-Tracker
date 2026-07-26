@@ -13,7 +13,6 @@ from services.providers.base import (
 from services.providers.evm import EvmProvider, evm_provider
 from services.providers.bitcoin import BitcoinProvider, bitcoin_provider  # noqa: F401 — auto-registers
 from services.providers.solana import SolanaProvider, solana_provider  # noqa: F401 — auto-registers
-from services.providers.cosmos import CosmosProvider, cosmos_provider  # noqa: F401 — auto-registers
 
 __all__ = [
     "ChainProvider",
@@ -26,6 +25,4 @@ __all__ = [
     "bitcoin_provider",
     "SolanaProvider",
     "solana_provider",
-    "CosmosProvider",
-    "cosmos_provider",
 ]

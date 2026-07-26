@@ -115,8 +115,10 @@ def test_registry():
           "provider_for(BTC bech32) → BitcoinProvider")
     check(provider_for("7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV") is not None,
           "provider_for(Solana) → SolanaProvider")
-    check(provider_for("cosmos1m3h30w0quvmj55jdguy8y7guyx5j5xkv9rxgtz") is not None,
-          "provider_for(Cosmos) → CosmosProvider")
+    check(provider_for("cosmos1m3h30w0quvmj55jdguy8y7guyx5j5xkv9rxgtz") is None,
+          "provider_for(Cosmos) → None (not supported)")
+    check(provider_for("osmo1hsk6jryyqjfhp5dhv55tc4hfer5d6ylts98eqd") is None,
+          "provider_for(Osmosis) → None (not supported)")
     check(provider_for("garbage_not_an_address") is None,
           "provider_for(garbage) → None")
     check(provider_for("") is None,

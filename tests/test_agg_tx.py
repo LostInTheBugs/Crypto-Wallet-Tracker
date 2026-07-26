@@ -380,9 +380,8 @@ def _run_explorer_test():
 
     # Cosmos
     p_cosmos = provider_for("cosmos1v75h6ynsdfgqp2u0gq0c4z7aqvfcn3c6vnuxvu")
-    check(p_cosmos is not None and p_cosmos.chain_type == "cosmos", "provider_for Cosmos address -> CosmosProvider")
-    check(p_cosmos.explorer_tx_url("ghi789") == "https://www.mintscan.io/cosmos/tx/ghi789",
-          f"Cosmos explorer_tx_url -> {p_cosmos.explorer_tx_url('ghi789')}")
+    check(p_cosmos is None and provider_for("cosmos1v75h6ynsdfgqp2u0gq0c4z7aqvfcn3c6vnuxvu") is None,
+          "provider_for Cosmos address → None (not supported)")
 
     # EVM
     p_evm = provider_for("0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045")
@@ -485,7 +484,7 @@ async def _run_btc_empty_test():
     global PASS, FAIL
     import app as app_module
 
-    section("7. BTC/Cosmos with empty get_transactions returns 0, no error")
+    section("7. BTC with empty get_transactions returns 0, no error")
 
     tmpdir = tempfile.mkdtemp(prefix="cwt_agg_tx_test_")
     db_path = os.path.join(tmpdir, "test.db")
@@ -498,6 +497,11 @@ async def _run_btc_empty_test():
         # Empty event list
         inserted = await app_module._persist_non_evm_events(1, SOL_ADDR, [])
         check(inserted == 0, f"empty events -> 0 inserted -> {inserted}")
+
+        # Also verify: provider_for(cosmos...) returns None
+        from services.providers.base import provider_for
+        p = provider_for("cosmos1v75h6ynsdfgqp2u0gq0c4z7aqvfcn3c6vnuxvu")
+        check(p is None, "provider_for cosmos1... → None")
 
     finally:
         app_module.DB_PATH = orig_db_path

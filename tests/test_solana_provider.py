@@ -291,6 +291,7 @@ def test_registry_count():
     check("evm" in types, "EVM provider registered")
     check("bitcoin" in types, "Bitcoin provider registered")
     check("solana" in types, "Solana provider registered")
+    check("cosmos" not in types, "Cosmos NOT registered (removed 2026.07.29)")
     check(len(PROVIDERS) >= 3, "at least 3 providers registered")
 
 

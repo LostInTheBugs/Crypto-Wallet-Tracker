@@ -149,6 +149,6 @@ async def get_claimable_airdrops(
 # Auto-discover checkers on import
 # ═══════════════════════════════════════════════════════════════════
 
-# Import all checker modules so they self-register.
+# No checkers registered — cosmos staking rewards checker was removed
+# in 2026.07.29 (Cosmos support dropped).
 # New checkers just need to be added here.
-import services.airdrops.checkers.staking_rewards  # noqa: F401,E402 — auto-registers

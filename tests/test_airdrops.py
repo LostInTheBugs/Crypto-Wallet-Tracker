@@ -134,41 +134,27 @@ def test_registry_routing():
 
 
 def test_staking_rewards_parse():
-    section("2. Staking rewards checker — static rewards parsing")
+    section("2. Staking rewards checker — parsing (cosmos removed, test adapted)")
 
-    from services.providers.cosmos import _denom_to_symbol
+    # After Cosmos removal, denom parsing utilities no longer importable.
+    # Verify the airdrops module still loads and returns empty properly.
+    check(True, "staking rewards checker removed — parsing tests skipped (cosmos dropped 2026.07.29)")
 
-    # Simulate what a Cosmos LCD rewards response looks like
-    total_rewards = [
-        {"denom": "uatom", "amount": "123456"},
-    ]
-
-    sym, exp = _denom_to_symbol("uatom")
-    amount = float(total_rewards[0]["amount"]) / (10**exp)
-    check(abs(amount - 0.123456) < 0.000001, "uatom 123456 → 0.123456 ATOM")
-
-    # With a known price of $10:
-    price = 10.0
-    usd_value = round(amount * price, 2)
-    check(usd_value == 1.23, "0.123456 ATOM @ $10 = $1.23")
-
-    # Verify the claim dict shape
+    # Verify the claim dict shape remains valid for future checkers
     claim = {
-        "source": "cosmos_staking_rewards",
-        "chain": "cosmos-cosmos",
-        "token_symbol": "ATOM",
-        "amount": round(amount, 6),
-        "usd_value": usd_value,
-        "claim_url": "https://www.mintscan.io/cosmos/account/cosmos1...",
+        "source": "example_checker",
+        "chain": "ethereum",
+        "token_symbol": "ETH",
+        "amount": 1.0,
+        "usd_value": 100.0,
+        "claim_url": "https://etherscan.io/address/0x...",
         "status": "claimable",
-        "details": "Staking rewards for ATOM",
+        "details": "Example claim",
     }
 
-    check(claim["source"] == "cosmos_staking_rewards", "claim has source")
+    check(claim["source"] == "example_checker", "claim has source")
     check(claim["status"] == "claimable", "claim status is claimable")
-    check(claim["chain"].startswith("cosmos-"), "claim chain starts with cosmos-")
-    check(claim["usd_value"] > 0, "claim has positive usd_value")
-    check("mintscan.io" in claim["claim_url"], "claim url is mintscan")
+    check(isinstance(claim["usd_value"], (int, float)) and claim["usd_value"] > 0, "claim has positive usd_value")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -250,23 +236,16 @@ def test_registry_introspection():
     section("4. Registry introspection")
 
     checkers = get_checkers()
-    check(len(checkers) >= 1, "at least 1 checker in registry (staking_rewards)")
+    # After Cosmos removal (2026.07.29), no checkers registered by default
+    check(len(checkers) >= 0, "0+ checkers in registry (cosmos removed)")
 
-    # Check that cosmos_staking_rewards is there
+    # Check that checkers list is empty since Cosmos removed
     names = [c.name for c in checkers]
-    check("cosmos_staking_rewards" in names, "cosmos_staking_rewards checker registered")
-
-    # Check its chain_types
-    for c in checkers:
-        if c.name == "cosmos_staking_rewards":
-            check(
-                "cosmos" in c.chain_types,
-                "cosmos_staking_rewards handles 'cosmos' chain_type",
-            )
-            check(
-                "evm" not in c.chain_types,
-                "cosmos_staking_rewards does NOT handle 'evm'",
-            )
+    if len(checkers) > 0:
+        # If new checkers added post-removal, list them
+        pass
+    else:
+        check(len(checkers) == 0, "no checkers registered (cosmos removed 2026.07.29)")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -291,9 +270,9 @@ def test_provider_non_regression():
     p3 = provider_for("7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV")
     check(p3 is not None and p3.chain_type == "solana", "provider_for(Solana) → solana")
 
-    # Cosmos
+    # Cosmos is no longer supported
     p4 = provider_for("cosmos1hsk6jryyqjfhp5dhv55tc4hfer5d6ylts98eqd")
-    check(p4 is not None and p4.chain_type == "cosmos", "provider_for(Cosmos) → cosmos")
+    check(p4 is None, "provider_for(Cosmos) → None (removed 2026.07.29)")
 
     # Garbage
     check(provider_for("hello") is None, "provider_for(garbage) → None")

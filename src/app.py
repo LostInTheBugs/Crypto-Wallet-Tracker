@@ -2432,7 +2432,7 @@ async def _daily_tx_refresh(user_id: int):
 
     # Sort: non-EVM wallets first (fast keyless RPC, seconds), then EVM
     # (slow Blockscout pagination, potentially minutes).  This prevents
-    # a large EVM wallet from starving Solana / BTC / Cosmos wallets.
+    # a large EVM wallet from starving Solana / BTC wallets.
     def _priority(addr: str) -> int:
         p = provider_for(addr)
         return 0 if p is not None and p.chain_type != "evm" else 1
@@ -3249,7 +3249,7 @@ async def fetch_transactions(user=Depends(get_current_user), db=Depends(get_db))
 
     # Sort: non-EVM wallets first (fast keyless RPC, seconds), then EVM
     # (slow Blockscout pagination, potentially minutes).  This prevents
-    # a large EVM wallet from starving Solana / BTC / Cosmos wallets.
+    # a large EVM wallet from starving Solana / BTC wallets.
     def _priority(addr: str) -> int:
         p = provider_for(addr)
         return 0 if p is not None and p.chain_type != "evm" else 1
