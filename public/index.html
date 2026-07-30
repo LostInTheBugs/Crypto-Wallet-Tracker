@@ -154,6 +154,7 @@ tr.tm-off td{opacity:.45}
   <a href="#" onclick="switchPage('nfts')" data-page="nfts">🖼️ <span>NFTs</span></a>
   <a href="#" onclick="switchPage('airdrops')" data-page="airdrops">🪂 <span>Airdrops</span></a>
   <a href="#" onclick="switchPage('txns')" data-page="txns">📜 <span>Transactions</span></a>
+  <a href="#" onclick="switchPage('tax')" data-page="tax">📊 <span>Fiscal / PnL</span></a>
   <a href="#" onclick="switchPage('alerts')" data-page="alerts">🔔 <span>Alertes</span></a>
   <a href="#" onclick="switchPage('wallets')" data-page="wallets">💼 <span>Wallets</span></a>
   <a href="#" onclick="switchPage('settings')" data-page="settings" style="margin-top:auto">⚙️ <span>Paramètres</span></a>
@@ -246,6 +247,7 @@ tr.tm-off td{opacity:.45}
     </div>
 
     <div id="pageTokens" class="hidden"></div>
+    <div id="pageTax" class="hidden"></div>
     <div id="pageAnalytics" class="hidden"></div>
     <div id="pageDefiPos" class="hidden"></div>
     <div id="pageNFTs" class="hidden"></div>
@@ -283,7 +285,7 @@ tr.tm-off td{opacity:.45}
       </div>
       <div class="card" style="margin-bottom:16px">
         <h2>📦 Version</h2>
-        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">2026.07.29</strong></p>
+        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">2026.07.031</strong></p>
         <p id="verStatus" style="font-size:.85rem"></p>
         <p id="verAutoMsg" style="font-size:.85rem;color:#6e7681;margin-top:6px"></p>
         <div style="margin-top:10px;font-size:.85rem">
@@ -488,7 +490,24 @@ var T = {
     dpView: "Voir la position",
     dpRefresh: "Actualiser",
     dpPositions: "position(s)",
-    dpFreeMode: "Mode gratuit (on-chain) — ajoute une clé Moralis dans Réglages → Clés API externes pour les récompenses, l'APY et le health factor.",
+    dpFreeMode: "Mode gratuit (on-chain) — ajoute une clé Moralis dans Réglages → Clés API externes pour les récompenses, l'APY et le health factor.",    tax: "Fiscal / PnL",
+    taxDisclaimer: "⚠️ Outil expérimental (proof-of-concept). Ces calculs fiscaux/PnL peuvent être inexacts ou incomplets et ne constituent pas un conseil fiscal, comptable ou financier. Ne les utilisez pas pour une déclaration ou une décision : vérifiez avec un professionnel qualifié.",
+    taxMethod: "Méthode : Coût moyen pondéré (weighted-average)",
+    taxSymbol: "Symbole",
+    taxChain: "Chaîne",
+    taxQty: "Qté détenue",
+    taxCostBasis: "Coût de base",
+    taxCurrentValue: "Valeur actuelle",
+    taxUnrealized: "+/- value latente",
+    taxRealized: "+/- value réalisée",
+    taxStatus: "Statut",
+    taxTotal: "TOTAUX",
+    taxLoading: "Chargement des données fiscales...",
+    taxError: "Erreur lors du calcul fiscal",
+    taxEmpty: "Aucune donnée fiscale disponible",
+    taxStatusOk: "✅ ok",
+    taxStatusIncomplete: "⚠️ incomplet",
+
     analytics: "Analytics",
     anLoading: "Chargement des analytics…",
     anError: "Erreur lors du chargement des analytics",
@@ -696,7 +715,24 @@ var T = {
     dpView: "View position",
     dpRefresh: "Refresh",
     dpPositions: "position(s)",
-    dpFreeMode: "Free mode (on-chain) — add a Moralis key in Settings → External API Keys to get rewards, APY and health factor.",
+    dpFreeMode: "Free mode (on-chain) — add a Moralis key in Settings → External API Keys to get rewards, APY and health factor.",    tax: "Tax / PnL",
+    taxDisclaimer: "⚠️ Experimental tool (proof-of-concept). These tax/PnL calculations may be inaccurate or incomplete and do not constitute tax, accounting or financial advice. Do not use them for filing or decisions — verify with a qualified professional.",
+    taxMethod: "Method: Weighted-average cost",
+    taxSymbol: "Symbol",
+    taxChain: "Chain",
+    taxQty: "Qty held",
+    taxCostBasis: "Cost basis",
+    taxCurrentValue: "Current value",
+    taxUnrealized: "Unrealized PnL",
+    taxRealized: "Realized PnL",
+    taxStatus: "Status",
+    taxTotal: "TOTALS",
+    taxLoading: "Loading tax data...",
+    taxError: "Error during tax calculation",
+    taxEmpty: "No tax data available",
+    taxStatusOk: "✅ ok",
+    taxStatusIncomplete: "⚠️ incomplete",
+
     analytics: "Analytics",
     anLoading: "Loading analytics…",
     anError: "Error while loading analytics",
@@ -789,7 +825,7 @@ function applyLang() {
   document.getElementById("setLang").value = LANG;
   // Update sidebar (only data-page links, skip themeBtn)
   var links = document.querySelectorAll(".sidebar a[data-page]");
-  var keys = ["dashboard","stats","analytics","tokens","defi","nfts","airdrops","txns","alerts","wallets","settings"];
+  var keys = ["dashboard","stats","analytics","tokens","defi","nfts","airdrops","txns","tax","alerts","wallets","settings"];
   for (var i=0;i<Math.min(links.length,keys.length);i++) {
     var span = links[i].querySelector("span");
     if (span) span.textContent = t(keys[i]);
@@ -926,6 +962,7 @@ function switchPage(page) {
   document.getElementById("pageStats").classList.toggle("hidden", page!="stats");
   document.getElementById("pageAnalytics").classList.toggle("hidden", page!="analytics");
   document.getElementById("pageTokens").classList.toggle("hidden", page!="tokens");
+  document.getElementById("pageTax").classList.toggle("hidden", page!="tax");
   document.getElementById("pageDefiPos").classList.toggle("hidden", page!="defi");
   document.getElementById("pageNFTs").classList.toggle("hidden", page!="nfts");
   document.getElementById("pageAirdrops").classList.toggle("hidden", page!="airdrops");
@@ -937,6 +974,7 @@ function switchPage(page) {
   if (page=="stats") { populateFilters(); drawLineChart(); drawPnlChart(); }
   if (page=="analytics") loadAnalytics();
   if (page=="txns") loadTransactions();
+  if (page=="tax") loadTax();
   if (page=="tokens" && lastResult) renderTokenTable(lastResult);
   if (page=="defi") loadDefiPositions();
   if (page=="nfts") loadNFTs();
@@ -2604,6 +2642,111 @@ function anDrawDonut(canvasId,chartKey,entries,labelFn,colorFn){
   anCharts[chartKey]=new Chart(ctx,{type:"doughnut",data:{labels:labels,datasets:[{data:vals,backgroundColor:bg,borderColor:"#0a0e14",borderWidth:2}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:"right",labels:{color:"#c9d1d9",padding:10,font:{size:10},generateLabels:function(chart){var dd=chart.data;return dd.labels.map(function(l,idx){var v=dd.datasets[0].data[idx];var tot=dd.datasets[0].data.reduce(function(a,b){return a+b},0);var pc=tot>0?Math.round(v/tot*100):0;return{text:l+"  "+pc+"%",fillStyle:dd.datasets[0].backgroundColor[idx],strokeStyle:dd.datasets[0].backgroundColor[idx],fontColor:"#c9d1d9",index:idx}})}}}}}});
 }
 
+// ── Tax / PnL ──────────────────────────────────────────────────
+var taxSortKey="current_value", taxSortDir=-1;
+var _taxLastData=null;
+
+async function loadTax(){
+  var el=document.getElementById("pageTax");
+  if(!el)return;
+  el.innerHTML='<div class="card"><h2>📊 '+esc(t("tax"))+'</h2><div class="loading">'+esc(t("taxLoading"))+'</div></div>';
+  try{
+    var addr=activeWallet||"ALL";
+    var r=await fetch("/api/tax?address="+encodeURIComponent(addr)+"&method=avg");
+    if(!r.ok)throw new Error("HTTP "+r.status);
+    var d=await r.json();
+    _taxLastData=d;
+    renderTax(d);
+  }catch(e){
+    console.error("loadTax",e);
+    el.innerHTML='<div class="card"><h2>📊 '+esc(t("tax"))+'</h2><div class="error">'+esc(t("taxError"))+': '+esc(e.message||"")+'</div></div>';
+  }
+}
+
+function renderTax(data){
+  var el=document.getElementById("pageTax");
+  if(!el)return;
+  var assets=data.assets||[], totals=data.totals||{};
+
+  // Sort
+  if(taxSortKey){
+    var k=taxSortKey, d2=taxSortDir;
+    assets.sort(function(a,b){
+      var va=a[k]||0, vb=b[k]||0;
+      if(k==="symbol"||k==="chain"||k==="status"){va=String(va);vb=String(vb);return d2*va.localeCompare(vb)}
+      return d2*(va-vb);
+    });
+  }
+
+  var h='';
+  // Disclaimer banner
+  h+='<div style="background:rgba(255,153,0,0.08);border:1px solid rgba(255,153,0,0.25);border-radius:8px;padding:12px 16px;margin-bottom:16px;font-size:.78rem;color:#e6b450;line-height:1.5">'+esc(t("taxDisclaimer"))+'</div>';
+
+  h+='<div class="card" style="margin-bottom:16px">';
+  h+='<h2>📊 '+esc(t("tax"))+'</h2>';
+  h+='<p style="font-size:.72rem;color:#6e7681;margin-bottom:12px">'+esc(t("taxMethod"))+'</p>';
+
+  if(!assets.length){
+    h+='<div style="text-align:center;padding:40px;color:#6e7681">'+esc(t("taxEmpty"))+'</div>';
+  }else{
+    h+='<div style="overflow-x:auto"><table><thead><tr>';
+    h+=sortThTax("symbol","str",t("taxSymbol"));
+    h+=sortThTax("chain","str",t("taxChain"));
+    h+=sortThTax("qty_held","num",t("taxQty"));
+    h+=sortThTax("cost_basis","num",t("taxCostBasis"));
+    h+=sortThTax("current_value","num",t("taxCurrentValue"));
+    h+=sortThTax("unrealized_pnl","num",t("taxUnrealized"));
+    h+=sortThTax("realized_pnl","num",t("taxRealized"));
+    h+=sortThTax("status","str",t("taxStatus"));
+    h+='</tr></thead><tbody>';
+    for(var i=0;i<assets.length;i++){
+      var a=assets[i];
+      var uPnL=a.unrealized_pnl||0, rPnL=a.realized_pnl||0;
+      var uColor=uPnL>=0?"#40c463":"#f85149";
+      var rColor=rPnL>=0?"#40c463":"#f85149";
+      var statusIcon=a.status==="ok"?t("taxStatusOk"):t("taxStatusIncomplete");
+      var rowOpacity=a.status==="incomplete"?"opacity:.65":"";
+      h+='<tr style="'+rowOpacity+'">';
+      h+='<td style="font-weight:600;color:var(--title)">'+esc(a.symbol||"?")+'</td>';
+      h+='<td style="color:var(--accent);text-transform:capitalize">'+esc(a.chain||"")+'</td>';
+      h+='<td>'+fmtAmt(a.qty_held||0)+'</td>';
+      h+='<td>'+fmtCurr(a.cost_basis||0)+'</td>';
+      h+='<td class="usd">'+fmtCurr(a.current_value||0)+'</td>';
+      h+='<td style="color:'+uColor+';font-weight:600">'+fmtCurr(uPnL)+'</td>';
+      h+='<td style="color:'+rColor+';font-weight:600">'+fmtCurr(rPnL)+'</td>';
+      h+='<td style="font-size:.75rem">'+statusIcon+'</td>';
+      h+='</tr>';
+    }
+    // Totals row
+    h+='<tfoot><tr style="border-top:2px solid var(--border);font-weight:700">';
+    h+='<td colspan="2" style="color:var(--title);text-align:right">'+esc(t("taxTotal"))+'</td>';
+    h+='<td></td>';
+    h+='<td>'+fmtCurr(totals.total_cost_basis||0)+'</td>';
+    h+='<td class="usd">'+fmtCurr(totals.total_current_value||0)+'</td>';
+    var tU=totals.total_unrealized||0;
+    var tR=totals.total_realized||0;
+    h+='<td style="color:'+(tU>=0?"#40c463":"#f85149")+'">'+fmtCurr(tU)+'</td>';
+    h+='<td style="color:'+(tR>=0?"#40c463":"#f85149")+'">'+fmtCurr(tR)+'</td>';
+    h+='<td></td>';
+    h+='</tr></tfoot>';
+    h+='</tbody></table></div>';
+  }
+  h+='</div>';
+  el.innerHTML=h;
+}
+
+function sortThTax(key,type,label){
+  var arrow="";
+  if(taxSortKey===key)arrow=taxSortDir===1?" ▲":" ▼";
+  return '<th onclick="taxSort(\x27'+key+'\x27,\x27'+type+'\x27)" style="cursor:pointer;white-space:nowrap">'+esc(label)+arrow+'</th>';
+}
+
+function taxSort(key,type){
+  if(taxSortKey===key){taxSortDir=-taxSortDir}
+  else{taxSortKey=key;taxSortDir=type==="num"?-1:1}
+  if(_taxLastData)renderTax(_taxLastData);
+}
+
 async function loadAnalytics(){
   var el=document.getElementById("pageAnalytics");
   if(!el)return;
@@ -2635,6 +2778,8 @@ function renderAnalytics(d){
     '<span class="range-pill'+(anRange=="7d"?" active":"")+'" onclick="anSetRange(\'7d\',this)">'+esc(t("anR7"))+'</span>'+
     '<span class="range-pill'+(anRange=="30d"?" active":"")+'" onclick="anSetRange(\'30d\',this)">'+esc(t("anR30"))+'</span>'+
     '</span></h2>'+
+    // Proof-of-concept disclaimer (shared with Tax page)
+    '<div style="background:rgba(255,153,0,0.08);border:1px solid rgba(255,153,0,0.25);border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:.75rem;color:#e6b450;line-height:1.45">⚠️ '+esc(t("taxDisclaimer"))+'</div>'+
     '<div class="grid" style="margin-top:10px">'+
     anChgCard(t("anChange24h"),chg["24h"])+
     anChgCard(t("anChange7d"),chg["7d"])+

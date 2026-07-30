@@ -52,6 +52,7 @@ from services.export_service import (
 from services.alerts_service import (
     run_evaluator, evaluate_alerts_for_user, send_alert_notification,
 )
+from services.tax_service import compute_tax
 from services.airdrops import get_claimable_airdrops, get_checkers
 from services.db import write_locked
 from services.providers import provider_for, PROVIDERS
@@ -3643,6 +3644,42 @@ async def _fetch_benchmark_pcts(days: int):
         logging.getLogger("crypto.analytics").info(f"[ANALYTICS] benchmark indisponible: {e}")
     _benchmark_cache[days] = {"data": data, "ts": now}
     return data
+
+
+# ── Tax / PnL ──────────────────────────────────────────────────────
+
+_TAX_CACHE_TTL = 300  # 5-minute cache for tax data
+
+_tax_cache: dict = {}  # key: (user_id, address_lower, method) → {data, ts}
+
+
+@app.get("/api/tax")
+async def tax(address: str = Query(...), method: str = Query("avg"),
+              user=Depends(get_current_user)):
+    """Advanced tax / PnL — cost basis + realized vs unrealized.
+
+    address: 0x… wallet or "ALL" for aggregated across all wallets.
+    method: cost-basis method; only "avg" (weighted-average) supported.
+    """
+    if method not in ("avg",):
+        raise HTTPException(400, "Unsupported method; use 'avg'")
+
+    cache_key = (user["id"], address.lower(), method)
+    now = _time.time()
+    entry = _tax_cache.get(cache_key)
+    if entry and (now - entry["ts"]) < _TAX_CACHE_TTL:
+        return {**entry["data"], "cached": True}
+
+    from services.portfolio_service import _compute_portfolio
+
+    result = await compute_tax(
+        user["id"],
+        wallet_address=address,
+        method=method,
+        portfolio_fn=_compute_portfolio,
+    )
+    _tax_cache[cache_key] = {"data": result, "ts": now}
+    return result
 
 
 @app.get("/api/analytics")

@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — 2026.07.30
+# Crypto Wallet Tracker — 2026.07.031
 
 > ⚠️ **DISCLAIMER — This is a proof-of-concept / experimental application.** It is NOT financial, tax, accounting, or investment advice and is NOT a substitute for a qualified professional. Balances, valuations, transactions, PnL and any tax-related figures may be inaccurate, incomplete, or wrong — do NOT rely on them for decisions, reporting, or filing. Always verify with a licensed professional. Use at your own risk; no warranty of any kind.
 
@@ -174,11 +174,22 @@ Crypto-Wallet-Tracker/
 - [x] 2026.07.27 — Non-EVM transactions in aggregated view (Solana visible)
 - [x] 2026.07.27.c1 — Fix: SPL detection by owner (not accountIndex)
 - [x] 2026.07.28 — ~~Cosmos transactions (full history)~~ (removed 2026.07.29)
-- [ ] 2026.07.29 — Exportable tax reports (CSV/PDF)
-- [ ] 2026.07.30 — Cross-chain DeFi (LP, lending, unified health factor)
-- [ ] 2026.07.31 — New chains (L2 EVM then non-EVM)
+- [x] 2026.07.29 — Cleanup: Cosmos removal + README translation + disclaimer
+- [x] 2026.07.30 — Fix: Analytics spurious negative change (history anchored to live portfolio)
+- [x] 2026.07.031 — Advanced tax / PnL (cost basis, realized vs unrealized)
+- [ ] 2026.07.32 — Cross-chain DeFi (LP, lending, unified health factor)
+- [ ] 2026.07.33 — New chains (L2 EVM then non-EVM)
 
 ## 📋 Changelog
+
+### 2026.07.031 — Advanced Tax/PnL module: weighted-average cost basis, realized vs unrealized P&L per asset, dedicated page with in-app proof-of-concept disclaimer. Version numbering switched to 3-digit (AAAA.MM.NNN).
+
+- **Tax/PnL engine** (`src/services/tax_service.py`): weighted-average cost basis per asset (symbol+chain) walking all transactions chronologically. Realized PnL computed as `sale_proceeds - cost_of_sold_units` for each sale, unrealized PnL = `current_value - remaining_cost_basis`. Assets without sufficient transaction history or price data are flagged `"incomplete"` rather than showing false numbers.
+- **API `/api/tax`**: returns per-asset breakdown (symbol, chain, qty_held, cost_basis, current_value, unrealized_pnl, realized_pnl, method, status) + aggregate totals. Filterable by wallet address or "ALL". 5-minute server cache.
+- **Tax / PnL page**: new sidebar entry "📊 Fiscal / PnL" with sortable table (symbol, chain, qty, cost, value, unrealized, realized, status), green/red PnL coloring, totals row, weighted-average method label, and prominent in-app proof-of-concept disclaimer banner.
+- **Disclaimer**: visible on both the Tax page and Analytics page.
+- **Version format**: numbering now uses 3-digit patch (`2026.07.031` instead of `2026.07.31`). The comparison logic (`_cmpVer` in frontend, `_calver_key` in `/api/version/latest`) uses `parseInt(parts[3], 10)` which correctly handles `"031"` → 31. Old tags like `"2026.07.30"` remain valid (2-digit patch, comparison still works). Correction tags (`.cX`) unchanged.
+- **Tests**: `tests/test_tax_service.py` — weighted-average cost, realized/unrealized PnL on known in/out sequences, incomplete asset detection, user isolation.
 
 ### 2026.07.30 — Fix: Analytics change no longer shows a spurious large negative — history reconstruction anchored to the live spam-filtered portfolio (no phantom balances) and change shows "—" when history is flat/unreliable
 
