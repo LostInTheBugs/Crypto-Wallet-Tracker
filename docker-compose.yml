@@ -1,6 +1,9 @@
 services:
   app:
-    build: .
+    build:
+      context: .
+      args:
+        APP_VERSION: ${APP_VERSION:-}
     container_name: crypto-wallet-tracker
     restart: unless-stopped
     ports:

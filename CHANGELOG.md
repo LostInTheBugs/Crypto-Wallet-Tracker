@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026.08.002-c1 — 2026-08-01
+
+- **Fix — false update notification**: the installed version was read as `0.0.0` at runtime in the Docker container (the `VERSION` file was never copied into the image), so `/api/version/changes` wrongly reported `update_available: true` and listed every release as newer than the installed one.
+- **Reliable installed-version lookup**: `_load_current_version()` now tries, in order: the `APP_VERSION` environment variable, the repo-root `VERSION` file, a `VERSION` file in the current working directory, `/app/VERSION` (container layout), and finally the `verCurrent` value baked into `public/index.html`. Content is stripped and validated against the version regex; `0.0.0` is returned only as a last resort.
+- **Docker build**: the image now `COPY`s `VERSION` to `/app/VERSION` and accepts an `APP_VERSION` build arg (wired through `docker-compose.yml`), so the container always knows the actually deployed version — `current` from `/api/version/changes` now matches `verCurrent`.
+
 ## 2026.08.002 (2026-08-01)
 
 - **Update client**: new-version notification badge + "What's new" diff window showing all release notes between installed and latest versions, powered by GitHub Releases API.

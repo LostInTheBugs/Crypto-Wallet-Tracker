@@ -3347,12 +3347,43 @@ def _cmp_versions(a: str, b: str) -> int:
 
 
 def _load_current_version() -> str:
-    """Read the installed version from the VERSION file."""
-    try:
-        vf = Path(__file__).resolve().parent.parent / "VERSION"
-        return vf.read_text().strip()
-    except Exception:
-        return "0.0.0"
+    """Read the installed version at runtime, tolerating container layouts.
+
+    Lookup order — the first conforming candidate wins:
+      1. APP_VERSION environment variable (injected at build time, most
+         reliable inside Docker containers);
+      2. VERSION file in the repo root (parent of src/);
+      3. VERSION file in the current working directory;
+      4. /app/VERSION (Docker image layout — WORKDIR /app);
+      5. version baked into public/index.html (verCurrent element), as a
+         last server-side resort;
+    Returns "0.0.0" only when every source is missing or non-conforming.
+    """
+    candidates = [
+        os.environ.get("APP_VERSION"),
+        Path(__file__).resolve().parent.parent / "VERSION",
+        Path.cwd() / "VERSION",
+        Path("/app/VERSION"),
+        Path(__file__).resolve().parent.parent / "public" / "index.html",
+    ]
+    for cand in candidates:
+        if not cand:
+            continue
+        try:
+            if isinstance(cand, str):
+                text = cand
+            else:
+                path = Path(cand)
+                text = path.read_text(encoding="utf-8")
+                if path.name == "index.html":
+                    m = re.search(r'<strong id="verCurrent">([^<]+)</strong>', text)
+                    text = m.group(1).strip() if m else ""
+            version = text.strip()
+            if _VERSION_RE.match(version):
+                return version
+        except Exception:
+            continue
+    return "0.0.0"
 
 
 async def _fetch_releases_cached(key: str) -> dict | None:
