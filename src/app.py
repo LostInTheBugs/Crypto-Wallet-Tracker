@@ -3303,41 +3303,152 @@ async def get_rates():
 
 # ── Version ─────────────────────────────────────────────────────
 
-@app.get("/api/version/latest")
-async def latest_version():
+_VERSION_RE = re.compile(r"^\d{4}\.\d{2}\.\d{3}(-c\d+)?$")
+_GITHUB_RELEASES_API = "https://api.github.com/repos/LostInTheBugs/Crypto-Wallet-Tracker/releases"
+_VERSION_CACHE: dict[str, tuple[float, dict]] = {}  # key -> (expiry_ts, data)
+_VERSION_CACHE_TTL = 300  # seconds
+
+
+def _parse_version(v: str) -> tuple[int, int, int, int] | None:
+    """Parse a version string 'YYYY.MM.NNN[-cK]' into (year, month, nnn, correction).
+    Correction defaults to 0 if absent. Returns None for non-conforming versions."""
+    m = _VERSION_RE.match(v)
+    if not m:
+        return None
+    # Split on dot: "2026.08.001-c1" -> ["2026", "08", "001-c1"]
+    parts = v.split(".")
+    year, month = int(parts[0]), int(parts[1])
+    nnn_str = parts[2]
+    correction = 0
+    if "-c" in nnn_str:
+        base_nnn, corr = nnn_str.split("-c")
+        nnn = int(base_nnn)
+        correction = int(corr)
+    else:
+        nnn = int(nnn_str)
+    return (year, month, nnn, correction)
+
+
+def _cmp_versions(a: str, b: str) -> int:
+    """Compare two version strings. Returns -1, 0, or 1 (like cmp)."""
+    pa, pb = _parse_version(a), _parse_version(b)
+    if pa is None and pb is None:
+        return (a > b) - (a < b)
+    if pa is None:
+        return -1
+    if pb is None:
+        return 1
+    for i in range(4):
+        if pa[i] > pb[i]:
+            return 1
+        if pa[i] < pb[i]:
+            return -1
+    return 0
+
+
+def _load_current_version() -> str:
+    """Read the installed version from the VERSION file."""
+    try:
+        vf = Path(__file__).resolve().parent.parent / "VERSION"
+        return vf.read_text().strip()
+    except Exception:
+        return "0.0.0"
+
+
+async def _fetch_releases_cached(key: str) -> dict | None:
+    """Fetch from GitHub Releases API with in-memory short-lived cache."""
+    now = _time.time()
+    cached = _VERSION_CACHE.get(key)
+    if cached and now < cached[0]:
+        return cached[1]
     try:
         async with httpx.AsyncClient(timeout=10) as c:
-            r = await c.get(
-                "https://api.github.com/repos/LostInTheBugs/Crypto-Wallet-Tracker/tags?per_page=100",
-                headers={"Accept": "application/vnd.github+json"})
-            if r.status_code == 200:
-                data = r.json()
-                calver_tags = []
-                semver_tags = []
-                for item in data:
-                    name = item["name"]
-                    if re.match(r"^\d{4}\.\d{2}\.\d+(\.c\d+)?$", name):
-                        calver_tags.append(name)
-                    elif re.match(r"^v?\d+\.\d+\.\d+$", name):
-                        semver_tags.append(name.lstrip("v"))
-                # CalVer tags are always more recent than semver
-                if calver_tags:
-                    def _calver_key(t):
-                        parts = t.split(".")
-                        base = (int(parts[0]), int(parts[1]), int(parts[2]))
-                        cn = 0
-                        if len(parts) > 3 and parts[3].startswith("c"):
-                            cn = int(parts[3][1:])
-                        return (base[0], base[1], base[2], cn)
-                    calver_tags.sort(key=_calver_key, reverse=True)
-                    return {"tag": calver_tags[0]}
-                elif semver_tags:
-                    from packaging.version import Version
-                    semver_tags.sort(key=lambda t: Version(t), reverse=True)
-                    return {"tag": semver_tags[0]}
+            r = await c.get(key, headers={"Accept": "application/vnd.github+json"})
+            if r.status_code != 200:
+                return None
+            data = r.json()
+            _VERSION_CACHE[key] = (now + _VERSION_CACHE_TTL, data)
+            return data
+    except Exception:
+        return None
+
+
+@app.get("/api/version/latest")
+async def latest_version():
+    """Return the latest GitHub Release metadata."""
+    try:
+        data = await _fetch_releases_cached(
+            "https://api.github.com/repos/LostInTheBugs/Crypto-Wallet-Tracker/releases/latest")
+        if data:
+            return {
+                "tag": data.get("tag_name", ""),
+                "name": data.get("name", ""),
+                "body": data.get("body", ""),
+                "html_url": data.get("html_url", ""),
+                "published_at": data.get("published_at", ""),
+            }
     except Exception:
         pass
-    return {"tag": ""}
+    return {"tag": "", "name": "", "body": "", "html_url": "", "published_at": ""}
+
+
+@app.get("/api/version/changes")
+async def version_changes(user=Depends(get_current_user)):
+    """Return all releases strictly newer than the installed version, newest first."""
+    current = _load_current_version()
+    try:
+        releases_data = await _fetch_releases_cached(
+            "https://api.github.com/repos/LostInTheBugs/Crypto-Wallet-Tracker/releases?per_page=100")
+        if not releases_data:
+            return {
+                "current": current,
+                "latest": "",
+                "update_available": False,
+                "count": 0,
+                "releases": [],
+                "error": "github_unreachable",
+            }
+
+        newer = []
+        latest_tag = ""
+        for rel in releases_data:
+            tag = rel.get("tag_name", "")
+            if _VERSION_RE.match(tag):
+                if not latest_tag:
+                    latest_tag = tag
+                if _cmp_versions(tag, current) > 0:
+                    newer.append({
+                        "tag_name": tag,
+                        "name": rel.get("name", ""),
+                        "body": rel.get("body", ""),
+                        "published_at": rel.get("published_at", ""),
+                        "html_url": rel.get("html_url", ""),
+                    })
+                elif _cmp_versions(tag, current) <= 0 and newer:
+                    # We've passed the window; releases are sorted newest-first
+                    # but continue in case there's a gap
+                    pass
+
+        # Sort newest first
+        newer.sort(key=lambda r: _parse_version(r["tag_name"]) or (0, 0, 0, 0), reverse=True)
+        update_available = len(newer) > 0
+
+        return {
+            "current": current,
+            "latest": latest_tag,
+            "update_available": update_available,
+            "count": len(newer),
+            "releases": newer,
+        }
+    except Exception:
+        return {
+            "current": current,
+            "latest": "",
+            "update_available": False,
+            "count": 0,
+            "releases": [],
+            "error": "github_unreachable",
+        }
 
 
 @app.post("/api/update")
@@ -4731,7 +4842,7 @@ async def health(db=Depends(get_db)):
     Returns status, version, db health, uptime, and aggregate counts.
     Never exposes secrets. Tolerant: db_ok=false instead of 500.
     """
-    version = "2026.07.17"
+    version = _load_current_version()
     uptime_s = round(_time.time() - APP_START_TIME)
 
     db_ok = False

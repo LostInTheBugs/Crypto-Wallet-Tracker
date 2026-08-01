@@ -91,6 +91,24 @@ img.ti{width:20px;height:20px;border-radius:50%;margin-right:6px;vertical-align:
 .modal-box .progress-bar{width:100%;height:6px;background:var(--border);border-radius:3px;margin:16px 0;overflow:hidden}
 .modal-box .progress-fill{height:100%;background:var(--accent);border-radius:3px;transition:width .3s}
 .modal-box .progress-text{color:var(--text);font-size:.85rem}
+/* ── Changes / diff modal ────────────────────────── */
+.changes-modal{max-width:700px;max-height:80vh;overflow-y:auto;text-align:left;padding:24px 28px}
+.changes-modal h3{color:var(--title);margin-bottom:16px;font-size:1rem}
+.changes-modal .rel-entry{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:12px}
+.changes-modal .rel-entry h4{color:var(--accent);font-size:.9rem;margin-bottom:4px}
+.changes-modal .rel-entry .rel-date{font-size:.72rem;color:#6e7681;margin-bottom:10px}
+.changes-modal .rel-entry .rel-body{font-size:.82rem;color:var(--text);line-height:1.5;white-space:pre-wrap}
+.changes-modal .rel-entry .rel-body h1,.changes-modal .rel-entry .rel-body h2,.changes-modal .rel-entry .rel-body h3{color:var(--title);font-size:.9rem;margin:8px 0 4px}
+.changes-modal .rel-entry .rel-body ul,.changes-modal .rel-entry .rel-body ol{padding-left:20px;margin:4px 0}
+.changes-modal .rel-entry .rel-body li{margin-bottom:2px}
+.changes-modal .rel-entry .rel-body code{background:var(--border);padding:1px 5px;border-radius:3px;font-size:.78rem}
+.changes-modal .rel-entry .rel-body strong{color:var(--title)}
+.changes-empty{text-align:center;padding:20px;color:#6e7681}
+.changes-error{text-align:center;padding:20px;color:var(--red)}
+/* ── Version notification badge ──────────────────── */
+.ver-badge{display:inline-block;background:#d29922;color:#000;font-size:.62rem;font-weight:700;padding:1px 6px;border-radius:10px;margin-left:6px;vertical-align:middle;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.6}}
+.sidebar .ver-badge{font-size:.58rem;padding:1px 5px}
 .spinner{display:inline-block;width:24px;height:24px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite;margin-bottom:12px}
 @keyframes spin{to{transform:rotate(360deg)}}
 #viewLogin{background:url(/static/bg-login.png) center/cover no-repeat;min-height:100vh;display:flex;align-items:center;justify-content:center;padding-top:30vh}
@@ -192,6 +210,14 @@ tr.tm-off td{opacity:.45}
       </div>
     </div>
 
+    <div id="changesModal" class="modal-overlay hidden">
+      <div class="modal-box changes-modal">
+        <h3 id="changesTitle">🆕 Nouveautés</h3>
+        <div id="changesContent"><div class="spinner"></div><div class="progress-text" id="changesWait">Chargement...</div></div>
+        <button class="btn btn-blue" onclick="closeChanges()" style="margin-top:12px" id="changesClose">Fermer</button>
+      </div>
+    </div>
+
     <div id="pageDashboard">
       <div class="grid" id="walletStats"></div>
       <div id="nftWorthLine" style="display:none;background:rgba(88,166,255,.04);border:1px solid var(--border);border-radius:8px;padding:10px 16px;margin-bottom:8px;text-align:center;font-size:.85rem;color:var(--title)"></div>
@@ -284,8 +310,8 @@ tr.tm-off td{opacity:.45}
         <button id="themeBtn" onclick="toggleTheme()" style="background:var(--bg);border:1px solid var(--border);color:var(--title);padding:8px 16px;border-radius:6px;cursor:pointer;font-size:.85rem">🌙 <span>Sombre</span></button>
       </div>
       <div class="card" style="margin-bottom:16px">
-        <h2>📦 Version</h2>
-        <p style="margin-bottom:8px">Version actuelle : <strong id="verCurrent">2026.08.001</strong></p>
+        <h2>📦 Version <span id="verBadge" class="hidden"></span></h2>
+        <p style="margin-bottom:8px"><span id="verCurrentLabel">Version actuelle</span> : <strong id="verCurrent">2026.08.002</strong></p>
         <p id="verStatus" style="font-size:.85rem"></p>
         <p id="verAutoMsg" style="font-size:.85rem;color:#6e7681;margin-top:6px"></p>
         <div style="margin-top:10px;font-size:.85rem">
@@ -293,7 +319,10 @@ tr.tm-off td{opacity:.45}
           <label style="margin-right:12px;cursor:pointer"><input type="radio" name="updMode" value="manual" onchange="setUpdateMode(this.value)"> <span id="updManual">Manuelle</span></label>
           <label style="cursor:pointer"><input type="radio" name="updMode" value="auto" onchange="setUpdateMode(this.value)"> <span id="updAuto">Automatique</span></label>
         </div>
-        <button id="updateBtn" class="hidden" onclick="doUpdate()" style="margin-top:8px;background:#238636;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:.85rem">🔄 Mettre à jour</button>
+        <div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <button id="updateBtn" class="hidden" onclick="doUpdate()" style="background:#238636;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:.85rem">🔄 Mettre à jour</button>
+          <button id="changesBtn" class="hidden" onclick="openChanges()" style="background:var(--accent);color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:.85rem">📋 Voir les nouveautés</button>
+        </div>
         <p id="updateMsg" style="margin-top:8px;font-size:.8rem;color:#f0c040"></p>
       </div>
       <div class="card" style="margin-bottom:16px">
@@ -394,6 +423,14 @@ var T = {
     updModeLabel: "Mise à jour :", updManual: "Manuelle", updAuto: "Automatique",
     updAutoMsg: "⚙️ Mises à jour automatiques activées — l'application se met à jour seule",
     verCheckError: "❌ Impossible de vérifier",
+    verBadgeNew: "NEW",
+    changesTitle: "🆕 Nouveautés",
+    changesWait: "Chargement...",
+    changesClose: "Fermer",
+    changesEmpty: "✅ Vous êtes à jour — aucune nouvelle version depuis votre version actuelle.",
+    changesError: "❌ Impossible de récupérer les nouveautés (GitHub injoignable).",
+    changesBtn: "📋 Voir les nouveautés",
+    changesVerLabel: "Version",
     noData: "📭 Aucune donnée",
     swap: "Swap", received: "Reçu", sentLbl: "Envoyé", legsLbl: "jambes",
     dirAll: "Tout", dirIn: "Entrant", dirOut: "Sortant", dirSwap: "Swap",
@@ -619,6 +656,14 @@ var T = {
     updModeLabel: "Update mode:", updManual: "Manual", updAuto: "Automatic",
     updAutoMsg: "⚙️ Automatic updates enabled — the app updates itself",
     verCheckError: "❌ Unable to check",
+    verBadgeNew: "NEW",
+    changesTitle: "🆕 What's New",
+    changesWait: "Loading...",
+    changesClose: "Close",
+    changesEmpty: "✅ You're up to date — no new releases since your installed version.",
+    changesError: "❌ Could not fetch release notes (GitHub unreachable).",
+    changesBtn: "📋 What's new",
+    changesVerLabel: "Version",
     noData: "📭 No data",
     swap: "Swap", received: "Received", sentLbl: "Sent", legsLbl: "legs",
     dirAll: "All", dirIn: "Incoming", dirOut: "Outgoing", dirSwap: "Swap",
@@ -2004,25 +2049,94 @@ async function checkVersion(){
     var latest = data.tag || "";
     var current = document.getElementById("verCurrent").textContent.replace(/^v/,"");
     var btn=document.getElementById("updateBtn"),msg=document.getElementById("updateMsg");
+    var changesBtn=document.getElementById("changesBtn");
+    var badge=document.getElementById("verBadge");
+    // Use the new API format: {tag, name, body, html_url, published_at}
     function _cmpVer(a,b){
       var parse=function(v){
-        var m=v.match(/^(\d{4})\.(\d{2})\.(\d+)(?:\.(c\d+))?$/);
-        if(!m) return null;
-        var cn=m[4] ? parseInt(m[4].substring(1),10) : 0;
-        return [parseInt(m[1],10),parseInt(m[2],10),parseInt(m[3],10),cn];
+        // Support YYYY.MM.NNN-cK (current) and legacy YYYY.MM.NNN.cK
+        var m=v.match(/^(\d{4})\.(\d{2})\.(\d{3})(-c(\d+))?$/);
+        if(m){return [parseInt(m[1],10),parseInt(m[2],10),parseInt(m[3],10),m[5]?parseInt(m[5],10):0]}
+        // Legacy .cX format
+        m=v.match(/^(\d{4})\.(\d{2})\.(\d+)\.(c\d+)$/);
+        if(m){return [parseInt(m[1],10),parseInt(m[2],10),parseInt(m[3],10),parseInt(m[4].substring(1),10)]}
+        return null;
       };
       var pa=parse(a), pb=parse(b);
       if(pa&&pb){for(var i=0;i<4;i++){if(pa[i]>pb[i])return 1;if(pa[i]<pb[i])return -1}return 0}
       if(pa&&!pb)return 1;if(!pa&&pb)return -1;
       if(a>b)return 1;if(a<b)return -1;return 0}
-    if(!latest){el.textContent=t("verCheckError");btn.classList.add("hidden");document.getElementById("verAutoMsg").textContent=""}
-    else if(_cmpVer(latest,current)<=0){el.innerHTML='<span style="color:#40c463">'+t("verUpToDate")+" ("+latest+")</span>";btn.classList.add("hidden");document.getElementById("verAutoMsg").textContent=""}
-    else if(_updateMode==="auto"){el.innerHTML='<span style="color:#f0c040">'+t("verOutdated")+": "+latest+"</span>";btn.classList.add("hidden");document.getElementById("verAutoMsg").textContent=t("updAutoMsg")}
-    else{el.innerHTML='<span style="color:#f0c040">'+t("verOutdated")+": "+latest+"</span>";btn.classList.remove("hidden");btn.textContent=t("updateBtn");msg.textContent="";document.getElementById("verAutoMsg").textContent=""}
+    if(!latest){el.textContent=t("verCheckError");btn.classList.add("hidden");changesBtn.classList.add("hidden");badge.classList.add("hidden");document.getElementById("verAutoMsg").textContent=""}
+    else if(_cmpVer(latest,current)<=0){
+      el.innerHTML='<span style="color:#40c463">'+t("verUpToDate")+" ("+latest+")</span>";
+      btn.classList.add("hidden");changesBtn.classList.add("hidden");
+      badge.classList.add("hidden");document.getElementById("verAutoMsg").textContent=""
+    }
+    else if(_updateMode==="auto"){
+      el.innerHTML='<span style="color:#f0c040">'+t("verOutdated")+": "+latest+"</span>";
+      btn.classList.add("hidden");changesBtn.classList.remove("hidden");
+      changesBtn.textContent=t("changesBtn");
+      badge.classList.remove("hidden");badge.innerHTML='<span class="ver-badge">'+t("verBadgeNew")+"</span>";
+      document.getElementById("verAutoMsg").textContent=t("updAutoMsg")
+    }else{
+      el.innerHTML='<span style="color:#f0c040">'+t("verOutdated")+": "+latest+"</span>";
+      btn.classList.remove("hidden");btn.textContent=t("updateBtn");msg.textContent="";
+      changesBtn.classList.remove("hidden");changesBtn.textContent=t("changesBtn");
+      badge.classList.remove("hidden");badge.innerHTML='<span class="ver-badge">'+t("verBadgeNew")+"</span>";
+      document.getElementById("verAutoMsg").textContent=""
+    }
   } catch(e) {
     console.error("checkVersion",e);
     el.textContent = t("verCheckError");
   }
+}
+
+async function openChanges(){
+  var modal=document.getElementById("changesModal");
+  var cont=document.getElementById("changesContent");
+  modal.classList.remove("hidden");
+  cont.innerHTML='<div class="spinner"></div><div class="progress-text">'+t("changesWait")+'</div>';
+  document.getElementById("changesTitle").textContent=t("changesTitle");
+  document.getElementById("changesClose").textContent=t("changesClose");
+  try{
+    var r=await fetch("/api/version/changes");
+    if(!r.ok){cont.innerHTML='<div class="changes-error">'+t("changesError")+'</div>';return}
+    var d=await r.json();
+    if(d.error){cont.innerHTML='<div class="changes-error">'+t("changesError")+'</div>';return}
+    if(!d.update_available || d.count===0){
+      cont.innerHTML='<div class="changes-empty">'+t("changesEmpty")+'</div>';
+      return
+    }
+    var html="";
+    var rels=d.releases||[];
+    for(var i=0;i<rels.length;i++){
+      var rel=rels[i];
+      var dateStr=rel.published_at ? rel.published_at.substring(0,10) : "";
+      var body=(rel.body||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+      // Render basic markdown: headers, lists, bold, code
+      body=body.replace(/^### (.+)$/gm,'<h3>$1</h3>');
+      body=body.replace(/^## (.+)$/gm,'<h2>$1</h2>');
+      body=body.replace(/^# (.+)$/gm,'<h1>$1</h1>');
+      body=body.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
+      body=body.replace(/`([^`]+)`/g,'<code>$1</code>');
+      body=body.replace(/^\- (.+)$/gm,'<li>$1</li>');
+      body=body.replace(/(<li>.*<\/li>\n?)+/g,'<ul>$&</ul>');
+      body=body.replace(/\n/g,'<br>');
+      html+='<div class="rel-entry">';
+      html+='<h4>'+t("changesVerLabel")+' '+esc(rel.tag_name)+'</h4>';
+      if(dateStr)html+='<div class="rel-date">'+esc(dateStr)+'</div>';
+      html+='<div class="rel-body">'+body+'</div>';
+      html+='</div>';
+    }
+    cont.innerHTML=html;
+  }catch(e){
+    console.error("openChanges",e);
+    cont.innerHTML='<div class="changes-error">'+t("changesError")+'</div>';
+  }
+}
+
+function closeChanges(){
+  document.getElementById("changesModal").classList.add("hidden");
 }
 
 function changeCurrency(){
