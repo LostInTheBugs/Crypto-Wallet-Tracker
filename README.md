@@ -1,4 +1,4 @@
-# Crypto Wallet Tracker — 2026.07.031
+# Crypto Wallet Tracker — 2026.08.001
 
 > ⚠️ **DISCLAIMER — This is a proof-of-concept / experimental application.** It is NOT financial, tax, accounting, or investment advice and is NOT a substitute for a qualified professional. Balances, valuations, transactions, PnL and any tax-related figures may be inaccurate, incomplete, or wrong — do NOT rely on them for decisions, reporting, or filing. Always verify with a licensed professional. Use at your own risk; no warranty of any kind.
 
@@ -82,7 +82,7 @@ Crypto-Wallet-Tracker/
 
 | Variable | Default | Description |
 |---|---|---|
-| `PORT` | `80` | Listen port |
+| `PORT` | `8001` | Listen port |
 | `SESSION_SECRET` | auto | JWT secret (set to persist sessions) |
 | `ALCHEMY_API_KEY` | — | Optional: fallback for balances/transfers if Blockscout fails |
 
@@ -463,3 +463,7 @@ Crypto-Wallet-Tracker/
 ## 📝 License
 
 MIT
+
+---
+
+## 🔖 Current version: **2026.08.001** — [View all releases](https://github.com/LostInTheBugs/Crypto-Wallet-Tracker/releases)

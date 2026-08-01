@@ -4,7 +4,7 @@ services:
     container_name: crypto-wallet-tracker
     restart: unless-stopped
     ports:
-      - "${PORT:-80}:80"
+      - "${PORT:-8001}:8001"
     volumes:
       - wallet-data:/data
     environment:

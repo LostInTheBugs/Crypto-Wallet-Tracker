@@ -31,7 +31,7 @@ cd "$APP_DIR"
 if [ ! -f "$ENV_FILE" ]; then
   cat > "$ENV_FILE" <<EOF
 # Crypto Wallet Tracker configuration
-PORT=80
+PORT=8001
 SESSION_SECRET=***
 # Optional: Alchemy API key for better token discovery
 # ALCHEMY_API_KEY=
@@ -48,6 +48,6 @@ docker compose up -d
 
 echo ""
 echo "=== Installation complete ==="
-echo "Open http://$(hostname -I | awk '{print $1}'):80"
+echo "Open http://$(hostname -I | awk '{print $1}'):8001"
 echo "Config: $ENV_FILE"
 echo "Logs:   docker compose logs -f"
