@@ -460,6 +460,21 @@ Crypto-Wallet-Tracker/
 
 > Full history of old v1/v2 versions: see Git commit history.
 
+## Development cost (LLM)
+
+This project was built entirely through AI-assisted sessions (Hermes Agent, deepseek-v4-pro / deepseek-v4-flash). Usage so far (cumulative as of 2026-08-02):
+
+| Metric | Value |
+|---|---|
+| Input tokens | 1 221 582 |
+| Output tokens | 513 465 |
+| **Total (input + output)** | **1 735 047** |
+| Cache read (reused at reduced price) | 88 492 544 |
+| API calls | 1 226 |
+| **Estimated cost** | **≈ 3.78 USD** |
+
+Full breakdown: [TOKENS.md](TOKENS.md).
+
 ## 📝 License
 
 MIT
